@@ -9,7 +9,7 @@ import { scriptCLIs } from './platform.mjs';
 import { gitExecutable } from '../src/resolve-binary.mjs';
 import { createRelayServer } from '../src/server.mjs';
 import { Broker } from '../src/broker.mjs';
-import { openPlan, parsePlan, reviewDraft, planningRequest, validateSteps, SPECIALIST_ROLES, ARTIFACT_KINDS, INTEGRATION_OUTCOMES, validateWorkflowOrder, invalidatedDownstream, stepBrief, recordArtifact, evaluateIntegration } from '../src/orchestration.mjs';
+import { openPlan, parsePlan, parseSuggest, reviewDraft, planningRequest, validateSteps, SPECIALIST_ROLES, ARTIFACT_KINDS, INTEGRATION_OUTCOMES, validateWorkflowOrder, invalidatedDownstream, stepBrief, recordArtifact, evaluateIntegration } from '../src/orchestration.mjs';
 import { ledgerFromRecords, usageByRole } from '../src/task-ledger.mjs';
 
 // A planner's reply in the agreed shape: steps refer to earlier steps by number, and never choose an agent.
@@ -794,4 +794,19 @@ test('a planner that asks before drafting returns its questions and no cards, an
   assert.deepEqual(asked.steps, []);
   assert.deepEqual(asked.questions, [{ question: 'Card or invoice?', options: ['Card', 'Invoice'] }]);
   assert.equal(parsePlan(JSON.stringify({ summary: 'Nothing.', questions: [], steps: [] })).status, 'unstructured');
+});
+
+
+test('Suggest next holds all cards while its questions await an answer (#162)', () => {
+  const questions = [{ question: 'GitHub or Google?', options: ['GitHub', 'Google'] }];
+  const step = { title: 'Test login', instructions: 'Check the chosen login provider.', tier: 'light' };
+  for (const steps of [[], [step]]) {
+    const parsed = parseSuggest(JSON.stringify({ summary: 'Choose the provider before I suggest cards.', questions, steps }));
+    assert.equal(parsed.status, 'questions');
+    assert.deepEqual(parsed.steps, []);
+    assert.deepEqual(parsed.questions, questions);
+  }
+  assert.equal(parseSuggest(JSON.stringify({ summary: 'Ready.', steps: [step] })).status, 'draft');
+  assert.equal(parseSuggest(JSON.stringify({ summary: 'Nothing.', questions: [], steps: [] })).status, 'unstructured');
+  assert.equal(parseSuggest(JSON.stringify({ summary: 'Too many.', steps: Array(4).fill(step) })).status, 'unstructured');
 });

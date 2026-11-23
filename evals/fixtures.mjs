@@ -436,4 +436,163 @@ fixtures.push({
     ...fixtures[0].trace,
   ],
 });
+// Matched multi-folder feature (#89): a single-agent baseline and a specialist-team workflow on the same pinned
+// repositories and hidden checks, comparing single-agent execution against contract -> parallel specialists -> QA.
+const PROMO_FEATURE = {
+  folders: {
+    api: {
+      'package.json': '{\n  "type": "module",\n  "scripts": { "test": "node --test" }\n}\n',
+      'pricing.mjs': lines([
+        '// Cart pricing API. Supports promotional discounts once implemented.',
+        'export function calculateTotal(items, options = {}) {',
+        '  const subtotal = items.reduce((sum, item) => sum + item.priceCents * item.qty, 0);',
+        '  return { subtotal, discountCents: 0, total: subtotal, promoApplied: null };',
+        '}',
+      ]),
+      'smoke.test.mjs': test([
+        "import { calculateTotal } from './pricing.mjs';",
+        "test('baseline total without promo', () => {",
+        "  assert.deepEqual(calculateTotal([{ priceCents: 500, qty: 2 }]), { subtotal: 1000, discountCents: 0, total: 1000, promoApplied: null });",
+        '});',
+      ].join('\n')),
+    },
+    web: {
+      'package.json': '{\n  "type": "module",\n  "scripts": { "test": "node --test" }\n}\n',
+      'summary.mjs': lines([
+        '// Cart summary view. Displays promo code discount when present.',
+        'export function renderSummary(quote) {',
+        '  return `Subtotal: ${quote.subtotal} | Total: ${quote.total}`;',
+        '}',
+      ]),
+      'smoke.test.mjs': test([
+        "import { renderSummary } from './summary.mjs';",
+        "test('baseline summary', () => {",
+        "  assert.equal(renderSummary({ subtotal: 1000, total: 1000 }), 'Subtotal: 1000 | Total: 1000');",
+        '});',
+      ].join('\n')),
+    },
+  },
+  check: {
+    api: {
+      'promo.test.mjs': test([
+        "import { calculateTotal } from '../pricing.mjs';",
+        "test('SAVE20 applies 20 percent rounded discount', () => {",
+        "  assert.deepEqual(calculateTotal([{ priceCents: 333, qty: 1 }], { promoCode: 'SAVE20' }), { subtotal: 333, discountCents: 67, total: 266, promoApplied: 'SAVE20' });",
+        '});',
+        "test('unknown promo code leaves total unchanged', () => {",
+        "  assert.deepEqual(calculateTotal([{ priceCents: 500, qty: 1 }], { promoCode: 'NOPE' }), { subtotal: 500, discountCents: 0, total: 500, promoApplied: null });",
+        '});',
+      ].join('\n')),
+    },
+    web: {
+      'summary.test.mjs': test([
+        "import { renderSummary } from '../summary.mjs';",
+        "test('renders promo discount when applied', () => {",
+        "  assert.equal(renderSummary({ subtotal: 1000, discountCents: 200, total: 800, promoApplied: 'SAVE20' }), 'Subtotal: 1000 | Promo SAVE20: -200 | Total: 800');",
+        '});',
+        "test('omits promo line when none applied', () => {",
+        "  assert.equal(renderSummary({ subtotal: 500, discountCents: 0, total: 500, promoApplied: null }), 'Subtotal: 500 | Total: 500');",
+        '});',
+      ].join('\n')),
+    },
+  },
+};
+const PRICING_IMPL = lines([
+  'export function calculateTotal(items, options = {}) {',
+  '  const subtotal = items.reduce((sum, item) => sum + item.priceCents * item.qty, 0);',
+  "  const promoApplied = options?.promoCode === 'SAVE20' ? 'SAVE20' : null;",
+  '  const discountCents = promoApplied ? Math.round(subtotal * 0.2) : 0;',
+  '  return { subtotal, discountCents, total: subtotal - discountCents, promoApplied };',
+  '}',
+]);
+const SUMMARY_IMPL = lines([
+  'export function renderSummary(quote) {',
+  '  if (quote.promoApplied) return `Subtotal: ${quote.subtotal} | Promo ${quote.promoApplied}: -${quote.discountCents} | Total: ${quote.total}`;',
+  '  return `Subtotal: ${quote.subtotal} | Total: ${quote.total}`;',
+  '}',
+]);
+fixtures.push(
+  {
+    id: 'single-agent-feature', title: 'Single-agent promo discount across api and web',
+    ...PROMO_FEATURE,
+    prompt: 'Support promo code SAVE20 (20% off, rounded with Math.round) across api and web. In api/pricing.mjs, calculateTotal(items, options = {}) should accept options.promoCode and return { subtotal, discountCents, total, promoApplied } (promoApplied is "SAVE20" or null). In web/summary.mjs, renderSummary(quote) should return "Subtotal: <subtotal> | Promo <code>: -<discountCents> | Total: <total>" when promoApplied is set, or "Subtotal: <subtotal> | Total: <total>" otherwise.',
+    rubric: 'Implements matching SAVE20 discount API and UI summary formatting across both folders without breaking baseline tests.',
+    trace: [{
+      steps: [
+        { type: 'command', command: 'cat pricing.mjs', output: '// Cart pricing API.' },
+        { type: 'write', folder: 'api', file: 'pricing.mjs', content: PRICING_IMPL },
+        { type: 'write', folder: 'web', file: 'summary.mjs', content: SUMMARY_IMPL },
+        { type: 'say', text: 'Implemented SAVE20 promo pricing in api/pricing.mjs and summary display in web/summary.mjs.' },
+      ],
+      usage: { input: 3600, cached: 400, output: 320, reasoning: 60 },
+    }],
+  },
+  {
+    id: 'specialist-team-feature', title: 'Specialist team workflow for promo discount across api, web and QA',
+    ...PROMO_FEATURE,
+    prompt: null,
+    rubric: 'Publishes the contract first, coordinates backend and frontend in parallel against it, integrates verified worktrees, and finishes with QA verification.',
+    team: {
+      group: 'Promo feature',
+      cards: [
+        {
+          id: 'contract', title: 'Agree the promo contract', role: 'backend', artifact: 'contract', folder: 'api',
+          files: ['PROMO_CONTRACT.md'], check: 'node --test smoke.test.mjs',
+          notes: 'Define the shared SAVE20 promo contract: calculateTotal(items, { promoCode }) returns { subtotal, discountCents, total, promoApplied } with 20% Math.round discount, and renderSummary(quote) formats "Subtotal: <subtotal> | Promo <code>: -<discountCents> | Total: <total>" when promoApplied is present.',
+        },
+        {
+          id: 'api', title: 'Implement promo pricing', role: 'backend', artifact: 'diff', folder: 'api',
+          dependsOn: ['contract'], files: ['pricing.mjs'], check: 'node --test smoke.test.mjs',
+          notes: 'Implement options.promoCode handling in pricing.mjs following the promo contract.',
+        },
+        {
+          id: 'ui', title: 'Render promo discount in summary', role: 'frontend', artifact: 'diff', folder: 'web',
+          dependsOn: ['contract'], files: ['summary.mjs'], check: 'node --test smoke.test.mjs',
+          notes: 'Update renderSummary(quote) in summary.mjs to display the promo discount following the promo contract.',
+        },
+        {
+          id: 'qa', title: 'Verify promo integration', role: 'qa', artifact: 'test_evidence', folder: 'api',
+          dependsOn: ['api', 'ui'], check: 'node --test smoke.test.mjs',
+          notes: 'Verify the SAVE20 pricing and summary changes across api and web and run smoke tests.',
+        },
+      ],
+    },
+    trace: [
+      {
+        match: 'Agree the promo contract (backend)', requiresPrompt: ['SAVE20'],
+        steps: [
+          { type: 'write', folder: 'api', file: 'PROMO_CONTRACT.md', content: '# Promo Contract\n\nCode SAVE20 gives a 20% rounded discount.\n' },
+          { type: 'say', text: 'Contract defined: SAVE20 applies 20% rounded discount (promoApplied: "SAVE20"), returned by calculateTotal and rendered by renderSummary.' },
+        ],
+        usage: { input: 900, cached: 100, output: 110, reasoning: 20 },
+      },
+      {
+        match: 'Implement promo pricing (backend)', requiresPrompt: ['This builds on these cards, which have finished:', 'Agree the promo contract', 'Contract defined: SAVE20'],
+        steps: [
+          { type: 'command', command: 'cat pricing.mjs', output: '// Cart pricing API.' },
+          { type: 'write', folder: 'api', file: 'pricing.mjs', content: PRICING_IMPL },
+          { type: 'say', text: 'Implemented SAVE20 promo discount in pricing.mjs matching the contract.' },
+        ],
+        usage: { input: 1100, cached: 200, output: 140, reasoning: 30 },
+      },
+      {
+        match: 'Render promo discount in summary (frontend)', requiresPrompt: ['This builds on these cards, which have finished:', 'Agree the promo contract', 'Contract defined: SAVE20'],
+        steps: [
+          { type: 'command', command: 'cat summary.mjs', output: '// Cart summary view.' },
+          { type: 'write', folder: 'web', file: 'summary.mjs', content: SUMMARY_IMPL },
+          { type: 'say', text: 'Updated renderSummary in summary.mjs matching the contract.' },
+        ],
+        usage: { input: 1000, cached: 200, output: 120, reasoning: 20 },
+      },
+      {
+        match: 'Verify promo integration (qa)', requiresPrompt: ['This builds on these cards, which have finished:', 'Implement promo pricing', 'Render promo discount in summary'],
+        steps: [
+          { type: 'command', command: 'node --test smoke.test.mjs', output: 'pass 1' },
+          { type: 'say', text: 'Verified api and web changes against the SAVE20 contract.\n\n```json\n{"verdict": "pass"}\n```' },
+        ],
+        usage: { input: 850, cached: 150, output: 90, reasoning: 20 },
+      },
+    ],
+  },
+);
 export const fixtureById = id => fixtures.find(fixture => fixture.id === id);

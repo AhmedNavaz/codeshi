@@ -148,5 +148,5 @@ test('a Word document that can’t be read is refused with what to do instead', 
 test('the attach button offers Word documents and says how large they can be', () => {
   const page = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8'), files = fs.readFileSync(new URL('../public/files.js', import.meta.url), 'utf8');
   assert.match(page.match(/<input id="attachment-input"[^>]*>/)[0], /accept="[^"]*\.docx[,"]/);
-  assert.match(files, /Word \.docx \(5 MB, 64 KB of text\)/);
+  assert.match(files, /Word \.docx or PDF on macOS \(5 MB, 64 KB of text\)/);
 });

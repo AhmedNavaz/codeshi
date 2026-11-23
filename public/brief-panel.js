@@ -107,13 +107,14 @@
     }
     window.dispatchEvent(new CustomEvent('relay-side-panel'));
   }
+  // Flow and the Plan have no side panel and show an open one as a sheet, so a workspace opened in either reopens nothing.
   let lastProject = null;
   window.addEventListener('relay-state', () => {
     const projectId = api.getState().projectId;
     if (projectId !== lastProject) {
       lastProject = projectId;
       if (!projectId) setOpen(false, null, false);
-      else if (panel.hidden && read() === 'brief' && window.matchMedia?.('(min-width: 1101px)').matches) setOpen(true, null, false);
+      else if (panel.hidden && read() === 'brief' && !['flow', 'plan'].includes(window.relayFlow?.view?.()) && window.matchMedia?.('(min-width: 1101px)').matches) setOpen(true, null, false);
     }
     load();
   });

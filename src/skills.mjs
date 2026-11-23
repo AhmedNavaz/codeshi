@@ -266,6 +266,24 @@ export class SkillCatalog {
     return this.save(c, [...(c.skills || []), skill]);
   }
 
+  // Skills this task explicitly asks for or carries across turns, and enabled skills an agent connection can't run natively (#12).
+  neededForTask(c, { text, relation = null } = {}) {
+    const enabled = (c?.skills || []).filter(skill => skill.enabled), chosen = new Set(), request = text === continuationRequest ? '' : String(text || '');
+    for (const skill of enabled) {
+      const escaped = skill.name.replace(/-/g, '[- ]');
+      if (new RegExp(`(?:^|[\\s(])[/$]${skill.name}(?![\\w-])`, 'i').test(request) || new RegExp(`\\b(?:use|using|follow|with)\\s+(?:the\\s+|our\\s+)?${escaped}\\s+skill\\b`, 'i').test(request)) chosen.add(skill.name);
+    }
+    if (relation) for (const item of c?.lastRun?.context?.skills || []) { if (enabled.some(entry => entry.name === item.name)) chosen.add(item.name); }
+    return [...chosen];
+  }
+  unsupportedFor(c, provider, { native = false } = {}) {
+    const enabled = (c?.skills || []).filter(skill => skill.enabled);
+    return enabled.filter(skill => {
+      const unavailable = this.compatibility(skill)?.unavailable || [];
+      return unavailable.some(item => item.blocking && !AGENTS.every(agent => (item.agents || AGENTS).includes(agent)) && (!native || (item.agents || AGENTS).includes(provider)));
+    }).map(skill => skill.name);
+  }
+
   // What a run is told. Names and descriptions always; full instructions for a skill the person asked for, one that clearly
   // matches, or one this task was already using, including after it moved to another agent.
   //

@@ -22,6 +22,14 @@
     if (missing.length) parts.push(`It has no ${missing.length > 3 ? `${missing.slice(0, 3).join(', ')} and ${missing.length - 3} more` : missing.join(', ')}, as secrets aren’t copied.`);
     return parts.length ? ` ${parts.join(' ')}` : '';
   };
+  // What a copy was made from: the last commit, with the files the work before it merged into the folder since (which
+  // aren't in that commit), and without the folder's other uncommitted changes.
+  const copyFrom = task => {
+    const carried = task.carried?.files || 0, left = task.uncommitted || 0;
+    const has = carried ? `, with the ${carried === 1 ? 'file' : `${carried} files`} merged by the work before it` : '';
+    const lacks = left ? `${carried ? ' and' : ','} without ${left} ${carried ? 'other ' : ''}uncommitted change${left === 1 ? '' : 's'} in the folder` : '';
+    return `Works in its own copy from the last commit${has}${lacks}.`;
+  };
   const canMerge = task => task.hasWorktree && ['complete', 'stopped', 'failed'].includes(task.status);
   const act = async (task, action, input = {}) => { const result = await api.post(`/api/tasks/${task.id}/${action}`, input); await api.refresh(); return result; };
   const attempt = work => work().catch(error => api.showNotice(error.message));
@@ -190,7 +198,7 @@
     title.append(node('span', 'task-banner-kind', task.board ? 'Card' : 'Task'), name);
     if (!plan) title.append(node('span', 'task-banner-state', `${task.folderName} · ${status}`));
     text.append(title);
-    const how = task.reason || (task.resolving?.open ? (task.status === 'running' ? 'Resolving its merge conflicts in its own copy. You review the combined result before it’s merged.' : 'Resolving its merge conflicts isn’t finished. Answer the agent here, or review and merge it to resolve again.') : task.mode === 'worktree' ? `Works in its own copy from the last commit${task.uncommitted ? `, without ${task.uncommitted} uncommitted change${task.uncommitted === 1 ? '' : 's'} in the folder` : ''}. You review its changes before they’re merged.${copyNote(task.setup)}` : task.mode === 'direct' ? 'Works directly in this folder.' : '');
+    const how = task.reason || (task.resolving?.open ? (task.status === 'running' ? 'Resolving its merge conflicts in its own copy. You review the combined result before it’s merged.' : 'Resolving its merge conflicts isn’t finished. Answer the agent here, or review and merge it to resolve again.') : task.mode === 'worktree' ? `${copyFrom(task)} You review its changes before they’re merged.${copyNote(task.setup)}` : task.mode === 'direct' ? 'Works directly in this folder.' : '');
     if (task.status === 'integrated') {
       const detail = node('span', 'task-banner-detail', `${task.integration?.files || 0} file${task.integration?.files === 1 ? '' : 's'} merged into ${task.folderName}.`);
       const changed = (task.integration?.changes || []).map(item => item.path).filter(Boolean);
@@ -216,7 +224,7 @@
     // A blank task belongs to its folder, so going to the workspace or another folder puts it away. What was typed is kept.
     if (state.taskDraft && (api.sidebarLevel?.() === 'workspace' || (api.sidebarLevel?.() === 'folder' && api.selectedFolderId?.() !== state.taskDraft.folderId))) { attempt(() => selectThread(null)); return; }
     remember(state);
-    const key = JSON.stringify([state.projectId, state.taskId, state.taskDraft, state.provider, state.mode, state.approvalPolicy, focused, window.relayExperimental?.enabled('tasks') !== false, api.sidebarLevel?.(), api.selectedFolderId?.(), state.conversation?.status, state.conversation?.pendingApprovals?.length, state.status?.runningConversationId, tasks().map(task => [task.id, task.status, task.approvals, task.reason, task.hasWorktree, task.held, task.title, task.folderId, task.resolving?.open]), [...plans.values()].map(plan => [plan.id, plan.status, plan.summary || plan.goal])]);
+    const key = JSON.stringify([state.projectId, state.taskId, state.taskDraft, state.provider, state.mode, state.approvalPolicy, focused, window.relayExperimental?.enabled('tasks') !== false, api.sidebarLevel?.(), api.selectedFolderId?.(), state.conversation?.status, state.conversation?.pendingApprovals?.length, state.status?.runningConversationId, tasks().map(task => [task.id, task.status, task.approvals, task.reason, task.hasWorktree, task.held, task.title, task.folderId, task.resolving?.open, task.carried?.files, task.uncommitted]), [...plans.values()].map(plan => [plan.id, plan.status, plan.summary || plan.goal])]);
     if (focused && !tasks().some(task => task.id === focused)) focused = null;
     if (!force && key === signature) return;
     signature = key; renderList(); renderBanner(); renderDraft(); loadTotals();

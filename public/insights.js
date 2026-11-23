@@ -330,8 +330,9 @@
   }
   $('open-git').addEventListener('click', () => setGitPanel($('git-panel').hidden));
   // One side panel shows at a time, and docked layouts reopen the one last chosen (Agents at first). Narrow layouts
-  // overlay it, so it starts closed there.
-  function wantsGitPanel() { let preference = null; try { preference = localStorage.getItem('throughline:side-panel'); } catch { /* Defaults apply. */ } return preference === 'git' && Boolean(window.matchMedia?.('(min-width: 1101px)').matches); }
+  // overlay it, so it starts closed there. Flow and the Plan have no side panel and show an open one as a sheet, so a
+  // workspace opened in either reopens nothing.
+  function wantsGitPanel() { let preference = null; try { preference = localStorage.getItem('throughline:side-panel'); } catch { /* Defaults apply. */ } return preference === 'git' && !['flow', 'plan'].includes(window.relayFlow?.view?.()) && Boolean(window.matchMedia?.('(min-width: 1101px)').matches); }
 
   const diffDialog = $('diff-dialog'), statusNames = { added: 'Added', untracked: 'New file', deleted: 'Deleted', renamed: 'Renamed', modified: 'Modified' };
   let diffRequest = 0;

@@ -94,22 +94,100 @@ export function planIsolation(identity, occupants, { loose = false, keeps = [] }
   return { mode: 'wait', blocker: blocker.label, reason: `${why}, and ${identity.git ? 'a repository with no commits' : 'a folder outside Git'} can't have its own copy, so this task waits until that finishes.` };
 }
 // Uncommitted work isn't in a worktree, which starts from the last commit, so the person is told how much that leaves out.
-export function uncommittedCount(folder) {
-  const status = git(folder, ['status', '--porcelain=v1', '--untracked-files=normal', '--', '.'], { timeout: 10000 });
-  return status.status === 0 ? status.stdout.split('\n').filter(Boolean).length : 0;
+// brought: the files the copy has from the folder all the same (createWorktree), named from the repository's top as Git
+// names them here. They don't count, and a new folder the copy has only some of is counted file by file.
+export function uncommittedCount(folder, brought = []) {
+  const listed = untracked => {
+    const status = git(folder, ['status', '--porcelain=v1', '-z', `--untracked-files=${untracked}`, '--', '.'], { timeout: 10000 }), paths = [];
+    if (status.error || status.status !== 0) return paths;
+    // A rename or copy is one change with two names, the second being where it came from.
+    for (let fields = status.stdout.split('\0'), index = 0; index < fields.length; index++) { if (fields[index].length < 4) continue; paths.push(fields[index].slice(3)); if (/[RC]/.test(fields[index].slice(0, 2))) index++; }
+    return paths;
+  };
+  const rows = listed('normal');
+  if (!brought.length) return rows.length;
+  const have = new Set(brought), partly = new Set(rows.filter(row => row.endsWith('/') && brought.some(file => file.startsWith(row))));
+  const inside = partly.size ? listed('all').filter(file => [...partly].some(row => file.startsWith(row))) : [];
+  return [...rows.filter(row => !partly.has(row)), ...inside].filter(file => !have.has(file)).length;
 }
 
 const refs = id => ({ base: `refs/codeshi/tasks/${id}/base`, result: `refs/codeshi/tasks/${id}/result` });
+
+// ---- The work a copy builds on
+// A copy starts from the folder's last commit, and merging a task writes to the folder without committing. So the work
+// a task builds on, once merged, isn't in the commit its copy is made from: a card that waits for another would start
+// without that card's files, and a review would have nothing to read. Those files are brought from the folder instead,
+// as they are there now, in a commit of Codeshi's own that the copy starts from. That commit is the task's base, so the
+// task's changes are still only its own, and merging them compares each file with the version the task began with.
+// Git takes a list of paths whole or not at all, and there are paths it refuses, such as a file where the last commit has
+// a folder. A list it refuses is tried again in halves, so such a path keeps only itself out. attempt returns what it took
+// of a list, or null when Git refused it; a Git that can't be run at all is an error, as nothing would be brought.
+function inHalves(list, attempt) {
+  if (!list.length) return [];
+  const taken = attempt(list);
+  if (taken) return taken;
+  if (list.length === 1) return [];
+  const half = Math.ceil(list.length / 2);
+  return [...inHalves(list.slice(0, half), attempt), ...inHalves(list.slice(half), attempt)];
+}
+const asked = (found, what) => { if (found.error) throw fail(`Git could not ${what}: ${String(found.error.message || '').slice(0, 400)}`, 500); return found; };
+// Which of the files named can be brought: in the repository and not in another one inside it, such as a submodule, not
+// through a link or into Git's own folder, a plain file or nothing in the folder now, and not one Git ignores there, as
+// a copy never has those.
+function bringable(root, files) {
+  const plain = file => { try { return fs.lstatSync(path.join(root, file)).isFile(); } catch (error) { return error.code === 'ENOENT'; } };
+  const inner = new Map(), foreign = file => {
+    for (let folder = path.posix.dirname(file); folder !== '.'; folder = path.posix.dirname(folder)) {
+      if (!inner.has(folder)) inner.set(folder, fs.existsSync(path.join(root, folder, '.git')));
+      if (inner.get(folder)) return true;
+    }
+    return false;
+  };
+  // Git can't be asked whether it ignores a path that starts like pathspec magic (ignoredPaths), so such a file stays out.
+  const clean = [...new Set((Array.isArray(files) ? files : []).filter(file => typeof file === 'string' && file && !file.startsWith(':') && !file.includes('\0')))].filter(file => reachable(root, file) && plain(file) && !foreign(file));
+  return inHalves(clean, list => {
+    const found = asked(git(root, ['check-ignore', '-z', '--stdin'], { input: `${list.join('\0')}\0`, timeout: 30000, magic: true }), 'check-ignore');
+    // 1 is none ignored.
+    if (![0, 1].includes(found.status)) return null;
+    const ignored = new Set(String(found.stdout || '').split('\0').filter(Boolean));
+    return list.filter(file => !ignored.has(file));
+  });
+}
+// A commit of parent's files with the folder's current version of each file named, or parent itself when none of them
+// differs from it. A temporary index reads them from the folder, so its own index, its branches and the folder itself are
+// left alone. Returns the commit and the files that differ in it.
+function folderVersions(root, parent, files, message) {
+  const paths = bringable(root, files);
+  if (!paths.length) return { commit: parent, files: [] };
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-index-')), env = { GIT_INDEX_FILE: path.join(directory, 'index') };
+  try {
+    must(root, ['read-tree', parent], { env });
+    // A file the folder no longer has is taken out. Nothing already there makes way for one: a file where the last commit
+    // has a folder, or a submodule, is refused, and stays as that commit has it.
+    inHalves(paths, list => asked(git(root, ['update-index', '--add', '--remove', '-z', '--stdin'], { env, input: `${list.join('\0')}\0`, timeout: 120000 }), 'update-index').status === 0 ? list : null);
+    const tree = must(root, ['write-tree'], { env }).trim();
+    const changed = must(root, ['diff-tree', '-r', '--no-renames', '--name-only', '-z', parent, tree]).split('\0').filter(Boolean);
+    if (!changed.length) return { commit: parent, files: [] };
+    return { commit: must(root, ['-c', 'user.name=Codeshi', '-c', 'user.email=codeshi@localhost', 'commit-tree', tree, '-p', parent, '-m', message]).trim(), files: changed };
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+}
+// The files a copy's base has from the folder rather than from the commit the copy was made from.
+export const broughtFiles = (root, from, base) => from === base ? [] : must(root, ['diff-tree', '-r', '--no-renames', '--name-only', '-z', from, base]).split('\0').filter(Boolean);
+
 // A detached worktree under Codeshi's own folder, so the person's branches, index and files are untouched. Refs under a
 // private name keep the commits safe from cleanup without adding to the branch list.
-export function createWorktree(identity, target, id) {
+// files: what the work this task builds on changed in the folder (above), named from the repository's top. Returns the
+// folder's last commit as from, and as brought the files the copy has from the folder instead.
+export function createWorktree(identity, target, id, files = []) {
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-  patient(identity.root, ['worktree', 'add', '--detach', '--quiet', target, 'HEAD']);
+  const from = must(identity.root, ['rev-parse', 'HEAD']).trim();
+  const start = folderVersions(identity.root, from, files, `Codeshi task ${id}: the folder's versions of the files it builds on`);
+  patient(identity.root, ['worktree', 'add', '--detach', '--quiet', target, start.commit]);
   const base = must(target, ['rev-parse', 'HEAD']).trim();
   patient(identity.root, ['update-ref', refs(id).base, base]);
   const scopePath = path.join(target, identity.prefix);
   fs.mkdirSync(scopePath, { recursive: true });
-  return { worktree: target, scopePath: fs.realpathSync.native(scopePath), base };
+  return { worktree: target, scopePath: fs.realpathSync.native(scopePath), base, from, brought: start.files };
 }
 // A fresh worktree has none of the folder's ignored files, so an agent's build or tests would fail in it. Installed
 // dependencies are brought over: each ignored node_modules gets its own copy-on-write clone, which takes about a second
@@ -389,6 +467,50 @@ export function restoreResolution({ root, worktree, id, base, before, from, file
   const next = commitWith(root, base, changes, `Codeshi task ${id}: back to before resolving`);
   patient(root, ['update-ref', refs(id).base, next]);
   return next;
+}
+
+// The work a copy builds on (createWorktree), for a copy that is already there and about to run again: a review that
+// checks once more after its repairs were merged reads them in its own copy. The folder's current version of each file
+// named replaces the copy's where the task left that file alone, and is merged into it where the task changed it too and
+// the changes don't touch. A file changed on both sides in the same lines stays as the copy has it, still compared with
+// the version it began with, so merging the task says so. Only the copy is written, and it's put back as it was if any
+// file can't be. Returns the new base and the files brought.
+export function refreshWorktree({ root, worktree, id, base, files }) {
+  const next = folderVersions(root, base, files, `Codeshi task ${id}: the folder's versions of the files it builds on`);
+  if (next.commit === base) return { base, files: [] };
+  const writes = [], kept = [];
+  for (const file of next.files) {
+    const was = entryOf(root, base, file), now = entryOf(root, next.commit, file), copy = path.join(worktree, file);
+    const mine = reachable(worktree, file) ? readCurrent(copy) : { unreadable: true };
+    const keep = () => kept.push(was.mode ? { path: file, id: was.id, mode: was.mode } : { path: file, content: null });
+    if (mine.unreadable || [was.mode, now.mode].some(mode => ['120000', '160000'].includes(mode))) { keep(); continue; }
+    const mineId = mine.content === null ? null : storedId(root, file, mine.content);
+    // The copy has the folder's version already, so only what it's compared with moves.
+    if (mineId === now.id) continue;
+    const theirs = now.mode ? checkedOut(root, next.commit, file) : null, change = { copy, mode: now.mode, was: mine.content, wasMode: was.mode };
+    if (mineId === was.id) { writes.push({ ...change, content: theirs }); continue; }
+    const before = was.mode ? checkedOut(root, base, file) : null;
+    const merged = [mine.content, before, theirs].every(side => side && isText(side)) ? mergeText(root, mine.content, before, theirs) : null;
+    if (merged === null) keep(); else writes.push({ ...change, content: merged });
+  }
+  const brought = next.files.filter(file => !kept.some(item => item.path === file));
+  if (!brought.length) return { base, files: [] };
+  const commit = kept.length ? commitWith(root, next.commit, kept, `Codeshi task ${id}: the files it changed too, as they were`) : next.commit;
+  const done = [];
+  try {
+    for (const item of writes) {
+      done.push(item);
+      if (item.content !== null) { writeFile(item.copy, item.content, item.mode); continue; }
+      fs.rmSync(item.copy, { force: true });
+      // A folder the deletion leaves empty goes with it, as in any checkout.
+      for (let folder = path.dirname(item.copy); folder.startsWith(`${worktree}${path.sep}`); folder = path.dirname(folder)) { try { fs.rmdirSync(folder); } catch { break; } }
+    }
+    patient(root, ['update-ref', refs(id).base, commit]);
+  } catch (error) {
+    for (const item of done.reverse()) { try { if (item.was === null) fs.rmSync(item.copy, { force: true }); else writeFile(item.copy, item.was, item.wasMode); } catch { /* The error below is what the person needs to know. */ } }
+    throw error;
+  }
+  return { base: commit, files: brought };
 }
 // What the agent resolving the conflicts is asked, in the task's own conversation. Paths are from its own folder.
 export function resolvePrompt({ folder, card = false, prefix = '', files, labels }) {

@@ -996,14 +996,16 @@
   const shortcutNote = (toggle.title.match(/\s\([^)]*\)\s*$/) || [''])[0], DEFAULT_PLACEHOLDER = 'Describe the task or ask a question…', FLOW_PLACEHOLDER = 'What should we build next?';
   function brand() {
     const state = api.getState(), label = $('toggle-flow-label'), mark = $('flow-brand'), input = $('message-input');
-    if (label) label.textContent = 'Flow';
+    // This runs on every update, so the header's words are written only when they change: writing the same word again
+    // would paint the top bar on each update, all through a long run (#162).
+    if (label && label.textContent !== 'Flow') label.textContent = 'Flow';
     const wait = checkingMode ? 'Checking workspace activity…' : transitioning ? 'Changing view…' : '';
     toggle.title = (wait || (blocked('flow') ? lockReason() : on ? 'Flow: the view you are in' : 'Flow: just the chat, with plain-language cards either side, and Codeshi chooses the agent and model')) + shortcutNote;
     if (normalButton) normalButton.title = wait || (blocked('normal') ? lockReason() : 'Normal: every panel, and you choose the agent and model');
     if (mark) {
       mark.hidden = view === 'normal';
       mark.dataset.view = view;
-      const word = mark.querySelector('.flow-brand-name'); if (word) word.textContent = view === 'plan' ? 'Plan' : 'Flow';
+      const word = mark.querySelector('.flow-brand-name'), brandName = view === 'plan' ? 'Plan' : 'Flow'; if (word && word.textContent !== brandName) word.textContent = brandName;
       // The workspace name opens the workspace menu, as Flow and the Plan have no sidebar to switch from.
       const name = state.projects?.find(project => project.id === state.projectId)?.name || '', button = $('flow-brand-workspace');
       if (button) {

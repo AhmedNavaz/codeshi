@@ -249,13 +249,14 @@
     window.dispatchEvent(new CustomEvent('relay-side-panel'));
   }
   $('refresh-timeline')?.addEventListener('click', () => loadTimeline(true));
+  // Flow and the Plan have no side panel and show an open one as a sheet, so a workspace opened in either reopens nothing.
   window.addEventListener('relay-state', () => {
     const projectId = api.getState().projectId;
     if (projectId !== lastProject) {
       lastProject = projectId;
       let preferred; try { preferred = localStorage.getItem('throughline:side-panel'); } catch { /* Default closed. */ }
       if (!projectId) setTimeline(false, false);
-      else if (panel?.hidden && preferred === 'timeline' && window.matchMedia?.('(min-width: 1101px)').matches) setTimeline(true, false);
+      else if (panel?.hidden && preferred === 'timeline' && !['flow', 'plan'].includes(window.relayFlow?.view?.()) && window.matchMedia?.('(min-width: 1101px)').matches) setTimeline(true, false);
     }
     loadTimeline();
   });

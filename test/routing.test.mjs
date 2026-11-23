@@ -608,3 +608,109 @@ test('the broker knows which connections send images: never the CLI, and Gemini 
   assert.equal(broker.imageConnection(c, 'gemini', { capabilities: { images: false } }), false);
   assert.equal(broker.imageConnection(c, 'gemini', { capabilities: {} }), null, 'Not reported is not known.');
 });
+
+test("routing checks context window size, skill/tool capability, active tasks, measured outcomes, alternatives and reset-resume effort (#12)", () => {
+  const { taskNeeds, contextWindowOf, measuredOutcomes, handoffFit } = globalThis.relayRouting;
+  assert.deepEqual(taskNeeds([], { contextTokens: 120000, skills: ["native-only"], tools: ["web_search"] }), {
+    contextTokens: 120000,
+    skills: ["native-only"],
+    tools: ["web_search"],
+  });
+  assert.equal(contextWindowOf({ id: "gpt-6-luna", contextWindow: 64000 }), 64000);
+  assert.equal(contextWindowOf({ id: "sonnet", maxInputTokens: 200000 }), 200000);
+
+  // Context window filtering picks a model whose reported context window fits the task, and explains when an agent is skipped.
+  const codexSmallCtx = [
+    { id: "gpt-6-luna", displayName: "GPT Luna", contextWindow: 32000, supportedReasoningEfforts: levels("low", "medium") },
+    { id: "gpt-6.1-sol", displayName: "GPT Sol", isDefault: true, contextWindow: 64000, supportedReasoningEfforts: levels("low", "medium", "high") },
+  ];
+  const claudeLargeCtx = [
+    { id: "sonnet", displayName: "Sonnet", isDefault: true, contextWindow: 200000, supportedEffortLevels: ["low", "medium", "high"] },
+  ];
+  const ctxChoice = route({
+    text: "Refactor the module",
+    assessment: { tier: "standard", reason: "a large-context change" },
+    mode: "smart",
+    candidates: agents({ codex: { models: codexSmallCtx, usedPercent: 10 }, claude: { models: claudeLargeCtx, usedPercent: 30 } }),
+    needs: { contextTokens: 120000 },
+  });
+  assert.equal(ctxChoice.provider, "claude");
+  assert.equal(ctxChoice.model, "sonnet");
+  assert.match(ctxChoice.reason, /needs ~120K context tokens, which Codex can’t fit/);
+
+  // Skill/tool capability filtering skips candidates that cannot run a required skill or tool.
+  const skillChoice = route({
+    text: "Run /native-only",
+    assessment: { tier: "standard", reason: "uses a native skill" },
+    mode: "smart",
+    candidates: agents({ codex: { usedPercent: 10, unsupportedSkills: ["native-only"] }, claude: { usedPercent: 30 } }),
+    needs: { skills: ["native-only"] },
+  });
+  assert.equal(skillChoice.provider, "claude");
+  assert.match(skillChoice.reason, /uses skills or tools that Codex can’t run here/);
+
+  // Active parallel tasks discount remaining headroom under the handoff line and rank alternatives.
+  const usageAt80 = { available: true, checkedAt: new Date().toISOString(), windows: [{ id: "five_hour", label: "5h limit", usedPercent: 80, resetsAt: new Date(Date.now() + 3 * 3600000).toISOString() }] };
+  assert.equal(handoffFit(usageAt80, "sonnet", { mode: "smart", current: true, tier: "standard", usual: 6, activeTasks: 0 }).fits, true);
+  assert.equal(handoffFit(usageAt80, "sonnet", { mode: "smart", current: true, tier: "standard", usual: 6, activeTasks: 1 }).fits, false);
+
+  const crowded = route({
+    text: "Implement feature",
+    assessment: { tier: "standard", reason: "a focused change" },
+    mode: "smart",
+    current: "claude",
+    candidates: agents({
+      claude: { usedPercent: 80, usualSpend: 6, activeTasks: 1 },
+      codex: { usedPercent: 25, usualSpend: 6, activeTasks: 0 },
+    }),
+  });
+  assert.equal(crowded.provider, "codex");
+  assert.match(crowded.reason, /Claude is already running another task/);
+  assert(Array.isArray(crowded.alternatives) && crowded.alternatives.length === 1);
+  assert.equal(crowded.alternatives[0].provider, "claude");
+  assert.equal(crowded.alternatives[0].activeTasks, 1);
+
+  // Measured completed-task outcomes inform choice within the same tier once at least 3 checked runs exist.
+  const outcomes = measuredOutcomes([
+    { status: "complete", model: "gpt-6.1-sol", check: { status: "failed" } },
+    { status: "complete", model: "gpt-6.1-sol", check: { status: "failed" } },
+    { status: "complete", model: "gpt-6.1-sol", check: { status: "failed" } },
+    { status: "complete", model: "gpt-6.1-terra", check: { status: "passed" } },
+    { status: "complete", model: "gpt-6.1-terra", check: { status: "passed" } },
+    { status: "complete", model: "gpt-6.1-terra", check: { status: "passed" } },
+  ]);
+  assert.equal(outcomes["gpt-6.1-sol"].passRate, 0);
+  assert.equal(outcomes["gpt-6.1-terra"].passRate, 1);
+  const codexOutcomeRows = [
+    { id: "gpt-6.1-sol", displayName: "GPT Sol", isDefault: true, supportedReasoningEfforts: levels("low", "medium", "high") },
+    { id: "gpt-6.1-terra", displayName: "GPT Terra", supportedReasoningEfforts: levels("low", "medium", "high") },
+  ];
+  const withOutcomes = route({
+    text: "Build endpoint",
+    assessment: { tier: "standard", reason: "a focused change" },
+    mode: "smart",
+    candidates: agents({ codex: { models: codexOutcomeRows, usedPercent: 10, outcomes } }),
+  });
+  assert.equal(withOutcomes.model, "gpt-6.1-terra");
+
+  // Reset resumption on another agent routes the destination model and effort for the task's mode and tier.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codeshi-resume-sel-"));
+  const broker = new Broker({ workspace: dir, dataDir: path.join(dir, "data") });
+  try {
+    const c = broker.get(broker.create().id);
+    c.models = { codex: "gpt-6-luna", claude: "haiku" };
+    c.efforts = { codex: { "gpt-6-luna": "low" }, claude: { haiku: "low" } };
+    const resume = {
+      selection: { provider: "codex", model: "gpt-6.1-sol", effort: "high" },
+      routing: { mode: "smart", tier: "deep", reason: "a complex task (refactoring)", assessment: { id: "a1", tier: "deep", effort: "high", source: "agent", reason: "a complex task (refactoring)" } },
+    };
+    const otherSel = broker.resume.selectionFor(c, resume, "claude", models.claude);
+    assert.equal(otherSel.model, "opus");
+    assert.equal(otherSel.effort, "high");
+    assert.equal(otherSel.routing.tier, "deep");
+    assert.equal(otherSel.routing.mode, "smart");
+  } finally {
+    broker.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

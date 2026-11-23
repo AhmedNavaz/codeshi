@@ -190,7 +190,7 @@ const newEntry = (id, record, overrides = {}) => ({
   routing: routingOf(record), taskClass: taskClass(record), workspace: record.workspaceSignature || null,
   startedAt: record.at || null, endedAt: null, elapsedMs: null, status: 'running', errorCategory: null, usage: null, costEstimateUSD: null, costBasis: null,
   tools: { commands: 0, edits: 0, other: 0 }, approvals: { allowed: 0, denied: 0, automatic: 0, byRule: 0 }, interventions: 0, compactions: 0, compactionEvents: [], check: null, filesChanged: null, retryOf: record.retryOf || null,
-  context: record.context ? { bytes: record.context.bytes ?? null, estimatedTokens: record.context.size?.estimatedTokens ?? null, policy: record.context.policy || null, sessionMode: record.context.sessionMode || null, sessionReason: record.context.sessionReason || null, omittedMessages: record.context.omittedMessages ?? null, shortenedMessages: record.context.shortenedMessages ?? null, memoryEntries: record.context.memory?.length ?? null, skills: record.context.skills?.map(({ name, version, reason }) => ({ name, version, reason })) || [] } : null,
+  context: record.context ? { bytes: record.context.bytes ?? null, estimatedTokens: record.context.size?.estimatedTokens ?? null, policy: record.context.policy || null, sessionMode: record.context.sessionMode || null, sessionReason: record.context.sessionReason || null, omittedMessages: record.context.omittedMessages ?? null, shortenedMessages: record.context.shortenedMessages ?? null, memoryEntries: record.context.memory?.length ?? null, ...(Array.isArray(record.context.scope) ? { scope: record.context.scope } : {}), skills: record.context.skills?.map(({ name, version, reason }) => ({ name, version, reason })) || [] } : null,
   ...overrides,
 });
 

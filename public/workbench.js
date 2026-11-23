@@ -384,7 +384,7 @@
         }
         more.addEventListener('click', () => { menu.hidden = !menu.hidden; more.setAttribute('aria-expanded', String(!menu.hidden)); if (!menu.hidden) menu.querySelector('button')?.focus?.(); });
         menu.addEventListener('keydown', event => {
-          if (event.key === 'Escape') { menu.hidden = true; more.setAttribute('aria-expanded', 'false'); more.focus(); return; }
+          if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation?.(); menu.hidden = true; more.setAttribute('aria-expanded', 'false'); more.focus(); return; }
           if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { const list = [...menu.querySelectorAll('button')], at = list.indexOf(document.activeElement), next = window.codeshiKeyboard?.step(event.key, at, list.length); if (next >= 0) { event.preventDefault(); list[next].focus(); } }
         });
         scoped.push(more);
@@ -397,10 +397,19 @@
   }
   // Approval cards sit outside the dialog, so a failed answer is shown in the page notice. The refresh afterwards removes a request that is no longer pending.
   async function answer(choices, conversationId, item, allow, remember = null) {
+    const hadFocus = Boolean($('pending-approvals')?.contains(document.activeElement) || choices.includes(document.activeElement));
     choices.forEach(choice => { choice.disabled = true; });
     try { await api().post(`/api/conversations/${conversationId}/approval`, { runId: item.runId, approvalId: item.id, allow, ...(remember ? { remember } : {}) }); }
     catch (e) { api().showNotice(e.message || 'This action could not be completed. Please try again.'); }
-    finally { choices.forEach(choice => { choice.disabled = false; }); await api().refresh(); }
+    finally {
+      choices.forEach(choice => { choice.disabled = false; });
+      await api().refresh();
+      if (hadFocus && (!document.activeElement || document.activeElement === document.body || !document.activeElement.isConnected)) {
+        const box = $('pending-approvals'), next = [...(box?.querySelectorAll('button') || []), ...(box?.querySelectorAll('input') || [])].find(el => !el.disabled && !el.hidden);
+        const stop = $('stop-button');
+        (next || (stop && !stop.hidden && !stop.disabled ? stop : null) || $('message-input'))?.focus?.();
+      }
+    }
   }
   modal.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
   $('ask-friend').addEventListener('click', () => open('request')); $('workbench-close').addEventListener('click', () => modal.close());

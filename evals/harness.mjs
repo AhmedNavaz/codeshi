@@ -6,9 +6,10 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Broker } from '../src/broker.mjs';
 import { continuationRequest, prepareContext } from '../src/context.mjs';
+import { reviewHolds } from '../src/plan-review.mjs';
 import { providerUsage } from '../src/providers.mjs';
 import { STARTER_ROOT } from '../src/skills.mjs';
-import { sumUsage, usageByRole } from '../src/task-ledger.mjs';
+import { readLedger, sumUsage, summarizePlans, usageByRole } from '../src/task-ledger.mjs';
 import { validateContextLimit } from '../src/context-rollover.mjs';
 import { checkPin, comparisonKey, experimentInputs, fingerprint, observedModels, validatePin } from './experiment.mjs';
 
@@ -73,6 +74,52 @@ export const parsePolicy = ({ agent, to = null, context = 'task', skills = true,
 // Includes each skill's text, so a changed skill counts as a different experiment.
 const sameFixture = fixture => fingerprint({ ...fixture, checkReply: fixture.checkReply && { source: fixture.checkReply.source, flags: fixture.checkReply.flags }, history: fixture.history?.toString(), trace: undefined });
 
+// Collects all recorded runs, deduplicated tasks, plan summaries, and messages across main and specialist lane conversations.
+async function collectWorkloadData(broker, conversations) {
+  const mainLedgers = await Promise.all(conversations.map(conversation => readLedger(path.join(broker.dataDir, `${conversation.id}.jsonl`))));
+  const seenTaskIds = new Set(), tasks = [];
+  for (const item of mainLedgers) {
+    for (const task of item.tasks) { if (!seenTaskIds.has(task.id)) { seenTaskIds.add(task.id); tasks.push(task); } }
+  }
+  const parallelTasks = conversations.flatMap(conversation => conversation.parallelTasks || []);
+  const laneLedgers = await Promise.all(parallelTasks.filter(task => task.conversationId).map(async task => ({
+    task,
+    ledger: await readLedger(path.join(broker.tasks.directory(task), 'journal', `${task.conversationId}.jsonl`)),
+  })));
+  if (broker.tasks) {
+    for (const task of await broker.tasks.ledgers()) {
+      if (!seenTaskIds.has(task.id)) { seenTaskIds.add(task.id); tasks.push(task); }
+    }
+  }
+  tasks.sort((a, b) => String(a.startedAt || '').localeCompare(String(b.startedAt || '')));
+  const runs = [
+    ...mainLedgers.flatMap(item => item.runs),
+    ...laneLedgers.flatMap(({ task, ledger }) => ledger.runs.map(entry => ({
+      ...entry,
+      role: entry.role || task.role || task.board?.role || 'builder',
+      ...(task.folderName ? { folder: task.folderName } : {}),
+    }))),
+  ].sort((a, b) => String(a.startedAt || '').localeCompare(String(b.startedAt || '')));
+  const laneConversations = [...(broker.tasks?.lanes?.values() || [])].map(lane => lane.c).filter(Boolean);
+  const messages = [...conversations, ...laneConversations].flatMap(conversation => conversation.messages || []);
+  return { runs, tasks, plans: summarizePlans(tasks), messages };
+}
+
+function teamMetrics(c, plans) {
+  const tasks = c.parallelTasks || [], cards = c.board || [];
+  return {
+    cards: cards.length,
+    cardsDone: cards.filter(card => card.column === 'done').length,
+    contractsPublished: Object.values(c.boardArtifacts || {}).filter(item => ['contract', 'schema'].includes(item.kind)).length,
+    outcomesRecorded: Object.keys(c.boardOutcomes || {}).length,
+    invalidations: cards.filter(card => card.needsRecheck || card.invalidatedBy).length,
+    handoffs: tasks.filter(task => task.builtOn && Object.keys(task.builtOn).length > 0).length,
+    worktreesIntegrated: tasks.filter(task => task.status === 'integrated').length,
+    repairRounds: tasks.reduce((sum, task) => sum + (task.review?.round || 0), 0),
+    plans: plans.length,
+  };
+}
+
 // budget is shared across a whole evaluation: { maxRuns, maxTokens, runs, tokens }.
 export async function runFixture(fixture, policy, { live = false, budget, stateDir = null, runLimitMs = RUN_LIMIT_MS, pin = null } = {}) {
   if (live && !(Number.isSafeInteger(budget?.maxRuns) && budget.maxRuns > 0)) throw new Error('A live evaluation runs on your own accounts and needs a stated budget with a positive, finite number of runs.');
@@ -136,6 +183,97 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
     } else await active.done;
     return true;
   };
+  const runTeam = async () => {
+    const cards = fixture.team.cards || [];
+    if (spent() || (budget && budget.runs + cards.length > budget.maxRuns)) { run.skipped = 'budget'; return false; }
+    if (budget) budget.runs += cards.length;
+    const cardIds = new Map();
+    for (const spec of cards) {
+      const folderId = workspaceFolders.find(folder => folder.name === spec.folder)?.id || workspaceFolders[0].id;
+      const agent = ['qa', 'reviewer'].includes(spec.role) && policy.to ? policy.to : policy.builder;
+      const created = broker.board.create(c, {
+        title: spec.title,
+        notes: spec.notes || '',
+        group: fixture.team.group || null,
+        role: spec.role || 'builder',
+        artifact: spec.artifact || null,
+        files: spec.files || [],
+        check: spec.check || null,
+        folderId,
+        dependsOn: (spec.dependsOn || []).map(dep => cardIds.get(dep)).filter(Boolean),
+        column: 'ready',
+        agent: { provider: agent.provider, model: agent.model, effort: agent.effort },
+      });
+      cardIds.set(spec.id, created.id);
+    }
+    if (!live) {
+      broker.settings(c, { provider: 'claude', transport: 'cli', mode: 'edit', approvalPolicy: 'auto' });
+      broker.settings(c, { provider: 'codex', transport: 'app-server', mode: 'edit', approvalPolicy: 'auto' });
+    }
+    const ids = [...cardIds.values()];
+    broker.board.run(c, { ids, billingConfirmed: true }, { access: { mode: 'edit', approvalPolicy: 'auto' } });
+    const conflicted = new Set();
+    const unattendedLanes = () => {
+      for (const lane of broker.tasks?.lanes?.values() || []) {
+        const active = lane.broker?.running;
+        if (!active) continue;
+        for (const pending of [...active.approvals.values()]) {
+          try {
+            if (pending.kind === 'question') { run.questionsAsked = (run.questionsAsked || 0) + 1; lane.broker.answer(active.id, pending.id, null); }
+            else lane.broker.approve(active.id, pending.id, false);
+          } catch { /* It has just been answered. */ }
+        }
+      }
+    };
+    const limit = setTimeout(() => {
+      run.timedOut = true;
+      try { broker.board.stopMany(c, { ids }); } catch {}
+    }, runLimitMs);
+    broker.on('update', unattendedLanes);
+    try {
+      while (!run.timedOut) {
+        unattendedLanes();
+        let progressed = false;
+        for (const cardId of ids) {
+          let card = broker.board.find(c, cardId), task = broker.board.task(c, card);
+          if (task && task.status === 'complete' && task.stepCheck?.status !== 'running' && task.review?.status !== 'repairing' && !broker.tasks.checking.has(task.id)) {
+            if (task.stepCheck?.outcome !== 'failed' && !reviewHolds(task) && !conflicted.has(task.id)) {
+              if (task.mode === 'worktree' && !['integrated', 'kept', 'discarded'].includes(task.status)) {
+                const review = broker.tasks.review(c, task.id);
+                if (review.conflicts > 0) conflicted.add(task.id);
+                else if (review.files.length > 0) { await broker.tasks.integrate(c, task.id, { digest: review.digest }); progressed = true; }
+              }
+              card = broker.board.find(c, cardId); task = broker.board.task(c, card);
+              if (card.column === 'review' && (!task || (!conflicted.has(task.id) && task.stepCheck?.status !== 'running' && task.stepCheck?.outcome !== 'failed' && !reviewHolds(task) && (task.mode !== 'worktree' || ['integrated', 'kept', 'discarded'].includes(task.status) || broker.board.emptyCopy(c, task))))) {
+                broker.board.accept(c, card.id);
+                progressed = true;
+              }
+            }
+          }
+        }
+        broker.tasks.tick(c);
+        const tasks = ids.map(cardId => broker.board.task(c, broker.board.find(c, cardId))).filter(Boolean);
+        const active = tasks.some(task => task.status === 'running' || task.stepCheck?.status === 'running' || task.review?.status === 'repairing' || broker.tasks.checking.has(task.id) || broker.tasks.preparing.has(task.id))
+          || [...(broker.tasks?.lanes?.values() || [])].some(lane => Boolean(lane.broker?.running));
+        if (!active && !progressed) {
+          await new Promise(resolve => setImmediate(resolve));
+          broker.tasks.tick(c);
+          const stillIdle = !tasks.some(task => task.status === 'running' || task.stepCheck?.status === 'running' || task.review?.status === 'repairing' || broker.tasks.checking.has(task.id) || broker.tasks.preparing.has(task.id))
+            && ![...(broker.tasks?.lanes?.values() || [])].some(lane => Boolean(lane.broker?.running));
+          const pendingAccept = ids.some(cardId => {
+            const card = broker.board.find(c, cardId), task = broker.board.task(c, card);
+            return card.column === 'review' && task && task.status === 'complete' && task.stepCheck?.status !== 'running' && task.stepCheck?.outcome !== 'failed' && !reviewHolds(task) && !conflicted.has(task.id);
+          });
+          if (stillIdle && !pendingAccept) break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    } finally {
+      clearTimeout(limit);
+      broker.off('update', unattendedLanes);
+    }
+    return true;
+  };
   try {
     for (const message of fixture.history?.(folders) || []) broker.message(c, message.role, message.text, policy.builder.provider);
     for (const entry of fixture.memory || []) broker.changeMemory(c, { action: 'add', ...entry });
@@ -155,7 +293,8 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
       const prompt = prepared.prompt;
       run.context = { bytes: prepared.metadata.bytes, factsKept: fixture.facts.filter(fact => prompt.includes(fact)).length, factsTotal: fixture.facts.length, unrelatedSteps: fixture.leakMarker ? prompt.split(fixture.leakMarker).length - 1 : 0 };
     }
-    if (fixture.turns) {
+    if (fixture.team) await runTeam();
+    else if (fixture.turns) {
       run.turns = [];
       for (const [index, turn] of fixture.turns.entries()) {
         if (spent()) { run.skipped = 'budget'; break; }
@@ -192,17 +331,18 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
       if (fixture.needsSecondAgent) await start(policy.to || policy.builder, continuationRequest, { fresh: true });
     }
     await broker.checkpoints?.close?.();
-    const ledgers = await Promise.all(conversations.map(conversation => broker.ledger(conversation)));
-    const ledger = { runs: ledgers.flatMap(item => item.runs), tasks: ledgers.flatMap(item => item.tasks) };
-    const messages = conversations.flatMap(conversation => conversation.messages);
+    const ledger = await collectWorkloadData(broker, conversations);
+    const messages = ledger.messages;
     run.check = run.skipped && !ledger.runs.length ? { passed: false, results: [] } : runCheck(fixture, folders, messages.filter(message => message.role === 'assistant').map(message => message.text));
     run.runs = ledger.runs.map(entry => { const { usage, ...rest } = entry; return { ...rest, usage: usage && { ...usage, raw: undefined } }; });
     run.tasks = ledger.tasks;
+    if (ledger.plans.length) run.plans = ledger.plans;
+    if (fixture.team) run.coordination = teamMetrics(c, ledger.plans);
     run.usage = sumUsage(ledger.runs.map(entry => entry.usage));
     if (budget && !fixture.turns) budget.tokens += (run.usage.input || 0) + (run.usage.output || 0) + (run.usage.cacheRead || 0) + (run.usage.cacheWrite || 0);
     const real = ledger.runs;
     run.outcome = {
-      firstAttemptSuccess: real.every(entry => entry.status === 'complete') && real.length > 0 && !fixture.stopAfterFirstEdit ? run.check.passed : fixture.stopAfterFirstEdit ? null : false,
+      firstAttemptSuccess: real.every(entry => entry.status === 'complete') && real.length > 0 && !fixture.stopAfterFirstEdit && !(fixture.team && run.coordination?.repairRounds > 0) ? run.check.passed : fixture.stopAfterFirstEdit ? null : false,
       verifiedCompletion: run.check.passed, workingMs: real.reduce((sum, entry) => sum + (entry.elapsedMs || 0), 0), runs: real.length,
       retries: real.filter(entry => entry.relation === 'retry').length, interventions: real.reduce((sum, entry) => sum + entry.interventions, 0),
       questionsAsked: run.questionsAsked || 0, timedOut: Boolean(run.timedOut), repeatedFileReads: repeatedFileReads(messages, { workspace: folders[names[0]] }), missingUsage: real.filter(entry => !entry.usage?.reported?.length).length,
@@ -219,18 +359,22 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
     run.failure = error.message;
     // A later dispatch or check error must not erase the work already paid for. Gather every conversation before its
     // temporary journals are removed, just as on a successful workload.
+    let fallbackMessages = conversations.flatMap(conversation => conversation.messages);
     if (!run.runs) {
-      const ledgers = await Promise.all(conversations.map(conversation => broker.ledger(conversation)));
-      const measured = ledgers.flatMap(ledger => ledger.runs);
+      const ledger = await collectWorkloadData(broker, conversations);
+      const measured = ledger.runs;
+      fallbackMessages = ledger.messages;
       run.runs = measured.map(({ usage, ...entry }) => ({ ...entry, usage: usage && { ...usage, raw: undefined } }));
-      run.tasks = ledgers.flatMap(ledger => ledger.tasks);
+      run.tasks = ledger.tasks;
+      if (ledger.plans.length) run.plans = ledger.plans;
+      if (fixture.team) run.coordination = teamMetrics(c, ledger.plans);
       run.usage = sumUsage(measured.map(entry => entry.usage));
       if (budget && !fixture.turns) budget.tokens += (run.usage.input || 0) + (run.usage.output || 0) + (run.usage.cacheRead || 0) + (run.usage.cacheWrite || 0);
     }
     run.outcome = { firstAttemptSuccess: false, verifiedCompletion: false,
       workingMs: run.runs.reduce((sum, entry) => sum + (entry.elapsedMs || 0), 0), runs: run.runs.length,
       retries: run.runs.filter(entry => entry.relation === 'retry').length, interventions: run.runs.reduce((sum, entry) => sum + entry.interventions, 0),
-      repeatedFileReads: repeatedFileReads(conversations.flatMap(conversation => conversation.messages), { workspace: folders[names[0]] }), missingUsage: run.runs.filter(entry => !entry.usage?.reported?.length).length };
+      repeatedFileReads: repeatedFileReads(fallbackMessages, { workspace: folders[names[0]] }), missingUsage: run.runs.filter(entry => !entry.usage?.reported?.length).length };
   } finally {
     await broker.close(); fs.rmSync(root, { recursive: true, force: true });
   }
@@ -251,6 +395,7 @@ export function compareResults(results) {
   return [...groups.values()].map(list => {
     const outcomes = list.map(result => result.outcome || {}), rate = key => { const known = outcomes.filter(outcome => typeof outcome[key] === 'boolean'); return known.length ? { passed: known.filter(outcome => outcome[key]).length, of: known.length } : null; };
     const roleNames = [...new Set(list.flatMap(result => Object.keys(result.accounting?.roles || {})))];
+    const hasCoordination = list.some(result => result.coordination);
     return { fixture: list[0].fixture, policy: list[0].policy.id, experiment: list[0].experiment?.id || null, models: observedModels(list[0].runs || []), live: list[0].live, repeats: list.length, firstAttemptSuccess: rate('firstAttemptSuccess'), verifiedCompletion: rate('verifiedCompletion'),
       roles: Object.fromEntries(roleNames.map(role => [role, Object.fromEntries(['runs', 'workingMs', 'input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'].map(field => [field, spread(list.map(result => {
         const measured = result.accounting?.roles?.[role];
@@ -264,6 +409,15 @@ export function compareResults(results) {
       workingMs: spread(outcomes.map(outcome => outcome.workingMs ?? null)), retries: spread(outcomes.map(outcome => outcome.retries ?? null)), interventions: spread(outcomes.map(outcome => outcome.interventions ?? null)), repeatedFileReads: spread(outcomes.map(outcome => outcome.repeatedFileReads ?? null)),
       wallMs: spread(outcomes.map(outcome => outcome.wallMs ?? null)),
       contextBytes: spread(list.map(result => result.context?.bytes ?? null)), factsKept: list[0].context ? `${list[0].context.factsKept} of ${list[0].context.factsTotal}` : null, unrelatedSteps: list[0].context ? median(list.map(result => result.context?.unrelatedSteps)) : null,
+      ...(hasCoordination ? { coordination: {
+        cards: spread(list.map(result => result.coordination?.cards ?? null)),
+        cardsDone: spread(list.map(result => result.coordination?.cardsDone ?? null)),
+        contractsPublished: spread(list.map(result => result.coordination?.contractsPublished ?? null)),
+        outcomesRecorded: spread(list.map(result => result.coordination?.outcomesRecorded ?? null)),
+        handoffs: spread(list.map(result => result.coordination?.handoffs ?? null)),
+        worktreesIntegrated: spread(list.map(result => result.coordination?.worktreesIntegrated ?? null)),
+        repairRounds: spread(list.map(result => result.coordination?.repairRounds ?? null)),
+      } } : {}),
       missingUsage: spread(outcomes.map(outcome => outcome.missingUsage ?? null)), skipped: list.filter(result => result.skipped).length, failures: list.filter(result => result.failure).length };
   });
 }
@@ -280,5 +434,13 @@ export function reportMarkdown(rows) {
   for (const row of rows) lines.push(`| ${row.fixture} / ${row.policy} / ${row.experiment?.slice(0, 12) || 'legacy'} | ${Object.entries(row.tokenCoverage).map(([key, value]) => `${key}: ${value ? `${value.reported}/${value.of}` : 'unknown'}`).join('; ')} |`);
   lines.push('', 'Whole-call roles below are already included in the totals above. Native planning, summaries, compaction and delegation cannot be separated by role; their inclusion depends on each provider’s reported coverage.', '', '| Fixture / policy | Role | Calls | Work (ms) | Input | Cache read | Cache write | Output | Reasoning (in output) |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
   for (const row of rows) for (const [role, values] of Object.entries(row.roles || {})) lines.push(`| ${row.fixture} / ${row.policy} / ${row.experiment?.slice(0, 12) || 'legacy'} | ${role} | ${cell(values.runs)} | ${cell(values.workingMs)} | ${cell(values.input)} | ${cell(values.cacheRead)} | ${cell(values.cacheWrite)} | ${cell(values.output)} | ${cell(values.reasoning)} |`);
+  const coordinated = rows.filter(row => row.coordination);
+  if (coordinated.length) {
+    lines.push('', '| Fixture / policy | Cards done | Contracts | Outcomes | Handoffs | Integrated | Repairs |', '| --- | --- | --- | --- | --- | --- | --- |');
+    for (const row of coordinated) {
+      const coord = row.coordination;
+      lines.push(`| ${row.fixture} / ${row.policy} / ${row.experiment?.slice(0, 12) || 'legacy'} | ${cell(coord.cardsDone)} / ${cell(coord.cards)} | ${cell(coord.contractsPublished)} | ${cell(coord.outcomesRecorded)} | ${cell(coord.handoffs)} | ${cell(coord.worktreesIntegrated)} | ${cell(coord.repairRounds)} |`);
+    }
+  }
   return lines.join('\n') + '\n';
 }

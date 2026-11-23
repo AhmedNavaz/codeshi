@@ -137,7 +137,7 @@ Switching between models or maintaining long conversations often causes context 
 Concurrent agent executions and background tasks can overwrite each other without strict synchronization:
 - **Filesystem mutation leases (`src/mutation-lock.mjs`)**: Any coding or review run must acquire a tracked mutation lease for the target workspace folders, preventing conflicting edits between parallel runs.
 - **Private Git checkpoints (`src/checkpoints.mjs`)**: Before and after every tool execution or run, Codeshi snapshots directory states in a private Git object store. This powers previewed undo/redo, timeline scrubbing, and risk-free rollback of failed agent edits.
-- **Worktree task isolation (`src/task-isolation.mjs`)**: Side-by-side tasks run in dedicated Git worktrees, allowing multiple agents to code concurrently without working-tree collisions, followed by interactive conflict-checked integration.
+- **Worktree task isolation (`src/task-isolation.mjs`)**: Side-by-side tasks run in dedicated Git worktrees, allowing multiple agents to code concurrently without working-tree collisions, followed by interactive conflict-checked integration. A worktree starts from the last commit. Integration writes to the folder without committing, so the files merged by the work a task builds on (the tasks or Plan cards it waits for, a card's own earlier runs, the parts of a split) are read from the folder into a private base commit that the worktree starts from, and a task's diff stays its own.
 
 ### 4. Smart spendability routing
 Codeshi's routing engine (`src/routing-assessment.mjs`, `src/usage-watch.mjs`) selects the optimal agent, model, and reasoning effort:

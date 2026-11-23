@@ -12,8 +12,10 @@ const sessions = fs.existsSync(sessionFile) ? JSON.parse(fs.readFileSync(session
 let totals = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 };
 let resumeAfterQuestion = null;
 async function playTurn(prompt = '') {
-  const count = fs.existsSync(stateFile) ? Number(fs.readFileSync(stateFile, 'utf8')) : 0, turn = trace[Math.min(count, trace.length - 1)] || { steps: [] };
-  fs.writeFileSync(stateFile, String(count + 1));
+  const matched = trace.find(entry => entry.match && (typeof entry.match === 'string' ? prompt.includes(entry.match) : Array.isArray(entry.match) ? entry.match.every(part => prompt.includes(part)) : false));
+  const count = matched ? 0 : (fs.existsSync(stateFile) ? Number(fs.readFileSync(stateFile, 'utf8')) : 0);
+  const turn = matched || trace[Math.min(count, trace.length - 1)] || { steps: [] };
+  if (!matched) fs.writeFileSync(stateFile, String(count + 1));
   if (turn.requiresPrompt?.some(fact => !prompt.includes(fact))) {
     if (claude) send({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'Recorded context requirement missing.' });
     else send({ method: 'turn/completed', params: { threadId, turn: { status: 'failed', error: { message: 'Recorded context requirement missing.' } } } });
@@ -29,12 +31,21 @@ async function playTurn(prompt = '') {
     if (value.type === 'agentMessage') send({ type: 'assistant', message: { id: value.id, content: [{ type: 'text', text: value.text }] } });
     else send({ type: 'assistant', message: { id: value.id, content: [{ type: 'tool_use', id: value.id, name: value.type === 'fileChange' ? 'Edit' : 'Bash', input: value.type === 'fileChange' ? { file_path: value.changes[0].path } : { command: value.command } }] } });
   };
+  const realFolders = Object.values(folders).map(folder => fs.realpathSync(folder));
+  const cwd = fs.realpathSync(process.cwd());
+  const inWorktree = !realFolders.some(dir => cwd === dir || cwd.startsWith(dir + path.sep));
+  const turnTag = matched ? randomUUID().slice(0, 8) : String(count);
   for (const [index, step] of turn.steps.entries()) {
-    const id = `step-${count}-${index}`;
+    const id = `step-${turnTag}-${index}`;
     if (step.type === 'ask') { send({ id: 700 + index, method: 'item/tool/requestUserInput', params: { threadId, turnId: 'trace-turn', itemId: id, questions: [{ id: 'q', header: 'Which?', question: step.text, options: [{ label: 'One', description: 'One' }] }] } }); await new Promise(resolve => { resumeAfterQuestion = resolve; }); }
     if (step.type === 'say') item({ id, type: 'agentMessage', text: step.text });
     if (step.type === 'command') item({ id, type: 'commandExecution', command: step.command, aggregatedOutput: step.output || '' });
-    if (step.type === 'write') { const file = path.join(folders[step.folder], step.file); fs.writeFileSync(file, step.content); item({ id, type: 'fileChange', changes: [{ path: file, kind: { type: 'update' } }] }); }
+    if (step.type === 'write') {
+      const file = inWorktree ? path.join(cwd, step.file) : path.join(folders[step.folder], step.file);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, step.content);
+      item({ id, type: 'fileChange', changes: [{ path: file, kind: { type: 'update' } }] });
+    }
   }
   if (turn.usage) {
     const usage = turn.usage;

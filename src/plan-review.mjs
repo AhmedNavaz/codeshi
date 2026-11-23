@@ -76,6 +76,8 @@ export function withFinalReview(steps, { editing = false } = {}) {
 export const reviewHolds = task => Boolean(task?.review && ['repairing', 'held'].includes(task.review.status) && !task.review.accepted);
 
 const findingLine = (item, index) => `${index + 1}. ${item.problem}${item.fix ? ` Fix: ${item.fix}` : ''}${item.file ? ` (${item.file})` : ''}`;
+// How a repair that never reached the folder ended, after “Its repair”: its run stopped or failed, or its copy wasn't merged.
+const unfinished = status => ({ stopped: 'run was stopped', discarded: 'was discarded', kept: 'was kept as a branch, not merged' })[status] || 'run didn’t finish';
 const norm = value => String(value || '').toLowerCase().replace(/[“”"'‘’`]/g, '').replace(/\s+/g, ' ').trim();
 
 export class PlanReviews {
@@ -145,15 +147,21 @@ export class PlanReviews {
       const target = (c.parallelTasks || []).find(other => other.id === taskId);
       if (!target || ['running', 'waiting'].includes(target.status)) return item;
       if (target.status === 'complete' && target.stepCheck?.status === 'running') return item;
-      if (target.status === 'complete' && target.splitRepair && target.mode === 'worktree') return item;
+      if (this.awaitsMerge(target)) return item;
       changed = true;
-      if (target.status === 'complete' || (target.status === 'integrated' && target.splitRepair)) {
+      if (this.repaired(target)) {
         return { ...item, status: 'done', tests: this.board.tests(target) || target.tests || item.tests || null, endedAt: target.endedAt || item.endedAt || new Date().toISOString() };
       }
-      return { ...item, status: 'failed', reason: item.reason || `Its repair run ${target.status === 'stopped' ? 'was stopped' : 'didn’t finish'}.` };
+      return { ...item, status: 'failed', reason: item.reason || `Its repair ${unfinished(target.status)}.` };
     });
     return changed ? next : repairs;
   }
+  // A repair that changed files in a copy isn't in the folder until it is merged, and the review reads merged work, in a
+  // copy of its own (task-coordinator.mjs before). So the second review waits for that merge: Flow's for a split's repair
+  // (src/split-finish.mjs), and yours for a card repaired in its own copy.
+  awaitsMerge(target) { return Boolean(target?.status === 'complete' && target.mode === 'worktree' && (target.splitRepair || target.copyFiles > 0)); }
+  // A repair is done when its task finished, and was merged where it had changes to merge.
+  repaired(target) { return Boolean(target?.status === 'complete' || (target?.status === 'integrated' && (target.splitRepair || target.repairOf))); }
 
   // A review card's task finished: read its verdict and decide what happens next. Returns the review saved on the task.
   ended(c, task, reply) {
@@ -193,7 +201,8 @@ export class PlanReviews {
     this.tasks.update(c, task, { review });
     const name = `“${card.title}”`;
     if (review.status === 'repairing') this.main.message(c, 'system', `${name} found ${plural(review.findings.length, 'problem')}. ${review.repairs.filter(item => item.status === 'pending').map(item => `“${item.title}”`).join(', ')} ${review.repairs.filter(item => item.status === 'pending').length === 1 ? 'gets' : 'get'} one repair run, then ${name} reviews again. The cards after it wait.`);
-    else if (review.status === 'held') this.main.message(c, 'system', `${name}: ${review.reason}`);
+    // For the review of a split Flow is finishing, Flow says so itself as it hands the parts to the Plan (src/split-finish.mjs).
+    else if (review.status === 'held' && !this.board.managed(c, card)) this.main.message(c, 'system', `${name}: ${review.reason}`);
     this.later(c);
     return review;
   }
@@ -212,32 +221,38 @@ export class PlanReviews {
   }
   step(c, task) {
     const review = task.review, card = this.cardOf(c, task), save = changes => this.tasks.update(c, task, { review: { ...task.review, ...changes } });
-    if (!card || card.task !== task.id) return save({ status: 'held', reason: 'The review card was run again or removed, so this repair round ended.' });
+    if (!card || card.task !== task.id) return save({ status: 'held', waiting: null, reason: 'The review card was run again or removed, so this repair round ended.' });
     const repairs = review.repairs.map(item => ({ ...item }));
     const running = repairs.find(item => item.status === 'running');
     if (running) {
       const target = (c.parallelTasks || []).find(item => item.id === running.taskId);
       if (target && ['running', 'waiting'].includes(target.status)) return;
       if (target?.status === 'complete' && target.stepCheck?.status === 'running') return;
-      // A split's repair that ran in its own copy is done once Flow has merged it.
-      if (target?.status === 'complete' && target.splitRepair && target.mode === 'worktree') return;
-      if (target?.status === 'complete' || (target?.status === 'integrated' && target.splitRepair)) Object.assign(running, { status: 'done', tests: this.board.tests(target) || null, endedAt: new Date().toISOString() });
-      else {
-        Object.assign(running, { status: 'failed', reason: target ? `Its repair run ${target.status === 'stopped' ? 'was stopped' : 'didn’t finish'}.` : 'Its task is gone.' });
-        return save({ repairs, status: 'held', reason: `The repair on “${running.title}” didn’t finish, so the cards after the review wait for you.` });
+      // A repair in a copy is done once it is merged (awaitsMerge). Flow merges a split's; a card's own waits for you,
+      // which is said once, as nothing else would tell you the round has stopped for it.
+      if (this.awaitsMerge(target)) {
+        const waiting = `Waiting for “${running.title}” to be merged, so the review can read its repair.`;
+        if (target.splitRepair || review.waiting === waiting) return;
+        save({ waiting });
+        return this.main.message(c, 'system', `“${running.title}” was repaired in its own copy. Review and merge it from its card, and “${card.title}” reviews again. Discarding it ends the repair round.`);
       }
-      save({ repairs });
+      if (this.repaired(target)) Object.assign(running, { status: 'done', tests: this.board.tests(target) || null, endedAt: new Date().toISOString() });
+      else {
+        Object.assign(running, { status: 'failed', reason: target ? `Its repair ${unfinished(target.status)}.` : 'Its task is gone.' });
+        return save({ repairs, status: 'held', waiting: null, reason: `The repair on “${running.title}” ${target ? unfinished(target.status).replace(/^run /, '') : 'didn’t finish'}, so the cards after the review wait for you.` });
+      }
+      save({ repairs, waiting: null });
     }
     const next = repairs.find(item => item.status === 'pending');
     if (next) {
       const target = this.board.cards(c).find(item => item.id === next.cardId), why = target ? this.repairable(c, target) : 'It was removed from the Plan.';
-      if (why) { Object.assign(next, { status: 'skipped', reason: why }); save({ repairs }); return this.later(c); }
-      try { next.taskId = this.repair(c, task, card, target); next.status = 'running'; next.startedAt = new Date().toISOString(); save({ repairs }); }
+      if (why) { Object.assign(next, { status: 'skipped', reason: why }); save({ repairs, waiting: null }); return this.later(c); }
+      try { next.taskId = this.repair(c, task, card, target); next.status = 'running'; next.startedAt = new Date().toISOString(); save({ repairs, waiting: null }); }
       catch (error) {
         // A full workspace or a busy folder: the repair waits and tries again, as a waiting task does.
         if (error.status === 409 && /busy|already|at once|slot/i.test(error.message)) { if (review.waiting !== error.message) save({ waiting: clip(error.message, 300) }); return this.later(c, RETRY_MS); }
         Object.assign(next, { status: 'failed', reason: clip(error.message, 300) });
-        save({ repairs, status: 'held', reason: `The repair on “${next.title}” couldn’t start: ${clip(error.message, 200)}` });
+        save({ repairs, status: 'held', waiting: null, reason: `The repair on “${next.title}” couldn’t start: ${clip(error.message, 200)}` });
       }
       return;
     }
@@ -247,7 +262,7 @@ export class PlanReviews {
     try { save({ repairs, status: 'reviewing', waiting: null, reason: 'Reviewing the repairs.' }); this.again(c, task, card, repairs); }
     catch (error) {
       if (error.status === 409 && /busy|already|at once|slot/i.test(error.message)) { save({ repairs, status: 'repairing', waiting: clip(error.message, 300) }); return this.later(c, RETRY_MS); }
-      save({ repairs, status: 'held', reason: `The second review couldn’t start: ${clip(error.message, 200)}` });
+      save({ repairs, status: 'held', waiting: null, reason: `The second review couldn’t start: ${clip(error.message, 200)}` });
     }
   }
   laneOf(c, task) {
@@ -269,13 +284,18 @@ export class PlanReviews {
       'This is the one repair round: the review checks again after it, and anything still wrong goes to the person. When you finish, say in a few sentences what you changed and how you checked it.',
     ].join('\n');
     this.tasks.update(c, target, { repairOf: { taskId: reviewTask.id, cardId: reviewCard.id, round: 1 } });
-    lane.broker.start(lane.c, { text, provider: target.provider, model: target.model, effort: target.effort, mode: target.accessMode, approvalPolicy: target.approvalPolicy, billingConfirmed: target.billingConfirmed, requestId: `repair-${reviewTask.id}-${card.id}-${randomUUID().slice(0, 6)}` }, { execution: target.execution });
+    lane.broker.start(lane.c, { text, role: card.role || target.role || 'builder', provider: target.provider, model: target.model, effort: target.effort, mode: target.accessMode, approvalPolicy: target.approvalPolicy, billingConfirmed: target.billingConfirmed, requestId: `repair-${reviewTask.id}-${card.id}-${randomUUID().slice(0, 6)}` }, { execution: target.execution });
     this.tasks.sync(c, target);
     return target.id;
   }
-  // The second and last review, in the review card's task, with its first findings and what each repair did.
+  // The second and last review, in the review card's task, with its first findings and what each repair did. A review in
+  // its own copy read the cards' work there, so what the repairs merged since is brought into that copy first
+  // (task-coordinator.mjs refreshCopy): it would otherwise check the files as they were and find nothing fixed.
   again(c, task, card, repairs) {
     const lane = this.laneOf(c, task);
+    // A full workspace is found out before the copy changes, so a review that waits for a slot tries again as it was.
+    this.tasks.admit(c, task);
+    const fresh = this.tasks.refreshCopy(c, task);
     const lines = repairs.map(item => {
       if (item.status !== 'done') return `- “${item.title}”: not repaired. ${item.reason || ''}`.trim();
       const target = (c.parallelTasks || []).find(other => other.id === item.taskId), conversation = this.tasks.lanes.get(item.taskId)?.c;
@@ -284,6 +304,7 @@ export class PlanReviews {
     });
     const text = [
       'The cards you reviewed had one repair run each. Check the files again: is each finding fixed, and did a repair break anything?',
+      ...(fresh.files ? [`The repairs are merged, and your copy now has what changed since your review, ${plural(fresh.files, 'file')}: \`git diff ${fresh.was.slice(0, 12)} ${fresh.base.slice(0, 12)}\` shows it.`] : []),
       '',
       'Your findings were:',
       ...task.review.findings.map(findingLine),
@@ -293,7 +314,7 @@ export class PlanReviews {
       '',
       'This is the last review round: anything still wrong goes to the person. End with your verdict in the same JSON format as before.',
     ].join('\n');
-    lane.broker.start(lane.c, { text, provider: task.provider, model: task.model, effort: task.effort, mode: task.accessMode, approvalPolicy: task.approvalPolicy, billingConfirmed: task.billingConfirmed, requestId: `rereview-${task.id}-${randomUUID().slice(0, 6)}` }, { execution: task.execution });
+    lane.broker.start(lane.c, { text, role: card.role || task.role || 'reviewer', provider: task.provider, model: task.model, effort: task.effort, mode: task.accessMode, approvalPolicy: task.approvalPolicy, billingConfirmed: task.billingConfirmed, requestId: `rereview-${task.id}-${randomUUID().slice(0, 6)}` }, { execution: task.execution });
     this.tasks.sync(c, task);
   }
 
@@ -330,7 +351,7 @@ export class PlanReviews {
     for (const task of (c.parallelTasks || []).filter(item => ['repairing', 'reviewing'].includes(item.review?.status))) {
       if (task.review.status === 'reviewing' && ['running', 'waiting'].includes(task.status)) continue;
       if (task.review.status === 'repairing') { this.later(c); continue; }
-      this.tasks.update(c, task, { review: { ...task.review, status: 'held', reason: 'Codeshi closed during the second review, so the cards after it wait for you.' } });
+      this.tasks.update(c, task, { review: { ...task.review, status: 'held', waiting: null, reason: 'Codeshi closed during the second review, so the cards after it wait for you.' } });
     }
   }
   close() { for (const timer of this.timers.values()) clearTimeout(timer); this.timers.clear(); }

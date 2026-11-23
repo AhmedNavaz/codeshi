@@ -67,11 +67,11 @@ export function createBoardRoutes({ registry, body, json }) {
     // A major card's subtasks (#155): add, edit, remove, pause, resume, or clear to split again.
     const split = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/subtasks$/);
     if (split) { json(res, 200, { card: board.subtasks.act(c, split[1], input), board: board.view(c) }); return true; }
-    const match = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/(edit|move|remove|stop|accept|send-back|comment|uncomment|recheck|continue)$/);
+    const match = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/(edit|move|remove|stop|accept|send-back|comment|uncomment|accept-comment|recheck|continue)$/);
     if (!match) fail('Not found.', 404);
     const [, id, action] = match;
-    if (action === 'comment' || action === 'uncomment') {
-      const result = action === 'comment' ? { comment: board.comment(c, id, input) } : board.uncomment(c, id, input);
+    if (action === 'comment' || action === 'uncomment' || action === 'accept-comment') {
+      const result = action === 'comment' ? { comment: board.comment(c, id, input) } : action === 'accept-comment' ? board.acceptComment(c, id, input) : board.uncomment(c, id, input);
       json(res, action === 'comment' ? 201 : 200, { ...result, comments: board.comments(c, id), card: board.public(c, board.find(c, id)), board: board.view(c) });
       return true;
     }

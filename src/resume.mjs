@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { continuationRequest } from './context.mjs';
 import '../public/routing.js';
-import { providerUsage } from './providers.mjs';
+import { listModels, providerUsage } from './providers.mjs';
 import { usualWindowSpend } from './usage-watch.mjs';
 
 // Resuming after a usage limit (#32). When a run stops on a limit, the conversation can wait for an agent to have room
@@ -38,8 +38,8 @@ export function limitState(usage, model = null) {
 }
 
 export class ResumeScheduler {
-  constructor(broker, { usage = providerUsage, now = () => Date.now(), checkMs = RESUME_CHECK_MS, tickMs = 30000 } = {}) {
-    Object.assign(this, { broker, usage, now, checkMs, tickMs });
+  constructor(broker, { usage = providerUsage, models = null, now = () => Date.now(), checkMs = RESUME_CHECK_MS, tickMs = 30000 } = {}) {
+    Object.assign(this, { broker, usage, models, now, checkMs, tickMs });
     this.status = new Map(); this.timer = null; this.checking = null; this.closed = false;
     this.marker = path.join(broker.dataDir, 'resume-pending');
   }
@@ -69,7 +69,15 @@ export class ResumeScheduler {
     for (const provider of chosen) this.broker.checkRunSettings(provider, mode, approvalPolicy);
     if (c.resume) this.end(c, 'replaced');
     const at = this.now();
-    const resume = { id: randomUUID(), createdAt: new Date(at).toISOString(), expiresAt: new Date(at + RESUME_EXPIRES_MS).toISOString(), providers: chosen, execution, selection: { provider: c.lastRun.provider, model: c.lastRun.model, effort: c.lastRun.effort ?? null }, delegated, mode, approvalPolicy, billingConfirmed: billingConfirmed === true, attempts: c.resumeAttempts || 0, ...(limited.length ? { limited } : {}), ...(requireQuota ? { requireQuota: true } : {}), ...(globalThis.relayRouting.normalizeMode(routing?.mode) ? { routing: { mode: globalThis.relayRouting.normalizeMode(routing.mode), ...(['light', 'standard', 'deep'].includes(routing.tier) ? { tier: routing.tier } : {}) } } : {}) };
+    const normalizedMode = globalThis.relayRouting.normalizeMode(routing?.mode);
+    const savedRouting = normalizedMode ? {
+      mode: normalizedMode,
+      ...(['light', 'standard', 'deep'].includes(routing.tier) ? { tier: routing.tier } : {}),
+      ...(typeof routing.reason === 'string' && routing.reason ? { reason: routing.reason } : {}),
+      ...(routing.assessment ? { assessment: routing.assessment } : {}),
+      ...(routing.escalation ? { escalation: routing.escalation } : {}),
+    } : null;
+    const resume = { id: randomUUID(), createdAt: new Date(at).toISOString(), expiresAt: new Date(at + RESUME_EXPIRES_MS).toISOString(), providers: chosen, execution, selection: { provider: c.lastRun.provider, model: c.lastRun.model, effort: c.lastRun.effort ?? null }, delegated, mode, approvalPolicy, billingConfirmed: billingConfirmed === true, attempts: c.resumeAttempts || 0, ...(limited.length ? { limited } : {}), ...(requireQuota ? { requireQuota: true } : {}), ...(savedRouting ? { routing: savedRouting } : {}) };
     this.broker.record(c, { type: 'resume', resume });
     this.status.delete(c.id);
     this.arm(); this.tick();
@@ -112,6 +120,50 @@ export class ResumeScheduler {
     }
   }
 
+  // Model, effort and routing for the agent that resumes the task (#12): a routed task resumed on another agent selects
+  // a model and effort matching the task's routed mode and tier instead of falling back to an unrelated manual setting.
+  selectionFor(c, resume, provider, modelRows = null) {
+    const sameProvider = resume.selection?.provider === provider;
+    let model = sameProvider ? resume.selection.model : provider === c.provider ? c.model : c.models[provider] || null;
+    let effort = sameProvider ? resume.selection.effort : c.efforts[provider]?.[model || 'default'] ?? null;
+    let routing = resume.routing ? { ...resume.routing } : null;
+    if (resume.routing?.mode) {
+      const tier = resume.routing.assessment?.tier || resume.routing.tier || null;
+      const baseReason = resume.routing.assessment?.reason || String(resume.routing.reason || '').split(' · ').find(part => part && part !== 'Moved at a handoff') || 'Resumed after limit reset';
+      const assessment = ['light', 'standard', 'deep'].includes(tier)
+        ? { tier, ...(resume.routing.assessment?.effort ? { effort: resume.routing.assessment.effort } : resume.selection?.effort ? { effort: resume.selection.effort } : {}), reason: baseReason }
+        : null;
+      const rows = Array.isArray(modelRows) ? modelRows : this.broker.router?.readings?.get(provider)?.models || [];
+      if (!sameProvider || !model) {
+        const taskId = resume.execution?.taskId || c.lastRun?.taskId || c.lastRun?.id;
+        const request = c.messages?.find(m => m.role === 'user' && m.text !== continuationRequest && (m.runId === taskId || c.taskOfRun?.[m.runId] === taskId)) || c.messages?.findLast(m => m.role === 'user' && m.text !== continuationRequest);
+        const choice = globalThis.relayRouting.routeTo(provider, rows, {
+          text: request?.text || '',
+          attachments: request?.attachments?.length || 0,
+          needs: globalThis.relayRouting.taskNeeds(request?.attachments),
+          mode: resume.routing.mode,
+          assessment,
+          ...(resume.selection?.effort ? { effort: resume.selection.effort } : {}),
+        });
+        if (choice) {
+          if (choice.model) model = choice.model;
+          if (choice.effort) effort = choice.effort;
+          routing = {
+            mode: choice.mode || resume.routing.mode,
+            tier: choice.tier || tier,
+            reason: choice.reason || resume.routing.reason || baseReason,
+            ...(resume.routing.assessment ? { assessment: resume.routing.assessment } : {}),
+            ...(choice.escalation ? { escalation: choice.escalation } : {}),
+          };
+        }
+      }
+      if (!effort && tier) {
+        effort = resume.routing.mode === 'saver' ? 'low' : resume.routing.mode === 'ultra' ? (tier === 'light' ? 'medium' : 'high') : ({ light: 'low', standard: 'medium', deep: 'high' }[tier] || null);
+      }
+    }
+    return { model, effort, routing };
+  }
+
   async firstReady(c) {
     const resume = c.resume, status = this.status.get(c.id) || { agents: new Map(), checks: new Map(), nextCheckAt: null };
     this.status.set(c.id, status);
@@ -121,19 +173,23 @@ export class ResumeScheduler {
       const known = status.agents.get(provider), due = status.checks.get(provider) ?? 0;
       let state = known;
       if (!known || now >= due) {
-        const model = resume.selection?.provider === provider ? resume.selection.model : provider === c.provider ? c.model : c.models[provider] || null;
-        const effort = resume.selection?.provider === provider ? resume.selection.effort : c.efforts[provider]?.[model || 'default'] ?? null;
+        let modelRows = this.broker.router?.readings?.get(provider)?.models || null;
+        if (!modelRows?.length && resume.routing?.mode && provider !== resume.selection?.provider) {
+          const query = this.models || (this.broker.handoff?.models && this.broker.handoff.models !== listModels ? () => this.broker.handoff.modelRows(provider, 1500) : null);
+          if (query) { try { const res = await query(provider, this.broker.usageOptions(provider)); modelRows = res?.models || res?.data || res || []; } catch {} }
+        }
+        const { model, effort, routing } = this.selectionFor(c, resume, provider, modelRows);
         if (!this.broker.execution.allows(c, resume.execution, { action: resume.delegated ? 'wait' : 'manual', provider, model, effort }) || !this.broker.budget.allows(c, provider, model).allowed) continue;
         let usage = null;
         try { usage = await this.usage(provider, this.broker.usageOptions(provider)); } catch {}
-        state = { ...limitState(usage, model), checkedAt: new Date(now).toISOString() };
+        state = { ...limitState(usage, model), model, effort, routing, checkedAt: new Date(now).toISOString() };
         if (resume.requireQuota) {
           const quota = globalThis.relayRouting.assessQuota(usage, model, { now, threshold: 95 });
           state.quota = quota.state;
           if (quota.state !== 'ok') state.limited = true;
           // A routed task resumes as any routed task is placed (#12): an agent under its mode's handoff line comes
           // first, judged for continuing the task on the agent that ran it and for a move on any other.
-          else if (resume.routing?.mode) state.fits = globalThis.relayRouting.handoffFit(usage, model, { mode: resume.routing.mode, current: provider === resume.selection?.provider, tier: resume.routing.tier || null, usual: usualWindowSpend(c, provider), now }).fits;
+          else if (resume.routing?.mode) state.fits = globalThis.relayRouting.handoffFit(usage, model, { mode: resume.routing.mode, current: provider === resume.selection?.provider, tier: resume.routing.tier || null, usual: usualWindowSpend(c, provider), activeTasks: this.broker.handoff?.activeTasksOn?.(provider) || 0, now }).fits;
         }
         // An agent that reports no usage is judged by the limit that stopped it, if it reported one.
         if (state.limited === null && (c.lastRun?.provider === provider || resume.limited?.includes(provider))) {
@@ -153,12 +209,12 @@ export class ResumeScheduler {
   }
 
   launch(c, provider) {
-    const resume = c.resume, model = resume.selection?.provider === provider ? resume.selection.model : provider === c.provider ? c.model : c.models[provider] || null;
-    const effort = resume.selection?.provider === provider ? resume.selection.effort : c.efforts[provider]?.[model || 'default'] ?? null;
+    const resume = c.resume, known = this.status.get(c.id)?.agents?.get(provider);
+    const { model, effort, routing } = known && 'model' in known ? known : this.selectionFor(c, resume, provider);
     try {
       this.broker.execution.assert(c, resume.execution, { action: resume.delegated ? 'wait' : 'manual', provider, model, effort });
       this.broker.message(c, 'system', `${names[provider]} has room again, so Codeshi is continuing the task.`);
-      const { runId } = this.broker.start(c, { provider, mode: resume.mode, approvalPolicy: resume.approvalPolicy, fresh: true, text: continuationRequest, model, effort, billingConfirmed: resume.billingConfirmed, requestId: `resume-${resume.id}` }, { resume, execution: resume.execution, executionAction: resume.delegated ? 'wait' : 'manual' });
+      const { runId } = this.broker.start(c, { provider, mode: resume.mode, approvalPolicy: resume.approvalPolicy, fresh: true, text: continuationRequest, model, effort, ...(routing ? { routing } : {}), billingConfirmed: resume.billingConfirmed, requestId: `resume-${resume.id}` }, { resume, execution: resume.execution, executionAction: resume.delegated ? 'wait' : 'manual' });
       this.end(c, 'started', { provider, runId });
       this.notify(c, 'started', `Continuing with ${names[provider]}`, `${names[provider]} has room again, so the unfinished task is continuing.`);
     } catch (error) {

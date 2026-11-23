@@ -1575,7 +1575,7 @@ test('Review changes inside a task reviews only that task, says where, and is un
     if (request.path === '/api/reviews/review-one' && request.params.task) return response(lane.reviews[0]);
     return next();
   });
-  await ui.window.relayUI.refresh(); await flush();
+  console.error("step 1"); await ui.window.relayUI.refresh(); await flush(); console.error("step 2");
   const tabs = () => ui.$('task-list').children.map(item => item.children[0]);
   assert.equal(ui.$('open-review').disabled, false, 'The workspace chat can review.');
   tabs()[1].click(); await flush();
@@ -2382,6 +2382,11 @@ test('tasks show as threads: each opens its own conversation, says how it runs, 
   assert.match(ui.$('task-merge-summary').textContent, /1 file would change.*Claude combined one of them with the changes there/s);
   assert.deepEqual([ui.$('task-merge-files').children[0].dataset.status, ui.$('task-merge-apply').disabled], ['combined', false]);
   ui.$('task-merge-close').click(); delete copy.resolving;
+  // A copy given what the work before it merged says so, apart from the folder's other uncommitted changes.
+  Object.assign(copy, { carried: { files: 3 } }); await ui.window.relayUI.refresh(); await flush();
+  assert.match(ui.$('task-banner').textContent, /own copy from the last commit, with the 3 files merged by the work before it and without 2 other uncommitted changes in the folder\. You review its changes/);
+  Object.assign(copy, { carried: { files: 1 }, uncommitted: 0 }); await ui.window.relayUI.refresh(); await flush();
+  assert.match(ui.$('task-banner').textContent, /own copy from the last commit, with the file merged by the work before it\. You review its changes/);
   // Back to Main.
   tabs()[0].click(); await flush();
   assert.equal(ui.state().taskId, null); assert.equal(ui.$('task-banner').hidden, true); assert.equal(ui.state().conversation.id, conversation.id);
@@ -5694,6 +5699,31 @@ test('Flow’s workspace name opens the workspace menu, and switching keeps Flow
   assert.equal(name.textContent, 'Other workspace');
 });
 
+test('switching workspace in Flow or the Plan shows that workspace, not the side panel last used in Normal as a sheet', async () => {
+  // The side panel a docked Normal view reopens for each workspace. Flow and the Plan show an open panel as a sheet,
+  // so reopening it there covered the chat with Your changes, Your tasks, Workspace context or Your timeline.
+  for (const panel of ['git', 'tasks', 'brief', 'timeline']) {
+    const ui = await flowBrowser({ moreProjects: true, wide: true, boardUI: true, stored: { 'throughline:side-panel': panel } });
+    assert.equal(ui.$(`${panel}-panel`).hidden, false, `Normal reopens ${panel}, the side panel last chosen.`);
+    assert.equal(ui.window.relayFlow.enter(), true); await flush(); await flush();
+    assert.equal(ui.window.relayFlow.view(), 'flow'); assert.equal(ui.$(`${panel}-panel`).hidden, true);
+    await ui.switchProject('project-two'); await flush();
+    assert.equal(ui.state().projectId, 'project-two');
+    assert.equal(ui.$('flow-detail').open, false, `Switching workspace in Flow opens no sheet (${panel}).`);
+    assert.equal(ui.$(`${panel}-panel`).hidden, true);
+    ui.$('open-plan').click(); await flush(); await flush();
+    assert.equal(ui.window.relayFlow.view(), 'plan');
+    await ui.switchProject('project-one'); await flush();
+    assert.equal(ui.state().projectId, 'project-one');
+    assert.equal(ui.$('flow-detail').open, false, `Switching workspace in the Plan opens no sheet (${panel}).`);
+    assert.equal(ui.$(`${panel}-panel`).hidden, true);
+    // Normal gets back the panel that was open when Flow began.
+    ui.$('view-normal').click(); await flush(); await flush();
+    assert.equal(ui.window.relayFlow.view(), 'normal');
+    assert.equal(ui.$(`${panel}-panel`).hidden, false, `Normal brings ${panel} back.`);
+  }
+});
+
 test('Flow mode shows only the chat and its cards, and leaving brings the layout back as it was', async () => {
   const ui = await flowBrowser({ desktop: true, desktopControls: true }), shell = ui.$('app-shell');
   ui.window.relayAgents.open(); await flush();
@@ -8823,6 +8853,59 @@ test('board cards show labels and comments; a label filters the board, and comme
   assert.deepEqual([posted.at(-1).path, posted.at(-1).body.revision, posted.at(-1).body.labels], [`/api/board/cards/${ids.api}/edit`, 3, ['API', 'contract', 'v2']]);
 });
 
+test('an agent’s comment names its agent and card, waits in the accent and reaches an agent once you accept it (#97)', async () => {
+  const ui = await browser({ boardUI: true, wide: true }), posted = [];
+  const ids = { api: 'c0000000-0000-4000-8000-000000000001', page: 'c0000000-0000-4000-8000-000000000002' };
+  const card = (id, title, column, extra = {}) => ({ id, title, column, notes: '', priority: 'normal', labels: [], due: null, commentCount: 0, agent: { provider: 'codex', model: null, effort: null }, folderId: 'frontend', dependsOn: [], checks: [], revision: 1, order: 1, attempts: [], ...extra });
+  const board = { revision: 1, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'frontend', name: 'Frontend' }], limits: { labels: 8, label: 32, comment: 4000 }, cards: [
+    card(ids.page, 'Build the checkout page', 'ready', { dependsOn: [ids.api], commentCount: 2, agentComments: 1 }),
+    card(ids.api, 'Agree the API', 'review'),
+  ] };
+  let thread = [
+    { id: 'k1', text: 'Totals are total_cents now.', by: { kind: 'agent', provider: 'claude', model: 'claude-sonnet-4-5', cardId: ids.api, taskId: 't1', runId: 'r1' }, at: '2026-11-23T10:00:00.000Z' },
+    { id: 'k2', text: 'Use the v2 routes.', by: { kind: 'agent', provider: 'codex', model: null, cardId: 'c0000000-0000-4000-8000-0000000000ff' }, at: '2026-11-23T09:00:00.000Z', accepted: true },
+  ];
+  const find = id => board.cards.find(item => item.id === id);
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/board') return response(board);
+    const route = request.path.match(/^\/api\/board\/cards\/([\w-]+)\/([\w-]+)$/);
+    if (!route) return next();
+    const [, id, action] = route, target = find(id);
+    posted.push({ path: request.path, body: request.body });
+    if (action === 'comments') return response({ comments: thread });
+    if (action === 'accept-comment') { thread = thread.map(item => item.id === request.body.commentId ? { ...item, accepted: true } : item); target.revision++; delete target.agentComments; return response({ accepted: true, comments: thread, card: target, board }); }
+    if (action === 'answer') return response({ text: 'Agreed the API.', followUps: [], files: [] });
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('open-plan').click(); await flush();
+  const face = id => ui.$('board-columns').querySelectorAll('.board-card').find(item => item.dataset.card === id);
+  const count = face(ids.page).querySelector('.board-card-comments');
+  assert.deepEqual([count.textContent, count.classList.contains('waiting'), count.title], ['2', true, '2 comments, one from an agent waiting for you to accept']);
+  assert.match(face(ids.page).getAttribute('aria-label'), /2 comments, one from an agent waiting for you to accept/);
+  face(ids.page).click(); await flush();
+  const drawer = () => ui.$('board-drawer-body'), comments = () => drawer().querySelectorAll('.board-comment');
+  const [waiting, accepted] = comments();
+  assert.equal(waiting.classList.contains('waiting'), true);
+  assert.equal(waiting.querySelector('.board-comment-author').textContent, 'Claude · claude-sonnet-4-5');
+  assert.equal(waiting.querySelector('.board-comment-from').textContent, 'from “Agree the API”', 'It names the card the agent was doing.');
+  assert.match(waiting.querySelector('.board-comment-status').textContent, /isn’t told it until you accept it/);
+  assert.equal(accepted.querySelector('.board-comment-from'), null, 'A card that’s gone isn’t linked.');
+  assert.equal(accepted.querySelector('.board-comment-accept'), null);
+  assert.match(accepted.querySelector('.board-comment-status').textContent, /^Accepted/);
+  const accept = waiting.querySelector('.board-comment-accept');
+  assert.match(accept.getAttribute('aria-label'), /^Accept Claude · claude-sonnet-4-5’s comment from .*, so the agent doing this card is told it$/);
+  accept.click(); await flush();
+  assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.page}/accept-comment`, body: { commentId: 'k1' } });
+  assert.equal(comments()[0].querySelector('.board-comment-accept'), null);
+  assert.match(comments()[0].querySelector('.board-comment-status').textContent, /^Accepted/);
+  assert.equal(face(ids.page).querySelector('.board-card-comments').classList.contains('waiting'), false);
+  // The card it came from opens from the comment.
+  comments()[0].querySelector('.board-comment-from').click(); await flush();
+  assert.equal(ui.$('board-drawer-title').textContent, 'Review · Codex', 'The drawer shows the card in Review: the one the comment came from.');
+  assert.match(drawer().textContent, /After this card · 1[\s\S]*Build the checkout page/);
+});
+
 test('What’s New thanks a release’s contributors, and a name opens their GitHub profile',async()=>{
   const sentence='Thanks to @first-one for the feature, and to @third for the fixes.',launch={...clone(updateLaunch),updated:false};
   launch.releases[0].thanks=[{login:'first-one',text:sentence},{login:'second2',text:''},{login:'third',text:sentence},{login:'bad/../login',text:''},{login:'fourth',text:''}];
@@ -9503,6 +9586,143 @@ test('Add next pre-links an empty card without Auto, and Suggest next confirms a
   assert.match(drawer().textContent, /Codex · gpt-6.1 drafted this card as a follow-up to “Build auth”/);
 });
 
+test('Suggest next’s questions are answered on the Plan before any card is drafted, and the answers go back to the same suggestion (#162)', async () => {
+  const ui = await browser({ boardUI: true, wide: true }), posted = [];
+  const id = 'f2000000-0000-4000-8000-000000000001';
+  const questions = [{ question: 'Which login provider?', options: ['GitHub', 'Google'] }, { question: 'Where is it tested?', options: ['Staging', 'Local'] }];
+  const asking = { id: 'sug-1', kind: 'suggest', cardId: id, cardTitle: 'Build auth', provider: 'codex', model: 'gpt-6.1-sol', effort: 'high', status: 'complete', summary: 'I’ll suggest the cards once the provider is chosen.', questions, cards: [] };
+  const board = {
+    revision: 1, closed: false, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'frontend', name: 'Frontend' }], limits: {}, schedules: [], suggest: clone(asking),
+    cards: [{ id, title: 'Build auth', column: 'review', notes: '', priority: 'normal', labels: [], due: null, commentCount: 0, agent: { provider: 'codex', model: null, effort: null }, auto: false, folderId: 'frontend', dependsOn: [], checks: [], group: 'Auth', role: 'builder', artifact: null, check: null, files: [], tier: 'standard', revision: 1, order: 1, attempts: [], closed: false, createdAt: '2026-11-12T10:00:00.000Z' }],
+  };
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/board') return response(clone(board));
+    if (!request.path.startsWith('/api/board/')) return next();
+    posted.push({ path: request.path, body: clone(request.body) });
+    if (request.path === `/api/board/cards/${id}/suggest`) {
+      // The server carries on with the agent that asked, and says the run has your answers, not what they are.
+      board.suggest = { id: 'sug-2', kind: 'suggest', cardId: id, cardTitle: 'Build auth', provider: 'codex', model: 'gpt-6.1-sol', effort: 'high', status: 'running', phase: 'starting', toolCount: 0, answered: true };
+      return response({ suggest: clone(board.suggest), board: clone(board) }, 202);
+    }
+    if (request.path === '/api/board/suggest/dismiss') { board.suggest = null; return response({ dismissed: true, board: clone(board) }); }
+    return response({ board: clone(board) });
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('open-plan').click(); await flush();
+  const banner = () => ui.$('board-drafts'), panel = () => banner().querySelector('.board-questions'), send = () => panel().querySelector('.board-questions-send');
+  // The questions wait above the cards, with who asked, and nothing was drafted.
+  assert.equal(banner().hidden, false);
+  assert.equal(banner().querySelector('.board-draft-asking').getAttribute('aria-label'), 'Questions before suggesting cards');
+  assert.match(banner().textContent, /Codex has 2 questions before it suggests cards after “Build auth”/);
+  assert.match(banner().textContent, /I’ll suggest the cards once the provider is chosen\./);
+  assert.match(banner().textContent, /No cards suggested yet\. It suggests them once you answer, so nothing is drafted twice\./);
+  assert.deepEqual(panel().querySelectorAll('.board-question-text').map(item => item.textContent), ['1Which login provider?', '2Where is it tested?']);
+  assert.equal(panel().getAttribute('aria-label'), 'Codex’s questions');
+  assert.deepEqual([send().textContent, send().disabled, send().title], ['Suggest cards', true, 'Answer at least one question first.']);
+  // The card that was asked about says so, and sends you to the Plan to answer.
+  const face = () => ui.$('board-columns').querySelectorAll('.board-card').find(item => item.dataset.card === id);
+  face().click(); await flush();
+  const status = ui.$('board-drawer-body').querySelectorAll('.board-suggest-status').find(item => item.classList.contains('asking'));
+  assert.match(status.textContent, /It asked 2 questions before suggesting next cards/);
+  assert.match(status.textContent, /Codex · gpt-6\.1-sol\. Answer them on the Plan, and it suggests the cards with your answers\./);
+  status.querySelectorAll('button').find(item => item.textContent === 'Answer on the Plan').click(); await flush();
+  assert.equal(ui.$('board-drawer').hidden, true, 'Answering happens on the Plan, so the card closes.');
+  // One answer is enough to go on: the button says how many it has.
+  const first = panel().querySelectorAll('.board-question-choices')[0].querySelectorAll('input')[0];
+  first.checked = true; first.dispatchEvent(new UIEvent('change')); await flush();
+  assert.deepEqual([send().textContent, send().disabled], ['Suggest cards with 1 of 2', false]);
+  assert.match(send().title, /One read-only run, with the same agent, suggests the cards after “Build auth” with your answers\./);
+  const before = posted.length;
+  send().focus(); send().click(); await flush();
+  // The answers go to the suggestion that asked: its id, what was asked and answered, and no new choice of agent.
+  assert.equal(posted.length, before + 1);
+  assert.equal(ui.document.activeElement.textContent, 'Stop', 'The button that sent them is gone, so the keyboard carries on from Stop.');
+  assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${id}/suggest`, body: { asked: 'sug-1', answers: '1. Which login provider?\n   GitHub', billingConfirmed: false } });
+  // While it works with them, the banner says so and lists what you answered. The questions are gone.
+  assert.equal(panel(), null);
+  assert.match(banner().textContent, /Suggesting next cards after “Build auth”, with your answers…/);
+  assert.deepEqual(banner().querySelector('.board-questions-sent').children.map(item => item.textContent), ['Which login provider?GitHub']);
+  face().click(); await flush();
+  assert.match(ui.$('board-drawer-body').querySelectorAll('.board-suggest-status').find(item => item.classList.contains('running')).textContent, /Suggesting next cards with your answers…/);
+  // Questions you don't want to answer are dismissed like any other suggestion.
+  board.suggest = clone(asking);
+  await ui.window.relayBoard.reload(); await flush();
+  assert.ok(panel(), 'A second round of questions shows the same way.');
+  banner().querySelector('.board-draft-asking').querySelectorAll('button').find(item => item.textContent === 'Dismiss').click(); await flush();
+  assert.equal(posted.at(-1).path, '/api/board/suggest/dismiss');
+  assert.equal(banner().querySelector('.board-draft-asking'), null);
+});
+
+test('on the Canvas a retry or a handoff is marked beside the card it happened on, the List says it in words, and a working card’s label follows its run (#162)', async () => {
+  const ui = await browser({ boardUI: true, wide: true }), conversation = ui.canonical.get('project-one');
+  const ids = { index: 'f3000000-0000-4000-8000-000000000001', search: 'f3000000-0000-4000-8000-000000000002', results: 'f3000000-0000-4000-8000-000000000003', loose: 'f3000000-0000-4000-8000-000000000004' };
+  const card = (id, title, column, extra = {}) => ({ id, title, column, notes: '', priority: 'normal', labels: [], due: null, commentCount: 0, agent: { provider: 'codex', model: null, effort: null }, auto: false, folderId: 'frontend', dependsOn: [], checks: [], group: null, role: 'builder', artifact: null, check: null, files: [], tier: 'standard', split: false, subtasks: [], revision: 1, order: 1, attempts: [], createdAt: '2026-11-12T10:00:00.000Z', ...extra });
+  const used = (retries, handoffs) => ({ workedMs: 60000, activeSince: null, tokens: 1000, spendUSD: 0, retries, reviews: 0, handoffs });
+  const board = { revision: 1, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'frontend', name: 'Frontend' }], limits: {}, schedules: [], cards: [
+    card(ids.index, 'Add the index', 'done', { at: { x: 0, y: 0 }, result: { status: 'complete', summary: 'Added it.', files: 1, tests: 'passed' }, taskState: { id: 't0', status: 'complete', provider: 'codex', usage: used(1, 0) } }),
+    card(ids.search, 'Speed up search', 'doing', { at: { x: 320, y: 0 }, dependsOn: [ids.index], taskState: { id: 't1', status: 'running', approvals: 0, provider: 'codex', model: 'gpt-6.1-sol', effort: 'high', usage: used(0, 0) } }),
+    card(ids.results, 'Show the results', 'review', { at: { x: 640, y: 0 }, dependsOn: [ids.search], result: { status: 'complete', summary: 'Shown.', files: 2, tests: 'passed' }, taskState: { id: 't2', status: 'complete', provider: 'claude', usage: used(2, 1) } }),
+    // A card with no arrows has no arrow to mark, and says it in words like the rest.
+    card(ids.loose, 'Tidy the README', 'review', { at: { x: 0, y: 300 }, result: { status: 'complete', summary: 'Tidied.', files: 1, tests: 'passed' }, taskState: { id: 't3', status: 'complete', provider: 'codex', usage: used(1, 0) } }),
+  ] };
+  let loads = 0;
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/board') { loads++; return response(board); }
+    if (request.path.startsWith('/api/board/')) return response({ board });
+    return next();
+  });
+  const running = extra => ({ id: 't1', title: 'Speed up search', status: 'running', provider: 'codex', folderId: 'frontend', folderName: 'Frontend', board: { cardId: ids.search }, runningProvider: 'codex', runningModel: 'gpt-6.1-sol', runningEffort: 'high', runningPhase: 'tool', runningStep: null, approvals: 0, usage: used(0, 0), ...extra });
+  conversation.parallelTasks = [running()];
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('open-plan').click(); await flush();
+  const face = id => ui.$('board-columns').querySelectorAll('.board-card').find(item => item.dataset.card === id);
+  // A working card's label says what its lines say, and follows them as the run moves on, on the same button.
+  const working = face(ids.search), before = loads;
+  assert.match(working.getAttribute('aria-label'), /Codex · gpt-6\.1-sol · High effort\..*Running tools\. so far 1 min, 1\.0k tokens$/);
+  conversation.parallelTasks = [running({ runningPhase: 'responding', runningStep: 'Add the cache', usage: { ...used(1, 1), workedMs: 6 * 60000, tokens: 20000, spendUSD: 0.42 } })];
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(loads, before, 'The Plan isn’t read again for a step.');
+  assert.equal(face(ids.search), working, 'The card keeps its button, so focus stays on it.');
+  assert.equal(working.querySelector('.board-card-now').textContent, 'On “Add the cache”');
+  assert.match(working.getAttribute('aria-label'), /Codex · gpt-6\.1-sol · High effort\..*On “Add the cache”\. so far 6 min, 20k tokens, \$0\.42, retried once, handed off once$/, 'The label follows the lines.');
+  // A finished card says its retries and handoffs in its label; a card that had none says nothing.
+  assert.match(face(ids.results).getAttribute('aria-label'), /retried 2 times and handed off once/);
+  assert.doesNotMatch(face(ids.index).getAttribute('aria-label'), /handed off/);
+  // On the Canvas each is marked on an arrow, beside the card it happened on: where its arrow leaves, or, for a card
+  // nothing waits for, where its arrow arrives. A card with no arrow has no mark.
+  ui.$('board-canvas-mode').click(); await flush();
+  const marks = () => ui.$('board-space').querySelectorAll('.board-link-events');
+  const read = chip => [chip.dataset.card, chip.dataset.side, chip.querySelectorAll('.board-link-event').map(part => `${part.dataset.kind} ${part.textContent}`).join(', ')];
+  assert.deepEqual(marks().map(read), [[ids.index, 'leaves', 'retry 1'], [ids.search, 'leaves', 'retry 1, handoff 1'], [ids.results, 'arrives', 'retry 2, handoff 1']]);
+  assert.ok(marks().every(chip => chip.getAttribute('aria-hidden') === 'true'), 'The marks are for the eye: the label, the List and the tooltip say it in words.');
+  assert.deepEqual(marks().map(chip => chip.title), ['Add the index retried once.', 'Speed up search retried once and handed off once.', 'Show the results retried 2 times and handed off once.']);
+  // A tab on the edge of its card: over the arrow where it leaves, under it where it arrives, so two marks on one arrow
+  // don't meet. These cards are 248 wide, at 0, 320 and 640.
+  assert.deepEqual(marks().map(chip => chip.dataset.way), ['across', 'across', 'across']);
+  assert.match(marks()[0].style.transform, /^translate\(248px, .*translate\(0, -100%\)$/);
+  assert.match(marks()[1].style.transform, /^translate\(568px, .*translate\(0, -100%\)$/);
+  assert.match(marks()[2].style.transform, /^translate\(640px, .*translate\(-100%, 0\)$/);
+  const tip = (from, to) => ui.$('board-space').querySelectorAll('.board-link-hit').find(path => path.dataset.from === from && path.dataset.to === to).children[0].textContent;
+  assert.match(tip(ids.index, ids.search), /^“Speed up search” waits for “Add the index”\. Speed up search is working with what Add the index did\. Add the index retried once\.$/);
+  // A step that changes no count leaves the marks as they are; a new handoff writes the count, without reading the Plan.
+  const kept = marks()[1];
+  conversation.parallelTasks = [running({ runningPhase: 'tool', usage: { ...used(1, 1), workedMs: 7 * 60000, tokens: 21000, spendUSD: 0.44 } })];
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(marks()[1], kept, 'Nothing is drawn again while the counts stay the same.');
+  conversation.parallelTasks = [running({ runningPhase: 'tool', usage: { ...used(1, 2), workedMs: 7 * 60000, tokens: 21000, spendUSD: 0.44 } })];
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(loads, before);
+  assert.deepEqual(read(marks()[1]), [ids.search, 'leaves', 'retry 1, handoff 2']);
+  // The List says the same in words, for the keyboard and screen readers.
+  ui.$('board-outline-mode').click(); await flush();
+  const row = id => ui.$('board-outline').querySelectorAll('.board-outline-card').find(item => item.dataset.card === id);
+  assert.match(row(ids.index).querySelector('.board-outline-meta').textContent, /1 file changed · retried once$/);
+  assert.match(row(ids.results).querySelector('.board-outline-meta').textContent, /retried 2 times · handed off once · after “Speed up search”$/);
+  assert.match(row(ids.loose).querySelector('.board-outline-meta').textContent, /retried once$/);
+  assert.match(row(ids.search).querySelector('.board-outline-live').textContent, /retried once · handed off 2 times$/);
+  assert.doesNotMatch(row(ids.search).querySelector('.board-outline-meta').textContent, /retried/, 'A running card says it once, in its live line.');
+});
+
 test('in Flow, Tasks side by side groups Plan cards and Plan chat into one Plan row that opens Plan view and never shows Plan threads inside Flow (#162)', async () => {
   const ui = await flowBrowser({ boardUI: true, tasksUI: true, wide: true });
   planChatBrowserRoutes(ui);
@@ -9882,4 +10102,63 @@ test('Tasks side by side is experimental: marked in Normal and Flow, and turning
   ui.$('flow-strip').hidden = false;
   ui.window.relayFlow.peek('tasks');
   assert.equal(ui.$('flow-peek').hidden, true);
+});
+
+test("approving a pending request keeps focus on Stop, Escape closes an open Plan card from outside #board-view, and worktree file counts override stale no-change chips (#162)", async () => {
+  const ui = await browser({ boardUI: true, workbench: true, wide: true });
+  const conversation = ui.canonical.get("project-one");
+  const ids = { running: "c0000000-0000-4000-8000-000000000021", review: "c0000000-0000-4000-8000-000000000022" };
+  const makeCard = (id, title, column, extra = {}) => ({ id, title, column, notes: "", priority: "normal", labels: [], due: null, commentCount: 0, agent: { provider: "codex", model: "gpt-5.4", effort: "medium" }, folderId: "frontend", dependsOn: [], checks: [], revision: 1, order: 1, attempts: [], ...extra });
+  const board = {
+    revision: 1,
+    access: { mode: "edit", approvalPolicy: "ask" },
+    folders: [{ id: "frontend", name: "Frontend" }],
+    limits: {},
+    schedules: [],
+    cards: [
+      makeCard(ids.running, "Run migration", "doing", { task: "t-run", taskState: { id: "t-run", status: "running", provider: "codex", model: "gpt-5.4", effort: "medium", phase: "tool", approvals: 1 } }),
+      makeCard(ids.review, "Shell script output", "review", { task: "t-rev", taskState: { id: "t-rev", status: "complete", provider: "codex", hasWorktree: true, copyFiles: 1, tests: "unverified" }, result: { status: "complete", summary: "Created file via shell.", files: 0, tests: "no-change", inCopy: true, at: "2026-11-22T10:00:00.000Z" } }),
+    ],
+  };
+  ui.setIntercept((request, next) => {
+    if (request.path === "/api/board") return response(board);
+    if (request.path === `/api/board/cards/${ids.review}/answer`) return response({ text: "Created file via shell.", provider: "codex", model: "gpt-5.4", followUps: [], taskId: "t-rev", files: [{ path: "out.txt", change: "add", added: 1, removed: 0, status: "clean" }], filesSource: "copy", integration: null });
+    if (request.path.startsWith("/api/board/")) return response({ board });
+    if (request.path.endsWith("/approval")) {
+      conversation.pendingApprovals = [];
+      board.cards[0].taskState.approvals = 0;
+      return response({ resolved: true });
+    }
+    return next();
+  });
+  Object.assign(conversation, {
+    status: "running",
+    activeRun: { id: "run-1", provider: "codex", startedAt: "2026-11-22T10:00:00.000Z", lastEventAt: "2026-11-22T10:00:00.000Z" },
+    pendingApprovals: [{ id: "app-1", runId: "run-1", provider: "codex", kind: "commandExecution", command: "npm test" }],
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$("open-plan").click(); await flush();
+
+  const face = id => ui.$("board-columns").querySelectorAll(".board-card").find(item => item.dataset.card === id);
+  // Worktree card face and drawer use copyFiles (1 file changed / Not tested) rather than stale 0 / no-change.
+  assert.match(face(ids.review).textContent, /1 file changed/);
+  face(ids.review).click(); await flush();
+  assert.equal(ui.$("board-drawer").hidden, false);
+  const facts = ui.$("board-drawer-body").querySelector(".board-result-facts").textContent;
+  assert.match(facts, /1 file changed/);
+  assert.match(facts, /Not tested/);
+  assert.doesNotMatch(facts, /No files changed|No changes to test/);
+
+  // Open the running card, focus Approve in #pending-approvals, and click it: focus moves to #stop-button, not document.body.
+  face(ids.running).click(); await flush();
+  const approveBtn = ui.$("pending-approvals").querySelector("button");
+  assert.ok(approveBtn, "Approval button is rendered.");
+  approveBtn.focus();
+  approveBtn.click(); await flush();
+  assert.equal(ui.document.activeElement?.id, "stop-button", "Focus moves to Stop after the approval card is removed.");
+
+  // Pressing Escape while focus is outside #board-view (on #stop-button in the chat pane) still closes the open Plan card drawer.
+  ui.document.dispatchEvent(new UIEvent("keydown", { key: "Escape" })); await flush();
+  assert.equal(ui.$("board-drawer").hidden, true, "Escape closes the card drawer even when focus was in the chat pane.");
+  assert.equal(ui.document.activeElement?.dataset?.card, ids.running, "Closing the drawer returns focus to the card on the Plan.");
 });

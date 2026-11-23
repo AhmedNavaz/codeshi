@@ -182,7 +182,7 @@ export class Subtasks {
       const requestId = `task-${task.id}-split-${randomUUID().slice(0, 6)}`;
       this.board.update(c, card, { splitting: { taskId: task.id, requestId, at: new Date().toISOString() }, subtasksPaused: false });
       // The split reads and plans only, with the card's own agent: a short run, never routed a size up.
-      lane.broker.start(lane.c, { text: splitRequest(task.text), provider: task.provider, model: task.model, effort: task.effort, mode: 'read', approvalPolicy: 'ask', billingConfirmed: task.billingConfirmed, requestId }, { execution: task.execution });
+      lane.broker.start(lane.c, { text: splitRequest(task.text), role: 'planning', provider: task.provider, model: task.model, effort: task.effort, mode: 'read', approvalPolicy: 'ask', billingConfirmed: task.billingConfirmed, requestId }, { execution: task.execution });
       return true;
     }
     // Run again after a pause carries on, unpaused.
@@ -199,11 +199,12 @@ export class Subtasks {
     const requestId = `task-${task.id}-sub-${sub.id}-${randomUUID().slice(0, 6)}`;
     const subtasks = (card.subtasks || []).map(item => item.id === sub.id ? { ...item, status: 'running', taskId: task.id, requestId, startedAt: new Date().toISOString() } : item);
     this.board.update(c, card, { subtasks });
-    const input = { text: subtaskRequest({ ...card, subtasks }, sub, { brief }), mode: task.accessMode, approvalPolicy: task.approvalPolicy, billingConfirmed: task.billingConfirmed, requestId };
+    const input = { text: subtaskRequest({ ...card, subtasks }, sub, { brief }), role: task.role || card.role || 'builder', mode: task.accessMode, approvalPolicy: task.approvalPolicy, billingConfirmed: task.billingConfirmed, requestId };
     // Chosen by you: that agent, model and effort. On Smart, the subtask's own or its card's: routed at the subtask's size,
-    // as a Flow message is (#12). Otherwise the card's own agent.
+    // as a Flow message is (#12). Otherwise the card's own agent, as for a card Flow started that you took over from Flow,
+    // which no longer chooses an agent for it (TaskCoordinator.leaveFlow).
     if (sub.agent) return lane.broker.start(lane.c, { ...input, provider: sub.agent.provider, model: sub.agent.model || null, effort: sub.agent.effort || null }, { execution: task.execution });
-    if (task.routing && (sub.auto === true || card.auto === true)) {
+    if (task.routing && (sub.auto === true || card.auto === true) && lane.broker.execution.allows(lane.c, task.execution, { action: 'routing' })) {
       this.starting.add(task.id);
       return lane.broker.dispatch(lane.c, { ...input, provider: task.provider, model: task.model, effort: task.effort, routing: { ...task.routing, planned: sub.tier } }, { execution: task.execution })
         .catch(error => { if (error.status === 409 && lane.broker.running) return; if (FULL.test(error.message || '')) return this.waitForSlot(c, task, lane, card.id, sub.id); this.main.tasks.update(c, task, { status: 'failed', reason: clip(error.message, 500), subtasksEnded: true, endedAt: new Date().toISOString() }); })

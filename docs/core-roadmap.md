@@ -102,6 +102,7 @@ Existing manual capabilities and exact user-configured sequences remain availabl
 ## Existing foundation and gaps
 
 - Routing and model/effort selection already ship; see public/routing.js, src/routing-assessment.mjs and #12. Since 0.31.1 a short read-only agent assessment rates each request on Send, and local rules remain the fallback and the bare go-ahead path.
+- **Monthly model list refresh:** at the end of each month, check each agent's current model catalog (Claude, Codex, Antigravity/Gemini) and update `MODEL_LIST` and `MODEL_LIST_DATE` in `public/routing.js`. Add new models with a tier and bump `POLICY_VERSION` when choices change; models not listed stay unrated, so Smart, Saver and Ultra never choose them. Showing unrated models in the picker is planned, not shipped. Note the date in the commit message.
 - Context already favors task intent over tool logs, preserves the original journal and uses native-session deltas; see src/context.mjs and #69. Task-focused retrieval and reviewed memory shipped in 0.26.0; further retention/revalidation and context visibility remain planned.
 - Handoff/reset waiting, one test-triggered escalation, build/review and checkpoints already exist; see src/handoff.mjs, src/resume.mjs, src/run-checks.mjs and src/automatic-review.mjs.
 - Manual folder tasks already use separate brokers/journals, worktree isolation and shared mutation leases (#88). Flow fan-out must reuse that task/ownership model rather than removing guards.

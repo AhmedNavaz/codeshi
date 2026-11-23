@@ -239,16 +239,76 @@
   const modelTier = row => modelRating(row)?.tier || null;
   // Whether a model takes images: what its agent's catalog reports, else the list, else null for not known.
   const takesImages = row => Array.isArray(row?.inputModalities) ? row.inputModalities.includes('image') : typeof modelRating(row)?.images === 'boolean' ? modelRating(row).images : null;
+  // A model's known context window in tokens, when reported by its catalog or rated entry; null when not reported.
+  const contextWindowOf = row => {
+    const raw = row?.contextWindow ?? row?.maxInputTokens ?? row?.context_length ?? modelRating(row)?.contextWindow;
+    return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
+  };
+
+  // Summarizes completed and checked runs by model id (#12), so repeated verified passes or failures can inform
+  // choice among models at the same tier when enough evidence (at least 3 checked runs) has been recorded.
+  function measuredOutcomes(runs = []) {
+    const byModel = {};
+    for (const run of Array.isArray(runs) ? runs : []) {
+      if (!run || run.review || run.orchestrate || run.relation === 'assessment' || run.status !== 'complete') continue;
+      const id = String(run.effectiveModel || run.model || '').toLowerCase();
+      if (!id) continue;
+      const entry = byModel[id] ||= { completed: 0, checked: 0, passed: 0, failed: 0, retries: 0, passRate: null };
+      entry.completed++;
+      if (run.retryOf) entry.retries++;
+      const checkStatus = run.check?.status || run.stepCheck?.outcome || run.stepCheck?.status;
+      if (checkStatus === 'passed') { entry.checked++; entry.passed++; }
+      else if (checkStatus === 'failed' || checkStatus === 'timed-out') { entry.checked++; entry.failed++; }
+      entry.passRate = entry.checked >= 3 ? Math.round((entry.passed / entry.checked) * 1000) / 1000 : null;
+    }
+    return byModel;
+  }
 
   // What a task needs from a model, beyond its size (#12). images: how many images the request itself carries, which
   // the chosen model and its connection must both be known to take; one that can't, or isn't known to, is left out.
+  // contextTokens: estimated tokens the model's context window must fit when known.
+  // tools/skills: required tool or skill capabilities the model/agent must support.
   // files: attachment records ({ kind }) or a count, which says nothing about images.
-  function taskNeeds(files) {
+  function taskNeeds(files, { contextTokens = 0, tools = null, skills = null } = {}) {
     const images = Array.isArray(files) ? files.filter(file => file?.kind === 'image').length : 0;
-    return images ? { images } : {};
+    const tokens = typeof contextTokens === 'number' && Number.isFinite(contextTokens) && contextTokens > 0 ? Math.ceil(contextTokens) : 0;
+    const toolList = Array.isArray(tools) ? tools.filter(item => typeof item === 'string' && item) : [];
+    const skillList = Array.isArray(skills) ? skills.filter(item => typeof item === 'string' && item) : [];
+    return {
+      ...(images ? { images } : {}),
+      ...(tokens ? { contextTokens: tokens } : {}),
+      ...(toolList.length ? { tools: toolList } : {}),
+      ...(skillList.length ? { skills: skillList } : {}),
+    };
   }
-  // Whether a model may take this task's needs. Unknown counts as no.
-  const meetsNeeds = (row, needs) => !needs?.images || takesImages(row) === true;
+  function normalizeNeeds(needs) {
+    if (!needs || typeof needs !== 'object') return null;
+    const images = needs.images > 0 ? needs.images : 0;
+    const contextTokens = typeof needs.contextTokens === 'number' && Number.isFinite(needs.contextTokens) && needs.contextTokens > 0 ? Math.ceil(needs.contextTokens) : 0;
+    const tools = Array.isArray(needs.tools) ? needs.tools.filter(item => typeof item === 'string' && item) : [];
+    const skills = Array.isArray(needs.skills) ? needs.skills.filter(item => typeof item === 'string' && item) : [];
+    if (!images && !contextTokens && !tools.length && !skills.length) return null;
+    return {
+      ...(images ? { images } : {}),
+      ...(contextTokens ? { contextTokens } : {}),
+      ...(tools.length ? { tools } : {}),
+      ...(skills.length ? { skills } : {}),
+    };
+  }
+  // Whether a model may take this task's needs. Unknown image support counts as no; reported context windows and tool
+  // lists must cover what the task requires.
+  const meetsNeeds = (row, needs) => {
+    if (needs?.images && takesImages(row) !== true) return false;
+    if (needs?.contextTokens) {
+      const limit = contextWindowOf(row);
+      if (limit !== null && limit < needs.contextTokens) return false;
+    }
+    if (needs?.tools?.length) {
+      const capabilities = Array.isArray(row?.tools) ? row.tools : Array.isArray(row?.capabilities) ? row.capabilities : null;
+      if (capabilities && needs.tools.some(tool => !capabilities.includes(tool))) return false;
+    }
+    return true;
+  };
   // Whether routing may choose a model on its own: rated, not kept for manual choice, listed and not hidden. A model
   // rated ultra only when top is set: deep work in Ultra.
   const routable = (row, { top = false } = {}) => Boolean(modelId(row)) && modelId(row) !== 'default' && !row.hidden && Boolean(modelRating(row)) && !modelRating(row).manual && (top || !modelRating(row).ultra);
@@ -266,13 +326,20 @@
     ultra: { light: ['deep', 'high'], standard: ['deep', 'high'], deep: ['deep', 'highest'] },
   };
 
-  // The agent's rated model closest to the wanted tier, preferring an Ultra-only model when top is set, then its
-  // default, within a tier.
-  function pickModel(rows, tier, { top = false } = {}) {
+  function outcomeBias(row, outcomes) {
+    if (!outcomes || typeof outcomes !== 'object') return 0;
+    const stats = outcomes[String(modelId(row)).toLowerCase()];
+    if (!stats || typeof stats.passRate !== 'number') return 0;
+    return stats.passRate < 0.5 ? -1.5 : stats.passRate >= 0.75 ? 0.5 : 0;
+  }
+
+  // The agent's rated model closest to the wanted tier, preferring an Ultra-only model when top is set, then verified
+  // measured outcomes and its default, within a tier.
+  function pickModel(rows, tier, { top = false, outcomes = null } = {}) {
     const usable = (rows || []).filter(row => routable(row, { top }));
     if (!usable.length) return null;
     const distance = row => Math.abs(TIERS.indexOf(modelTier(row)) - TIERS.indexOf(tier));
-    const rank = row => (top && ultraModel(row) ? 2 : 0) + (row.isDefault ? 1 : 0);
+    const rank = row => (top && ultraModel(row) ? 2 : 0) + (row.isDefault ? 1 : 0) + outcomeBias(row, outcomes);
     return usable.reduce((best, row) => {
       if (!best) return row;
       const a = distance(row), b = distance(best);
@@ -293,6 +360,7 @@
   function escalate(provider, rows, choice, needs = null) {
     // A model routing may not choose has no place on the ladder, so there is nothing to step up from. A retry carries
     // the same request, so the stronger model must take what it needs too.
+    needs = normalizeNeeds(needs);
     rows = (rows || []).filter(row => meetsNeeds(row, needs));
     const current = rows.find(row => modelId(row) === choice.model);
     if (!current || !routable(current)) return null;
@@ -318,11 +386,12 @@
   }
   function checkUsualRoom(candidate, quota, tier, now) {
     if (!['standard', 'deep'].includes(tier) || !quota?.windows?.length) return null;
+    const others = Number.isFinite(candidate?.activeTasks) && candidate.activeTasks > 0 ? candidate.activeTasks : 0;
     for (const raw of quota.windows) {
       const row = windowSpendability(raw, now);
       const usual = usualForWindow(candidate, row, tier);
-      if (usual !== null && row.remaining < usual) {
-        return { window: row, remaining: row.remaining, usual, resetsSoon: row.hoursLeft !== null && row.hoursLeft <= burndownHours(raw) };
+      if (usual !== null && row.remaining < usual * (1 + others)) {
+        return { window: row, remaining: row.remaining, usual: usual * (1 + others), resetsSoon: row.hoursLeft !== null && row.hoursLeft <= burndownHours(raw) };
       }
     }
     return null;
@@ -334,21 +403,27 @@
   // only windows over it reset soon (#153). Moving means the next agent re-reads the task, so another agent fits only
   // with room under the line for what a run of this size usually spends there — unless its tight window resets within
   // burndown hours, when using up the expiring allowance is the point. The line rises near a reset, as the safety margin
-  // does. usual is a candidate's measured spend (usualWindowSpend); tier is the task's size.
-  function handoffFit(usage, model, { mode, current = false, tier = null, usual = null, now = Date.now() } = {}) {
+  // does. usual is a candidate's measured spend (usualWindowSpend); tier is the task's size; activeTasks reserves room
+  // for other concurrent tasks already running on that agent.
+  function handoffFit(usage, model, { mode, current = false, tier = null, usual = null, activeTasks = 0, now = Date.now() } = {}) {
     const line = handoffThresholds[normalizeMode(mode)] ?? null;
     if (!line) return { fits: true, line: null };
+    const others = Number.isFinite(activeTasks) && activeTasks > 0 ? activeTasks : 0;
     const spend = row => usualForWindow({ usualSpend: usual }, row, tier) ?? defaultSpend(row, tier);
     const quota = assessQuota(usage, model, { threshold: line, now, tier, workload: spend });
     if (current && quota.state === 'near' && quota.burndown) return { fits: true, line, quota, reason: 'expiring' };
     if (quota.state !== 'ok') return { fits: false, line, quota, reason: quota.state };
-    if (current) return { fits: true, line, quota };
     const resetsSoon = row => { const ms = row.resetsAt ? Date.parse(row.resetsAt) : NaN; return Number.isFinite(ms) && ms > now && (ms - now) / 3600000 <= burndownHours(row); };
-    const tight = quota.windows.find(row => !resetsSoon(row) && adaptiveThreshold(row, line, { now, workload: spend(row), tier }) - row.usedPercent < spend(row));
-    return tight ? { fits: false, line, quota, reason: 'room', window: { label: tight.label, usedPercent: tight.usedPercent, usual: spend(tight) } } : { fits: true, line, quota };
+    if (current && !others) return { fits: true, line, quota };
+    if (current && others > 0) {
+      const crowded = quota.windows.find(row => !resetsSoon(row) && adaptiveThreshold(row, line, { now, workload: spend(row), tier }) - row.usedPercent < spend(row) * (1 + others));
+      return crowded ? { fits: false, line, quota, reason: 'active', activeTasks: others, window: { label: crowded.label, usedPercent: crowded.usedPercent, usual: spend(crowded) } } : { fits: true, line, quota };
+    }
+    const tight = quota.windows.find(row => !resetsSoon(row) && adaptiveThreshold(row, line, { now, workload: spend(row), tier }) - row.usedPercent < spend(row) * (1 + others));
+    return tight ? { fits: false, line, quota, reason: others > 0 && adaptiveThreshold(tight, line, { now, workload: spend(tight), tier }) - tight.usedPercent >= spend(tight) ? 'active' : 'room', ...(others > 0 ? { activeTasks: others } : {}), window: { label: tight.label, usedPercent: tight.usedPercent, usual: spend(tight) } } : { fits: true, line, quota };
   }
 
-  // Chooses for one message. candidates: [{ provider, models, billingSource, usage, eligible, allowedModels, usualSpend }].
+  // Chooses for one message. candidates: [{ provider, models, billingSource, usage, eligible, allowedModels, usualSpend, activeTasks, outcomes }].
   // Only eligible agents are chosen; without allowApi, only agents billed to a subscription. An agent at 95% of a
   // limit is skipped, and allowance is spent where it resets soonest while respecting continuity.
   // allowNear: you chose "Proceed with remaining allowance", so an agent past the safety threshold but not at its limit
@@ -362,33 +437,58 @@
     // Deep work in Ultra may use Fable and Astra. Deep work is owed a deep model in Smart and Ultra alike.
     const top = mode === 'ultra' && task.tier === 'deep', owedDeep = task.tier === 'deep' && tier === 'deep';
     const wantedEffort = mode === 'smart' && ['low', 'medium', 'high'].includes(task.effort) && EFFORTS.indexOf(task.effort) > EFFORTS.indexOf(baseEffort) ? task.effort : baseEffort;
-    const skipped = [], unfit = [];
-    needs = needs?.images > 0 ? { images: needs.images } : null;
+    const skipped = [], unfit = [], unfitContext = [], unfitSkills = [];
+    needs = normalizeNeeds(needs);
     const pool = candidates.flatMap(candidate => {
       if (!candidate.eligible) return [];
       if (!allowApi && candidate.billingSource !== 'subscription') { skipped.push(`${agentNames[candidate.provider]} isn’t billed to a subscription`); return []; }
+      const name = agentNames[candidate.provider] || candidate.provider;
+      if (needs?.skills?.length && Array.isArray(candidate.unsupportedSkills)) {
+        const missing = needs.skills.filter(skill => candidate.unsupportedSkills.includes(skill));
+        if (missing.length) { skipped.push(`${name} can’t run the ${missing.join(', ')} skill here`); unfitSkills.push(name); return []; }
+      }
+      if (needs?.tools?.length && Array.isArray(candidate.unsupportedTools)) {
+        const missing = needs.tools.filter(tool => candidate.unsupportedTools.includes(tool));
+        if (missing.length) { skipped.push(`${name} doesn’t support ${missing.join(', ')}`); unfitSkills.push(name); return []; }
+      }
+      if (needs?.contextTokens && typeof candidate.contextWindow === 'number' && candidate.contextWindow > 0 && candidate.contextWindow < needs.contextTokens) {
+        skipped.push(`${name}’s context window (${Math.round(candidate.contextWindow / 1000)}K) is smaller than the ~${Math.round(needs.contextTokens / 1000)}K tokens this task needs`);
+        unfitContext.push(name);
+        return [];
+      }
       const listed = (candidate.models || []).filter(row => !candidate.allowedModels || candidate.allowedModels.includes(modelId(row)));
-      const rows = listed.filter(row => meetsNeeds(row, needs));
-      if (needs) {
-        const name = agentNames[candidate.provider];
+      if (needs?.images) {
+        const imageRows = listed.filter(row => takesImages(row) === true);
         const why = candidate.images === false ? `${name}’s connection can’t send images`
           : candidate.images !== true ? `${name}’s connection isn’t known to take images`
           : !listed.some(row => modelId(row) && modelId(row) !== 'default' && !row.hidden) ? `${name}’s models couldn’t be read, so none is known to take images`
-          : listed.some(routable) && !rows.some(routable) ? `${name} has no ${candidate.allowedModels ? 'allowed ' : ''}rated model known to take images` : null;
+          : listed.some(routable) && !imageRows.some(routable) ? `${name} has no ${candidate.allowedModels ? 'allowed ' : ''}rated model known to take images` : null;
         if (why) { skipped.push(why); unfit.push(name); return []; }
       }
+      const rows = listed.filter(row => meetsNeeds(row, needs));
+      if (needs?.contextTokens && listed.some(routable) && !rows.some(routable)) {
+        skipped.push(`${name} has no ${candidate.allowedModels ? 'allowed ' : ''}rated model with a context window of at least ~${Math.round(needs.contextTokens / 1000)}K tokens`);
+        unfitContext.push(name);
+        return [];
+      }
+      if (needs?.tools?.length && listed.some(routable) && !rows.some(routable)) {
+        skipped.push(`${name} has no ${candidate.allowedModels ? 'allowed ' : ''}rated model supporting ${needs.tools.join(', ')}`);
+        unfitSkills.push(name);
+        return [];
+      }
+      const outcomes = candidate.outcomes || candidate.measuredOutcomes || null;
       const distance = row => Math.abs(TIERS.indexOf(modelTier(row)) - TIERS.indexOf(tier));
       let passedOver = null;
       const decorate = (model, steppedDown = false, steppedDownFrom = null, steppedDownQuota = null) => {
         const quota = assessQuota(candidate.usage, model && modelId(model), { threshold: quotaThreshold, now, tier: task.tier, workload: row => usualForWindow(candidate, row, task.tier) });
         const binding = bindingWindow(quota, now);
         const shortRoom = checkUsualRoom(candidate, quota, task.tier, now);
-        const line = handoffFit(candidate.usage, model && modelId(model), { mode, current: candidate.provider === current, tier: task.tier, usual: candidate.usualSpend ?? candidate.usualPercent ?? null, now });
+        const line = handoffFit(candidate.usage, model && modelId(model), { mode, current: candidate.provider === current, tier: task.tier, usual: candidate.usualSpend ?? candidate.usualPercent ?? null, activeTasks: candidate.activeTasks || 0, now });
         return { ...candidate, selectedModel: model, quota, bindingWindow: binding, shortRoom, line, steppedDown, steppedDownFrom, steppedDownQuota, passedOver };
       };
       // Deep work in Ultra tries Fable or Astra first, and also in Smart/Ultra when their own weekly allowance is
       // expiring within burndown hours so it doesn't go to waste.
-      const strongest = pickModel(rows, tier, { top: true });
+      const strongest = pickModel(rows, tier, { top: true, outcomes });
       if (strongest && ultraModel(strongest)) {
         const tries = [strongest, ...rows.filter(row => row !== strongest && ultraModel(row) && routable(row, { top: true }) && distance(row) === distance(strongest))].map(model => decorate(model));
         const hasExpiringScope = row => (row.quota?.windows || []).some(win => (win.scope || win.scopes?.length) && windowSpendability(win, now).burndown && (win.usedPercent ?? 100) < 100);
@@ -397,7 +497,7 @@
         if (top) passedOver = tries[0];
       }
       // When Fable or Astra is all an agent may use, it stays the choice, under the usual allowance rules.
-      let preferred = pickModel(rows, tier);
+      let preferred = pickModel(rows, tier, { outcomes });
       if (!preferred && passedOver) { preferred = strongest; passedOver = null; }
       // An agent that lists models but none routing may choose is left out, rather than run on a default nobody rated.
       // Only an agent whose list couldn't be read runs its own default.
@@ -419,7 +519,7 @@
         const nextTier = preferredTierIndex > 0 ? TIERS[preferredTierIndex - 1] : null;
         if (nextTier && !(task.tier === 'deep' && nextTier === 'light')) {
           const fallbackRows = rows.filter(row => routable(row) && modelTier(row) === nextTier);
-          const fallbackPreferred = pickModel(fallbackRows, nextTier);
+          const fallbackPreferred = pickModel(fallbackRows, nextTier, { outcomes });
           if (fallbackPreferred) {
             const fallbackOptions = [fallbackPreferred, ...fallbackRows.filter(row => row !== fallbackPreferred)];
             fallbackChoices = fallbackOptions.map(model => decorate(model, true, preferred, choices[0].quota));
@@ -442,8 +542,18 @@
     if (!pool.length) return { error: `Auto found no connected agent within your rules${skipped.length ? ` (${skipped.join('; ')})` : ''}. Refresh plan usage or choose a model yourself. API-billed agents need separate consent.`, task, mode };
 
     const shortOfDeep = candidate => owedDeep && Boolean(candidate.selectedModel) && modelTier(candidate.selectedModel) !== 'deep';
-    // Rank by binding window spendability, continuity, full-tier availability and usual-run headroom (#128).
-    const spendabilityOf = candidate => candidate.bindingWindow ? candidate.bindingWindow.spendability : Math.max(0, 100 - (candidate.quota.usedPercent ?? 100));
+    // Rank by binding window spendability (discounted for concurrent active tasks on that agent), continuity,
+    // full-tier availability, measured outcomes and usual-run headroom (#12, #128).
+    const spendabilityOf = candidate => {
+      const others = Number.isFinite(candidate.activeTasks) && candidate.activeTasks > 0 ? candidate.activeTasks : 0;
+      if (candidate.bindingWindow) {
+        if (!others) return candidate.bindingWindow.spendability;
+        const perTask = usualForWindow(candidate, candidate.bindingWindow, task.tier) ?? defaultSpend(candidate.bindingWindow, task.tier);
+        const adjusted = windowSpendability({ ...candidate.bindingWindow, usedPercent: Math.min(100, candidate.bindingWindow.usedPercent + others * perTask) }, now);
+        return adjusted.spendability;
+      }
+      return Math.max(0, 100 - (candidate.quota.usedPercent ?? 100));
+    };
     const continuityBonus = candidate => {
       if (candidate.provider !== current) return 0;
       if (candidate.quota.state !== 'ok') return 15;
@@ -451,6 +561,13 @@
       if (candidate.shortRoom && !candidate.shortRoom.resetsSoon) return 0;
       const base = spendabilityOf(candidate);
       return Math.min(15, Math.max(4, base * 0.35));
+    };
+    const outcomeBonus = candidate => {
+      const outcomes = candidate.outcomes || candidate.measuredOutcomes;
+      const id = candidate.selectedModel ? String(modelId(candidate.selectedModel)).toLowerCase() : '';
+      const stats = id && outcomes?.[id];
+      if (!stats || typeof stats.passRate !== 'number') return 0;
+      return Math.max(-15, Math.min(5, Math.round((stats.passRate - 0.75) * 20)));
     };
     const score = candidate => {
       // An agent near its limit comes last, and among those, the one with the most allowance left to spend: running out
@@ -461,14 +578,26 @@
       // model is in the middle (Codex without Astra) takes deep work only when no deep model has room.
       const stepPenalty = candidate.steppedDown || shortOfDeep(candidate) ? 400 : 0;
       const roomPenalty = candidate.shortRoom && !candidate.shortRoom.resetsSoon ? 200 : 0;
-      return spendabilityOf(candidate) + continuityBonus(candidate) - stepPenalty - roomPenalty;
+      return spendabilityOf(candidate) + continuityBonus(candidate) + outcomeBonus(candidate) - stepPenalty - roomPenalty;
     };
     const order = ['codex', 'claude', 'gemini'];
     // An agent the task could keep comes before one it would leave at the first usage check (#12). Past the line, an
     // agent is still used when no other fits: allowance short of the limit is not unusable, and with nowhere to move
     // the task stays.
     const fits = candidate => candidate.line.fits || (candidate.quota.state === 'near' && Boolean(candidate.quota.burndown)) ? 0 : 1;
-    const chosen = [...pool].sort((a, b) => fits(a) - fits(b) || score(b) - score(a) || order.indexOf(a.provider) - order.indexOf(b.provider))[0];
+    const ranked = [...pool].sort((a, b) => fits(a) - fits(b) || score(b) - score(a) || order.indexOf(a.provider) - order.indexOf(b.provider));
+    const chosen = ranked[0];
+    const alternatives = ranked.slice(1).map(item => ({
+      provider: item.provider,
+      model: item.selectedModel ? modelId(item.selectedModel) : null,
+      tier: item.selectedModel ? modelTier(item.selectedModel) : null,
+      quota: item.quota.state,
+      usedPercent: item.quota.usedPercent,
+      fits: item.line.fits,
+      score: Math.round(score(item) * 100) / 100,
+      ...(item.steppedDown ? { steppedDown: true } : {}),
+      ...(item.activeTasks > 0 ? { activeTasks: item.activeTasks } : {}),
+    }));
     // On the last of an allowance, the top effort level isn't used: it can spend the rest in one turn (#153).
     const spendingRemainder = chosen.quota.state === 'near';
     const model = chosen.selectedModel, effort = pickEffort(effortsOf(model), spendingRemainder && wantedEffort === 'highest' ? 'high' : wantedEffort);
@@ -514,6 +643,7 @@
       const before = candidates.find(candidate => candidate.provider === current);
       const allowanceNote = previous ? explainAllowance(chosen, previous) : null;
       if (!before?.eligible || !previous) why.push(`${agentNames[current]} isn’t available under your rules`);
+      else if (previous.line.reason === 'active' && chosen.line.fits) why.push(`${agentNames[current]} is already running ${previous.activeTasks === 1 ? 'another task' : `${previous.activeTasks} other tasks`} and has little room under ${modeNames[mode]}’s ${previous.line.line}% handoff line`);
       else if (previous.shortRoom && !previous.shortRoom.resetsSoon) why.push(`${agentNames[current]} has ${Math.round(previous.shortRoom.remaining)}% left and usually spends ~${Math.round(previous.shortRoom.usual)}% on a ${task.tier} run`);
       else if (!previous.line.fits && chosen.line.fits && previous.quota.state === 'ok') why.push(`${agentNames[current]} is at ${Math.round(previous.line.quota.usedPercent)}% of a limit, past ${modeNames[mode]}’s ${previous.line.line}% handoff line`);
       else if (allowanceNote) why.push(allowanceNote);
@@ -529,13 +659,15 @@
 
     // Kept or chosen past the line only because no other agent fits: say so, so a later move isn't a surprise.
     if (!chosen.line.fits && !spendingRemainder && chosen.quota.state === 'ok') {
-      why.push(chosen.line.reason === 'room'
+      why.push(chosen.line.reason === 'room' || chosen.line.reason === 'active'
         ? `${agentNames[chosen.provider]} has little room under ${modeNames[mode]}’s ${chosen.line.line}% handoff line, and no agent has more`
         : `${agentNames[chosen.provider]} is past ${modeNames[mode]}’s ${chosen.line.line}% handoff line, and no other agent has room under it`);
     }
 
-    // Say when images narrowed the choice, so a different agent than usual isn't a surprise.
+    // Say when images, context size or skill/tool requirements narrowed the choice, so a different agent isn't a surprise.
     if (unfit.length) why.push(`The message has images, which ${unfit.join(' and ')} can’t take here`);
+    if (unfitContext.length) why.push(`The task needs ~${Math.round(needs.contextTokens / 1000)}K context tokens, which ${unfitContext.join(' and ')} can’t fit`);
+    if (unfitSkills.length) why.push(`The task uses skills or tools that ${unfitSkills.join(' and ')} can’t run here`);
 
     if (plannedHandoff) {
       why.push(`${agentNames[chosen.provider]} has ${Math.round(chosen.shortRoom.remaining)}% left before its reset (usual ${task.tier} run ~${Math.round(chosen.shortRoom.usual)}%), so a handoff is planned`);
@@ -554,7 +686,7 @@
       ...(spendingRemainder ? { remainder: chosen.quota.burndown ? 'expiring' : 'asked' } : {}),
       ...(needs ? { needs } : {}),
     };
-    return { ...choice, ...(assessment ? { assessment: task } : {}), quota: chosen.quota, bindingWindow: chosen.bindingWindow, handoffLine: { percent: chosen.line.line, fits: chosen.line.fits }, escalation: escalate(chosen.provider, chosen.models, choice, needs) };
+    return { ...choice, ...(assessment ? { assessment: task } : {}), quota: chosen.quota, bindingWindow: chosen.bindingWindow, handoffLine: { percent: chosen.line.line, fits: chosen.line.fits }, escalation: escalate(chosen.provider, chosen.models, choice, needs), ...(alternatives.length ? { alternatives } : {}) };
   }
 
   // A plan step (Orchestrate) is routed by the tier it was planned with, which then counts instead of how its text reads.
@@ -570,17 +702,21 @@
     return { ...choice, reason: 'Plans the steps', escalation: null };
   }
 
-  // The same choice when the agent is already decided: a queued prompt that moved at a handoff is routed again for the
-  // agent that took over (#93). Null when that agent lists no models, so the caller keeps its own choice.
-  function routeTo(provider, rows, { text, attachments = 0, assessment = null, mode = 'smart' }) {
+  // The same choice when the agent is already decided: a queued prompt that moved at a handoff, or a task resuming after
+  // a limit reset on another agent (#12, #93), is routed for that agent. Null when that agent lists no models.
+  function routeTo(provider, rows, { text, attachments = 0, assessment = null, mode = 'smart', needs = null, outcomes = null }) {
     mode = normalizeMode(mode) || 'smart';
-    const task = assessment && TIERS.includes(assessment.tier) ? assessment : classify(text, { attachments }), [tier, wantedEffort] = plan[mode][task.tier];
+    needs = normalizeNeeds(needs);
+    rows = (rows || []).filter(row => meetsNeeds(row, needs));
+    const task = assessment && TIERS.includes(assessment.tier) ? assessment : classify(text, { attachments }), [tier, baseEffort] = plan[mode][task.tier];
+    const wantedEffort = mode === 'smart' && ['low', 'medium', 'high'].includes(task.effort) && EFFORTS.indexOf(task.effort) > EFFORTS.indexOf(baseEffort) ? task.effort : baseEffort;
     // No usage is checked here, so Fable and Astra are used only when they are all the agent may run.
-    const model = pickModel(rows, tier) || (mode === 'ultra' && task.tier === 'deep' ? pickModel(rows, tier, { top: true }) : null);
+    const model = pickModel(rows, tier, { outcomes }) || (mode === 'ultra' && task.tier === 'deep' ? pickModel(rows, tier, { top: true, outcomes }) : null);
     if (!model) return null;
     if (task.tier === 'deep' && modelTier(model) === 'light') return null;
-    const choice = { provider, model: modelId(model), modelName: model.displayName || model.name || modelId(model), effort: pickEffort(effortsOf(model), wantedEffort), tier: task.tier, mode, reason: task.reason[0].toUpperCase() + task.reason.slice(1) };
-    return { ...choice, escalation: escalate(provider, rows, choice) };
+    const reasonText = String(task.reason || 'Continuing the task');
+    const choice = { provider, model: modelId(model), modelName: model.displayName || model.name || modelId(model), effort: pickEffort(effortsOf(model), wantedEffort), tier: task.tier, mode, reason: reasonText[0].toUpperCase() + reasonText.slice(1), ...(needs ? { needs } : {}) };
+    return { ...choice, escalation: escalate(provider, rows, choice, needs) };
   }
 
   // Replays a sequence of prompts across modes with recorded usage readings (#128), comparing choices and remaining allowance.
@@ -648,5 +784,5 @@
     return results;
   }
 
-  root.relayRouting = { MODES, POLICY_VERSION, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, handoffFit, classify, triage, modelTier, modelRating, takesImages, taskNeeds, MODEL_LIST_DATE, route, routeTo, plannedStep, planner, escalate, assessQuota, adaptiveThreshold, quotaText, remainderText, windowApplies, windowSpendability, bindingWindow, replay };
+  root.relayRouting = { MODES, POLICY_VERSION, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, handoffFit, classify, triage, modelTier, modelRating, takesImages, contextWindowOf, measuredOutcomes, taskNeeds, MODEL_LIST_DATE, route, routeTo, plannedStep, planner, escalate, assessQuota, adaptiveThreshold, quotaText, remainderText, windowApplies, windowSpendability, bindingWindow, replay };
 })(typeof window === 'undefined' ? globalThis : window);

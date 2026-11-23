@@ -44,7 +44,7 @@
     }
     list.hidden = !shown().length;
     $('attach-files').disabled = !state.ready || Boolean(state.pending) || uploads.has(state.projectId);
-    $('attach-files').title = 'Attach up to 6 files · PNG, JPEG, GIF, WebP (5 MB), text/code (64 KB) or Word .docx (5 MB, 64 KB of text) · paste or drop also works';
+    $('attach-files').title = 'Attach up to 6 files · PNG, JPEG, GIF, WebP (5 MB), text/code (64 KB), Word .docx or PDF on macOS (5 MB, 64 KB of text) · paste or drop also works';
     api.renderControls();
   }
   // Files added while others upload wait their turn instead of being dropped, so the limits below always count what is already attached.
@@ -134,7 +134,9 @@
       lines.forEach((tokens,index) => { const row = el('span', 'source-line'), code = el('code'); for (const [kind, value] of tokens) code.append(kind ? el('span', 'tok-' + kind, value) : document.createTextNode(value)); if (!tokens.length) code.textContent = ' '; row.append(el('span', 'line-number', String(index + 1)), code); source.append(row); });
       content.append(source);
     }
-    $('file-preview-meta').textContent = size(file.bytes) + ' · ' + (file.kind === 'image' ? file.mime.replace('image/','').toUpperCase() : 'UTF-8 · ' + String(file.text || '').split('\n').length + ' lines') + ' · Read-only preview';
+    // A PDF or Word document shows the text an agent gets, not the file.
+    const read = /\.(pdf|docx)$/i.exec(file.name)?.[1]?.toLowerCase();
+    $('file-preview-meta').textContent = size(file.bytes) + ' · ' + (file.kind === 'image' ? file.mime.replace('image/','').toUpperCase() : (read ? 'Text from the ' + (read === 'pdf' ? 'PDF' : 'Word document') : 'UTF-8') + ' · ' + String(file.text || '').split('\n').length + ' lines') + ' · Read-only preview';
     $('attach-preview').disabled = saved && files(id).some(f => f.id === file.id);
     $('attach-preview').textContent = $('attach-preview').disabled ? 'Attached' : 'Attach to message';
     $('file-preview').hidden = false; document.body.classList.add('file-preview-open');

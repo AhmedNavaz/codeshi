@@ -201,16 +201,44 @@ function checkStep(raw, index, earlier, options) {
   return { id, title, instructions, files: files.map(file => file.trim()), tier: raw.tier, dependsOn: needs, agent, role, artifact, check, skills, phase, done: done.map(item => item.trim()), ...(stepFolder(raw.folder) ? { folder: stepFolder(raw.folder) } : {}), ...(moreFiles ? { moreFiles } : {}), ...(merges.length ? { merges } : {}) };
 }
 
+const BUILDS = ['builder', 'frontend', 'backend', 'database'], CHECKS = ['qa', 'reviewer'], CONTRACTS = ['contract', 'schema'];
+const SPECIALIST_BUILDS = ['frontend', 'backend', 'database'];
+
 // Verify specialist workflow dependency rules:
-// Shared contract first, independent implementation second, integration/checks third.
+// Shared contract/schema first, independent implementation second, integration/checks third.
 export function validateWorkflowOrder(steps) {
   const stepMap = new Map(steps.map(s => [s.id, s]));
+  const ancestorsOf = id => {
+    const seen = new Set(), queue = [...(stepMap.get(id)?.dependsOn || [])];
+    while (queue.length) {
+      const cur = queue.shift();
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      queue.push(...(stepMap.get(cur)?.dependsOn || []));
+    }
+    return seen;
+  };
   for (const step of steps) {
-    for (const depId of step.dependsOn) {
+    const ancestors = ancestorsOf(step.id);
+    for (const depId of ancestors) {
       const dep = stepMap.get(depId);
       if (!dep) continue;
-      if (['qa', 'reviewer'].includes(dep.role) && ['builder', 'frontend', 'backend', 'database'].includes(step.role)) {
+      if (CHECKS.includes(dep.role) && BUILDS.includes(step.role || 'builder')) {
         fail(`Step ${step.id} (${step.role}) cannot depend on check step ${dep.id} (${dep.role}). Integration and checks must run after implementation.`);
+      }
+      if (CONTRACTS.includes(step.artifact) && BUILDS.includes(dep.role || 'builder') && !CONTRACTS.includes(dep.artifact)) {
+        fail(`Step ${step.id} (${step.artifact}) cannot depend on build step ${dep.id} (${dep.role}). Contracts and schemas must run before implementation.`);
+      }
+    }
+    if (SPECIALIST_BUILDS.includes(step.role) && !CONTRACTS.includes(step.artifact)) {
+      for (const other of steps) {
+        if (other.id === step.id || (other.phase || null) !== (step.phase || null)) continue;
+        if (other.artifact === 'contract' && !ancestors.has(other.id)) {
+          fail(`Step ${step.id} (${step.role}) must depend on contract step ${other.id}. Shared contracts must run before parallel specialist implementation.`);
+        }
+        if (other.artifact === 'schema' && ['database', 'backend'].includes(step.role) && !ancestors.has(other.id)) {
+          fail(`Step ${step.id} (${step.role}) must depend on schema step ${other.id}. Schema changes must run before dependent database and backend implementation.`);
+        }
       }
     }
   }
@@ -234,7 +262,6 @@ function checkSteps(steps, options) {
 // The plan checks (#162): what Codeshi notices in a drafted plan before you see it, locally and with no model call. Each
 // finding is a sentence on the card it is about; nothing is changed or refused for it. Circular waits can't happen here,
 // as a drafted card can only wait for earlier ones.
-const BUILDS = ['builder', 'frontend', 'backend', 'database'], CHECKS = ['qa', 'reviewer'], CONTRACTS = ['contract', 'schema'];
 export function reviewDraft(steps) {
   const byId = new Map(steps.map(step => [step.id, step])), number = new Map(steps.map((step, index) => [step.id, index + 1]));
   const before = id => { const seen = new Set(), next = [...(byId.get(id)?.dependsOn || [])]; while (next.length) { const at = next.pop(); if (seen.has(at)) continue; seen.add(at); next.push(...(byId.get(at)?.dependsOn || [])); } return seen; };
@@ -245,9 +272,14 @@ export function reviewDraft(steps) {
     if (step.role === 'reviewer' && (step.files?.length || step.artifact === 'diff')) note(step.id, 'It is a review card, which only checks earlier cards and changes no files itself. Change its role to Builder if it should write them.');
     const checked = step.dependsOn.map(id => byId.get(id)).filter(other => other && CHECKS.includes(other.role));
     if (BUILDS.includes(step.role || 'builder') && checked.length) note(step.id, `It builds on ${checked.map(other => `card ${number.get(other.id)}`).join(' and ')}, a ${checked[0].role === 'qa' ? 'QA' : 'review'} card. Checks should come after the work they check.`);
+    const ancestors = before(step.id);
     if (CONTRACTS.includes(step.artifact)) {
-      const built = [...before(step.id)].map(id => byId.get(id)).filter(other => other && BUILDS.includes(other.role || 'builder') && !CONTRACTS.includes(other.artifact));
+      const built = [...ancestors].map(id => byId.get(id)).filter(other => other && BUILDS.includes(other.role || 'builder') && !CONTRACTS.includes(other.artifact));
       if (built.length) note(step.id, `This ${step.artifact} comes after building work (${built.map(other => `card ${number.get(other.id)}`).join(', ')}). Contracts should come before the cards that use them.`);
+    }
+    if (SPECIALIST_BUILDS.includes(step.role) && !CONTRACTS.includes(step.artifact)) {
+      const missing = steps.filter(other => other.id !== step.id && (other.phase || null) === (step.phase || null) && !ancestors.has(other.id) && !before(other.id).has(step.id) && (other.artifact === 'contract' || (other.artifact === 'schema' && ['database', 'backend'].includes(step.role))));
+      if (missing.length) note(step.id, `It doesn’t wait for ${missing.map(other => `card ${number.get(other.id)}`).join(' and ')}, which defines the ${missing[0].artifact}. Have it depend on that card so the ${missing[0].artifact} runs first.`);
     }
     if (step.moreFiles) note(step.id, `The planner listed ${step.moreFiles} more ${step.moreFiles === 1 ? 'file' : 'files'} than a card holds, so only the first ${planLimits.files} are kept. Add any it needs to its instructions.`);
     if (step.instructions.length > 2500 || step.files.length > 8) note(step.id, 'It looks large for one run. Consider splitting it into smaller cards.');
@@ -512,10 +544,13 @@ export function parseSuggest(reply) {
     if (typeof reply !== 'string' || Buffer.byteLength(reply) > planLimits.reply) throw Error();
     const plan = JSON.parse(reply.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, '$1'));
     const summary = text(plan?.summary, planLimits.summary);
-    if (!summary || !Array.isArray(plan.steps) || !plan.steps.length) throw Error();
-    if (plan.steps.length > 3) return { status: 'unstructured', summary: `The agent suggested ${plan.steps.length} cards, more than the 3 “Suggest next” allows. Suggest again, or use Add next to write one yourself.`, steps: [] };
+    if (!summary || !Array.isArray(plan.steps)) throw Error();
     const questions = planQuestions(plan.questions);
-    return { status: 'draft', summary, steps: checkSteps(plan.steps, { fromPlanner: true, max: 3 }), ...(questions.length ? { questions } : {}) };
+    // A suggestion waits for the person's decisions before adding any cards, even if the agent also returned steps.
+    if (questions.length) return { status: 'questions', summary, steps: [], questions };
+    if (!plan.steps.length) throw Error();
+    if (plan.steps.length > 3) return { status: 'unstructured', summary: `The agent suggested ${plan.steps.length} cards, more than the 3 “Suggest next” allows. Suggest again, or use Add next to write one yourself.`, steps: [] };
+    return { status: 'draft', summary, steps: checkSteps(plan.steps, { fromPlanner: true, max: 3 }) };
   } catch {
     return { status: 'unstructured', summary: 'The agent’s reply could not be read as suggested cards. Suggest again, or use Add next to write one yourself.', steps: [] };
   }
@@ -543,15 +578,16 @@ export function applyOrchestration(c, record) {
   if (record.type === 'orchestration_moved') Object.assign(plan, { status: 'moved', cards: record.cards, updatedAt: record.at });
   if (record.type === 'orchestration_artifact') {
     plan.artifacts ||= {};
+    const stepNodes = (plan.steps || []).some(s => s.id === record.stepId) ? (plan.steps || []) : (c.board || []);
     plan.artifacts[record.stepId] = {
       kind: record.kind,
       content: record.content,
       revision: record.revision,
       stepId: record.stepId,
-      role: record.role || plan.steps?.find(s => s.id === record.stepId)?.role || 'builder',
+      role: record.role || stepNodes.find(s => s.id === record.stepId)?.role || 'builder',
       updatedAt: record.at,
     };
-    const invalidated = invalidatedDownstream(plan.steps || [], record.stepId);
+    const invalidated = invalidatedDownstream(stepNodes, record.stepId);
     if (plan.stepOutcomes) {
       for (const id of invalidated) {
         if (plan.stepOutcomes[id]) plan.stepOutcomes[id] = { ...plan.stepOutcomes[id], status: 'invalidated', needsRecheck: true };
@@ -566,6 +602,7 @@ export function applyOrchestration(c, record) {
       outcome: record.outcome,
       status: record.status,
       reason: record.reason || null,
+      ...(record.role ? { role: record.role } : {}),
       ...(record.command ? { command: record.command } : {}),
       ...(record.accepted ? { accepted: true } : {}),
       updatedAt: record.at,

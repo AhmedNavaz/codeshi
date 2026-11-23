@@ -10,7 +10,8 @@ import { attachmentLimits, inspectAttachment } from './attachments.mjs';
 import { validateRelativePath } from './collaboration-format.mjs';
 import { readExplorerFile } from './file-explorer.mjs';
 import { workspaceGitDiff } from './workspace-git.mjs';
-import { RESOLVABLE, applyPlan, checkCombined, createWorktree, folderIdentity, git, integrationPlan, keepBranch, markerLabels, ownCheck, planIsolation, prepareResolution, prepareWorktree, removeWorktree, resolvePrompt, restoreResolution, snapshotWorktree, uncommittedCount, unfinishedFiles, unrestricted } from './task-isolation.mjs';
+import { executionConfig } from './execution-policy.mjs';
+import { RESOLVABLE, applyPlan, broughtFiles, checkCombined, createWorktree, folderIdentity, git, integrationPlan, keepBranch, markerLabels, ownCheck, planIsolation, prepareResolution, prepareWorktree, refreshWorktree, removeWorktree, resolvePrompt, restoreResolution, snapshotWorktree, uncommittedCount, unfinishedFiles, unrestricted } from './task-isolation.mjs';
 
 // Independent tasks in one workspace (#88). Each task is a lane: a broker of its own, scoped to one folder, with its own
 // journal, native sessions, approvals, queue and Stop. A late event can't reach the wrong task, because a lane has no other
@@ -18,7 +19,9 @@ import { RESOLVABLE, applyPlan, checkCombined, createWorktree, folderIdentity, g
 // recovered from, and the coordinator decides how each lane may run (see task-isolation.mjs).
 const fail = (message, status = 409) => Object.assign(new Error(message), { status });
 const ENDED = new Set(['integrated', 'kept', 'discarded', 'cancelled']);
-const MAX_INTEGRATION_CHANGES = 200;
+// Why a task Flow started never did: you took over from Flow before it started (src/board.mjs flowEnded).
+export const TOOK_OVER = 'Not started: you took over from Flow. Run it again when you’re ready.';
+const MAX_INTEGRATION_CHANGES = 200, MAX_INTEGRATION_REST = 5000;
 const integrationChanges = (files = []) => files.slice(0, MAX_INTEGRATION_CHANGES).map(file => ({
   path: file.path,
   change: file.change,
@@ -130,7 +133,7 @@ export class TaskCoordinator {
     return { ...plan, running, limit, full: running >= limit };
   }
 
-  start(c, input = {}, { queueExecution = null, prepareReview = false, held = false, plan = null, board = null, batch = null } = {}) {
+  start(c, input = {}, { queueExecution = null, prepareReview = false, held = false, plan = null, board = null, batch = null, splitRepair = null } = {}) {
     input = { ...input, purpose: prepareReview ? 'project-review' : null, ...(prepareReview ? { mode: 'read', approvalPolicy: 'ask' } : {}) };
     if (this.closed) throw fail('Codeshi is stopping.', 503);
     const text = typeof input.text === 'string' ? input.text.trim() : '';
@@ -162,9 +165,10 @@ export class TaskCoordinator {
     const dependsOn = Array.isArray(input.dependsOn) ? (input.dependsOn.length ? [...new Set(input.dependsOn)] : null) : input.dependsOn || null;
     for (const id of waitsFor({ dependsOn })) { const before = this.find(c, id); if (['discarded', 'cancelled'].includes(before.status)) throw fail(`“${before.title}” was ${before.status}, so nothing can wait for it.`); }
     const folder = this.plan(c, { ...input, provider, accessMode: mode, approvalPolicy }).folder;
-    // Ownership is saved before anything can start, so a crash at any point finds a task it can recover.
+    // Ownership is saved before anything can start, so a crash at any point finds a task it can recover. So is the part a
+    // split's repair fixes (src/split-finish.mjs), which says what its copy starts with (before).
     const keeps = board ? keptFiles(input.ignoredFiles) : [];
-    const task = { id: policyId, execution, requestId: input.requestId, title: prepareReview ? 'Prepare project review' : line(input.title || text), ...(plan ? { plan } : {}), ...(board ? { board } : {}), ...(keeps.length ? { ignoredFiles: keeps } : {}), ...(batch ? { batch } : {}), ...(held ? { held: true } : {}),...(prepareReview ? { purpose: 'project-review', workspaceFolders: this.main.workspaceFolders.map(folder => ({ ...folder })) } : {}), text, folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider, model, effort, accessMode: mode, approvalPolicy, billingConfirmed: input.billingConfirmed === true, attachments, includeHistory: input.includeHistory === true, dependsOn, ...(input.routing ? { routing: input.routing } : {}), ...(parent ? { parentTaskId: parent.taskId, splitId: typeof parent.splitId === 'string' ? parent.splitId : null } : {}), status: 'waiting', reason: 'Starting', createdAt: new Date().toISOString() };
+    const task = { id: policyId, execution, requestId: input.requestId, title: prepareReview ? 'Prepare project review' : line(input.title || text), ...(input.role ? { role: input.role } : {}), ...(plan ? { plan } : {}), ...(board ? { board } : {}), ...(splitRepair ? { splitRepair } : {}), ...(keeps.length ? { ignoredFiles: keeps } : {}), ...(batch ? { batch } : {}), ...(held ? { held: true } : {}),...(prepareReview ? { purpose: 'project-review', workspaceFolders: this.main.workspaceFolders.map(folder => ({ ...folder })) } : {}), text, folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider, model, effort, accessMode: mode, approvalPolicy, billingConfirmed: input.billingConfirmed === true, attachments, includeHistory: input.includeHistory === true, dependsOn, ...(input.routing ? { routing: input.routing } : {}), ...(parent ? { parentTaskId: parent.taskId, splitId: typeof parent.splitId === 'string' ? parent.splitId : null } : {}), status: 'waiting', reason: 'Starting', createdAt: new Date().toISOString() };
     this.main.record(c, { type: 'parallel_task', task });
     const saved = this.find(c, task.id);
     this.tick(c);
@@ -245,7 +249,7 @@ export class TaskCoordinator {
     const ids = {}, made = [], attempt = randomUUID().slice(0, 8);
     try {
       for (const { step, number, provider, model, effort, routing } of chosen) {
-        const task = this.start(c, { text: prompt(step, number), title: `${number}. ${step.title}`, provider, model, effort, ...(routing ? { routing } : {}), mode, approvalPolicy, folderId, requestId: `plan-${plan.id}-${attempt}-${step.id}`, dependsOn: step.dependsOn.map(id => ids[id]), executionRevision: input.executionRevision }, { held: true, plan: { id: plan.id, stepId: step.id, number } });
+        const task = this.start(c, { text: prompt(step, number), title: `${number}. ${step.title}`, ...(step.role ? { role: step.role } : {}), provider, model, effort, ...(routing ? { routing } : {}), mode, approvalPolicy, folderId, requestId: `plan-${plan.id}-${attempt}-${step.id}`, dependsOn: step.dependsOn.map(id => ids[id]), executionRevision: input.executionRevision }, { held: true, plan: { id: plan.id, stepId: step.id, number } });
         ids[step.id] = task.id; made.push(task.id);
       }
     } catch (error) {
@@ -336,7 +340,8 @@ export class TaskCoordinator {
     // otherwise made again.
     const target = path.join(this.directory(task), 'worktree'), reuse = task.worktree === target && fs.existsSync(target) && Boolean(task.conversationId || task.setup);
     if (!reuse && fs.existsSync(target)) removeWorktree(identity.root, target, task.id, task.setup?.dependencies);
-    const place = reuse ? { worktree: target, scopePath: task.scopePath, base: task.base } : createWorktree(identity, target, task.id);
+    // A copy that is kept keeps the count of what it left out, which was worked out without the files it was given (copyFor).
+    const place = reuse ? { worktree: target, scopePath: task.scopePath, base: task.base, ...(task.carried ? { uncommitted: task.uncommitted || 0 } : {}) } : this.copyFor(c, task, identity, target);
     if (reuse && task.setup) { this.update(c, task, { ...where, ...place, reason: null }); this.begin(c, task); return; }
     // Installed dependencies are brought into the copy in the background, so the app stays responsive meanwhile.
     this.update(c, task, { ...where, ...place, reason: 'Preparing its copy' });
@@ -355,6 +360,62 @@ export class TaskCoordinator {
       setImmediate(() => this.tick(c));
     });
   }
+  // ---- The work a task builds on
+  // A copy is made from the folder's last commit, and merging writes to the folder without committing. So what a task
+  // builds on is brought into its copy from the folder (task-isolation.mjs createWorktree), or a card that waits for
+  // another would start without that card's files, and a review would have nothing to read.
+  // The tasks whose work a task builds on: the ones it waits for, the ones those wait for, and for a Plan card or a
+  // split's repair the ones the Plan names (src/board.mjs tasksBefore).
+  before(c, task) {
+    const all = c.parallelTasks || [], seen = new Set([task.id]), found = [];
+    const next = item => [...waitsFor(item), ...(this.main.board?.tasksBefore?.(c, item) || [])];
+    for (const queue = next(task); queue.length;) {
+      const id = queue.shift();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const other = all.find(item => item.id === id);
+      if (other) { found.push(other); queue.push(...next(other)); }
+    }
+    return found;
+  }
+  // What that work left in the task's repository, as paths from its top: the files each merged, and what one that worked
+  // in the folder itself reported changing. Work in another repository, kept as a branch or not merged yet leaves nothing.
+  mergedBefore(c, task, root) {
+    const files = new Set();
+    for (const other of this.before(c, task)) {
+      if (!other.repoRoot || other.repoRoot !== root) continue;
+      if (other.status === 'integrated') { for (const file of [...(other.integration?.changes || []).map(item => item?.path), ...(other.integration?.rest || [])]) if (file) files.add(file); continue; }
+      if (other.status !== 'complete' || other.mode !== 'direct') continue;
+      for (const file of other.stepResult?.files || []) {
+        const place = path.relative(root, path.resolve(other.scopePath || root, String(file)));
+        if (place && place !== '..' && !place.startsWith(`..${path.sep}`) && !path.isAbsolute(place)) files.add(place.split(path.sep).join('/'));
+      }
+    }
+    return [...files];
+  }
+  // A new copy with that work in it. carried says how many files came from the folder and which commit the copy was made
+  // from, and the folder's other uncommitted changes are counted without them.
+  copyFor(c, task, identity, target) {
+    const { from, brought: has, ...place } = createWorktree(identity, target, task.id, this.mergedBefore(c, task, identity.root));
+    return { ...place, carried: has.length ? { from, files: has.length } : null, ...(has.length ? { uncommitted: uncommittedCount(identity.real, has) } : {}) };
+  }
+  // The same before a later run in a copy that is already there (refreshWorktree): a review checking again reads the
+  // repairs once they're merged. Returns how many files came in, and the base the copy had, to compare the new one with.
+  refreshCopy(c, task) {
+    const none = { files: 0 };
+    if (task.mode !== 'worktree' || ENDED.has(task.status) || task.resolve?.open || !task.worktree || !task.repoRoot || !fs.existsSync(task.worktree) || !fs.existsSync(task.repoRoot)) return none;
+    const files = this.mergedBefore(c, task, task.repoRoot);
+    if (!files.length) return none;
+    const was = task.base, fresh = refreshWorktree({ root: task.repoRoot, worktree: task.worktree, id: task.id, base: was, files });
+    if (!fresh.files.length) return none;
+    // A folder emptied by what came in goes with it, as in any checkout, but the task still needs its own to work in.
+    if (task.scopePath) fs.mkdirSync(task.scopePath, { recursive: true });
+    const from = task.carried?.from || was, has = broughtFiles(task.repoRoot, from, fresh.base);
+    this.update(c, task, { base: fresh.base, carried: { from, files: has.length }, uncommitted: uncommittedCount(task.folderPath, has) });
+    const lane = this.lanes.get(task.id);
+    if (lane) lane.broker.guarded = this.guardedFor(task);
+    return { files: fresh.files.length, was, base: fresh.base };
+  }
   begin(c, task) {
     // A task begins once: saving its setup can wake the queue before this call returns, and a second begin in the same lane
     // would start a second run beside the first and fail the task for it.
@@ -362,6 +423,12 @@ export class TaskCoordinator {
     const lane = this.lane(c, task), first = !task.conversationId;
     if (first) {
       const conversation = lane.broker.get(lane.broker.create().id); lane.c = conversation;
+      for (const [provider, transport] of Object.entries(c.transports || {})) {
+        if (transport && transport !== 'auto') lane.broker.record(conversation, { type: 'settings', provider, mode: task.accessMode || conversation.mode, approvalPolicy: task.approvalPolicy || conversation.approvalPolicy, model: null, transport });
+      }
+      if (c.transport && c.transport !== 'auto') {
+        lane.broker.record(conversation, { type: 'settings', provider: c.provider, mode: task.accessMode || conversation.mode, approvalPolicy: task.approvalPolicy || conversation.approvalPolicy, model: c.model ?? null, transport: c.transport });
+      }
       lane.broker.updateContext(conversation, c.context);
       this.update(c, task, { conversationId: conversation.id });
       for (const entry of (c.memory || []).filter(item => item.status === 'active' && (task.purpose === 'project-review' || !item.folderId || item.folderId === task.folderId))) lane.broker.record(conversation, { type: 'memory_add', entry });
@@ -377,16 +444,19 @@ export class TaskCoordinator {
     if (task.board && this.main.board?.subtasks.begin(c, task, lane)) { this.sync(c, task); return; }
     // A Reviewer or QA card on Auto prefers an agent other than the ones that built what it checks (#89).
     const avoid = task.routing && task.board ? this.main.board?.reviews.avoid(c, task) || [] : [];
-    const input = { text: task.text, provider: task.provider, model: task.model, effort: task.effort, mode: task.accessMode, approvalPolicy: task.approvalPolicy, attachments: task.attachments, billingConfirmed: task.billingConfirmed, ...(task.routing ? { routing: { ...task.routing, ...(avoid.length ? { avoid } : {}) } } : {}), requestId: `task-${task.id}` };
+    const role = task.role || task.board?.role || null;
+    const input = { text: task.text, ...(role ? { role } : {}), provider: task.provider, model: task.model, effort: task.effort, mode: task.accessMode, approvalPolicy: task.approvalPolicy, attachments: task.attachments, billingConfirmed: task.billingConfirmed, ...(task.routing ? { routing: { ...task.routing, ...(avoid.length ? { avoid } : {}) } } : {}), requestId: `task-${task.id}` };
     if (task.routing) lane.broker.dispatch(lane.c, input, { execution: task.execution }).catch(error => { this.update(c, task, { status: task.preparationCancelled ? 'stopped' : 'failed', reason: String(error.message).slice(0, 500), endedAt: new Date().toISOString() }); });
     else lane.broker.start(lane.c, input, { execution: task.execution });
     this.sync(c, task);
   }
+  // carried: the work the task builds on that its copy has from the folder (copyFor), which its agent is told.
   guardedFor(task) {
     const out = [];
     for (const folder of this.main.workspaceFolders) {
       let real; try { real = fs.realpathSync.native(folder.path); } catch { continue; }
-      out.push({ path: real, name: folder.displayName || folder.name || path.basename(real), copy: task.mode === 'worktree' && folder.id === task.folderId && task.scopePath ? task.scopePath : null });
+      const copy = task.mode === 'worktree' && folder.id === task.folderId && task.scopePath ? task.scopePath : null;
+      out.push({ path: real, name: folder.displayName || folder.name || path.basename(real), copy, ...(copy && task.carried?.files ? { carried: { files: task.carried.files, from: task.carried.from, base: task.base } } : {}) });
     }
     return out;
   }
@@ -397,7 +467,7 @@ export class TaskCoordinator {
     if (!task.scopePath) return null;
     const broker = new this.BrokerClass({ lane: true, workspace: task.scopePath, workspaceFolders: task.purpose === 'project-review' ? task.workspaceFolders : task.purpose === 'plan-chat' ? this.main.workspaceFolders.map(folder => ({ ...folder })) : [{ id: task.folderId, name: task.folderName, path: task.scopePath }], dataDir: path.join(this.directory(task), 'journal'), googleRoot: this.main.googleRoot, bins: this.main.configuredBins, contextPolicy: this.main.contextPolicy, handoffPreferences: this.main.handoff.preferences, verificationCadence: this.main.verificationCadence, contextLimit: this.main.contextLimit, contextRouting: () => c.routing?.mode || null, acquireMutation: operation => ['project-review', 'plan-chat'].includes(task.purpose) ? { release() {}, setProcess() {} } : this.acquireFolders([task.scopePath], `${operation} for “${task.title}”`) });
     if (task.purpose === 'plan-chat') {
-      broker.planChat = true;
+      broker.planChat = true; broker.mainConversation = c;
       // The Plan chat only reads, whatever the message box is set to, so it never holds a folder another chat writes to.
       // A draft it returns goes on the Plan, which lives in the Workspace chat's journal.
       for (const name of ['dispatch', 'start']) { const original = broker[name].bind(broker); broker[name] = (laneC, input = {}, ...rest) => original(laneC, { ...input, mode: 'read' }, ...rest); }
@@ -442,7 +512,10 @@ export class TaskCoordinator {
     }
     const selected = lane.c.activeRun || (status !== 'running' ? lane.c.lastRun : null);
     const provider = selected?.provider || task.provider, model = selected ? selected.model ?? null : task.model, effort = selected ? selected.effort ?? null : task.effort;
-    if (status === task.status && provider === task.provider && model === task.model && effort === task.effort) return;
+    if (status === task.status && provider === task.provider && model === task.model && effort === task.effort) {
+      if (task.board && status === 'complete') this.onTask?.(c, task);
+      return;
+    }
     // A plan step that finishes is checked before anything builds on it, so the hold is saved with the status (#89). Working
     // on it again drops the old result; the next finish checks it afresh.
     const finished = tested(task) && status === 'complete' && task.status !== 'complete', check = finished ? { id: randomUUID().slice(0, 8), status: 'running', at: new Date().toISOString() } : null;
@@ -556,17 +629,21 @@ export class TaskCoordinator {
     if (!recheck) {
       const messages = conversation?.messages || [];
       reply = messages.findLast(message => message.role === 'assistant' && message.text?.trim() && (!run || message.runId === run.id))?.text || '';
-      const result = { summary: clip(reply, 3000), files: runSteps(messages).files.slice(0, 20), runId: run?.id || null, at: new Date().toISOString() };
-      // A Plan card in its own copy counts the files the copy really changed, so one that changed nothing, such as
-      // research, needn't be merged (src/board.mjs).
-      let copyFiles = null;
-      if ((task.board || task.plan) && task.mode === 'worktree' && task.worktree && fs.existsSync(task.worktree)) { try { copyFiles = this.planFor(c, task).plan.files.length; } catch { /* Counted again when it's accepted. */ } }
+      // A Plan card in its own copy counts the files the copy really changed, including files changed by shell commands,
+      // and one that changed nothing, such as research, needn't be merged (src/board.mjs).
+      const strip = file => task.prefix && file.startsWith(`${task.prefix}/`) ? file.slice(task.prefix.length + 1) : file;
+      let copyFiles = null, copyPaths = [];
+      if ((task.board || task.plan) && task.mode === 'worktree' && task.worktree && fs.existsSync(task.worktree)) { try { copyPaths = this.planFor(c, task).plan.files.map(file => strip(file.path)); copyFiles = copyPaths.length; } catch { /* Counted again when it's accepted. */ } }
+      const result = { summary: clip(reply, 3000), files: [...new Set([...copyPaths, ...runSteps(messages).files])].slice(0, 20), runId: run?.id || null, at: new Date().toISOString() };
       this.update(c, task, { stepResult: result, ...(copyFiles !== null ? { copyFiles } : {}) });
       if (plan && step.artifact) this.main.record(c, { type: 'orchestration_artifact', id: plan.id, stepId: step.id, kind: step.artifact, content: result.summary, revision: result.runId || id, role: step.role || null });
+      if (task.board && step.artifact) this.main.record(c, { type: 'board_card_artifact', cardId: step.id, taskId: task.id, kind: step.artifact, content: result.summary, revision: result.runId || id, role: step.role || null });
     }
     const ran = await this.runStepCheck(c, task);
     if (!current()) return;
-    const evaluated = evaluateIntegration({ step, checkResult: ran.result ? { status: ran.result.status, exitCode: ran.result.exitCode } : null, filesChanged: task.stepResult?.files?.length ?? null });
+    const snapFiles = run && Number.isInteger(conversation?.snapshots?.[run.id]?.files) ? conversation.snapshots[run.id].files : null;
+    const filesChanged = Number.isInteger(task.copyFiles) ? Math.max(task.copyFiles, task.stepResult?.files?.length || 0) : snapFiles !== null ? Math.max(snapFiles, task.stepResult?.files?.length || 0) : (task.stepResult?.files?.length ?? null);
+    const evaluated = evaluateIntegration({ step, checkResult: ran.result ? { status: ran.result.status, exitCode: ran.result.exitCode } : null, filesChanged });
     // A command that stops at a missing folder or tool never reached the tests: still a failure, but named as the command's.
     const unrunnable = evaluated.outcome === 'failed' && /(cd: [^\n]*No such file or directory|command not found)/.test(String(ran.result?.output || ''));
     const reason = ran.reason && evaluated.outcome === 'unverified' ? ran.reason : ran.result?.status === 'timed-out' ? 'The tests were still running after 10 minutes, so they were stopped.' : evaluated.outcome === 'failed' ? (unrunnable ? `The check command couldn’t run (exit code ${ran.result.exitCode ?? 'none'}): it needs a folder or tool that isn’t in this card’s folder. That’s the command, not the code.` : `Exit code ${ran.result.exitCode ?? 'none'}.`) : evaluated.reason;
@@ -577,6 +654,13 @@ export class TaskCoordinator {
     if (task.board && !recheck && evaluated.outcome !== 'failed') this.main.board?.reviews.ended(c, task, reply);
     this.update(c, task, { stepCheck: outcome });
     if (plan) this.main.record(c, { type: 'orchestration_step_outcome', id: plan.id, stepId: step.id, outcome: evaluated.outcome, status: evaluated.status, reason, ...(ran.command ? { command: ran.command } : {}) });
+    if (task.board) {
+      this.main.record(c, { type: 'board_card_outcome', cardId: step.id, taskId: task.id, outcome: evaluated.outcome, status: evaluated.status, reason, ...(ran.command ? { command: ran.command } : {}), ...(task.review ? { reviewStatus: task.review.status, reviewVerdict: task.review.verdict ?? null } : {}) });
+      if (recheck && evaluated.outcome === 'passed') {
+        const boardCard = this.main.board?.cards(c).find(item => item.id === step.id);
+        if (boardCard?.needsRecheck || boardCard?.invalidatedBy) this.main.board.update(c, boardCard, { needsRecheck: false, invalidatedBy: null });
+      }
+    }
     const mergePending = task.mode === 'worktree' && !this.emptyCopy(c, task);
     if (evaluated.outcome === 'failed' && dependents) this.main.message(c, 'system', plan ? `The tests failed on step ${task.plan.number}, “${step.title}”, so the steps after it wait. Fix it in its task, or ${mergePending ? 'merge it anyway' : 'continue anyway from the plan'}.` : `The tests failed on “${step.title}”, so the cards after it wait. Fix it in its task, or ${mergePending ? 'merge it anyway' : 'continue anyway from the Plan'}.`);
     setImmediate(() => this.tick(c));
@@ -625,10 +709,15 @@ export class TaskCoordinator {
   }
   continueTask(c, task) {
     // A review's findings you've read, and decided to build on anyway (#89).
-    if (task.board && task.status === 'complete' && reviewHolds(task) && !(task.stepCheck && (task.stepCheck.outcome === 'failed' || task.stepCheck.status === 'interrupted') && !task.stepCheck.accepted)) { this.main.board.reviews.accept(c, task); this.tick(c); return; }
+    if (task.board && task.status === 'complete' && reviewHolds(task) && !(task.stepCheck && (task.stepCheck.outcome === 'failed' || task.stepCheck.status === 'interrupted') && !task.stepCheck.accepted)) {
+      this.main.board.reviews.accept(c, task);
+      this.main.record(c, { type: 'board_card_outcome', cardId: task.board.cardId, taskId: task.id, outcome: task.stepCheck?.outcome || 'passed', status: 'accepted', reason: 'You read the review findings and chose to continue anyway.', accepted: true });
+      this.tick(c); return;
+    }
     const check = task.stepCheck;
     if (task.status !== 'complete' || !check || !(check.outcome === 'failed' || check.status === 'interrupted') || check.accepted) throw fail(task.board ? 'Nothing is holding the cards after this one.' : 'Nothing is holding the steps after this one.');
     this.update(c, task, { stepCheck: { ...check, accepted: true, acceptedAt: new Date().toISOString() } });
+    if (task.board) this.main.record(c, { type: 'board_card_outcome', cardId: task.board.cardId, taskId: task.id, outcome: check.outcome || 'unverified', status: 'accepted', reason: check.status === 'interrupted' ? 'You chose to continue without the tests.' : 'You chose to continue past the failed tests.', accepted: true, ...(check.command ? { command: check.command } : {}) });
     this.tick(c);
   }
   // After a restart. Whatever a lane was doing ended with the app, so its run is marked interrupted by its own journal, and
@@ -651,8 +740,10 @@ export class TaskCoordinator {
     const lane = this.lanes.get(task.id), { text, attachments, requestId, folderPath, commonDir, repoRoot, preparationSource, workspaceFolders, resolve, integration, ...shown } = task;
     const active = lane?.c?.activeRun;
     const runningProvider = (lane?.broker?.running && active?.provider) || (task.status === "running" && (active?.provider || lane?.c?.provider || task.provider)) || null;
+    // The page gets each saved file without its diff, and not the names kept past those (integrate).
+    const { rest, ...merged } = integration || {};
     const publicIntegration = integration ? {
-      ...integration,
+      ...merged,
       ...(Array.isArray(integration.changes) ? { changes: integration.changes.map(({ diff, ...meta }) => meta) } : {}),
     } : undefined;
     return {
@@ -684,7 +775,7 @@ export class TaskCoordinator {
     const task = this.find(c, id), lane = this.lane(c, task);
     if (!lane?.c) return { execution: { defaults: this.main.execution.defaults(c), active: this.main.execution.current(c, task.execution?.taskId), policies: [] }, id: null, messages: [], status: task.status, queue: [], runs: [], task: this.public(task), parallelTasks: this.list(c), checkpoints: {} };
     // The Plan's revision and suggestion come along, so the Plan beside a task's chat, such as the Plan chat (#162), stays current.
-    return { ...lane.broker.view(lane.c, options), task: this.public(task), parallelTasks: this.list(c), checkpoints: {}, boardRevision: c.boardRevision || 0, boardSuggest: c.boardSuggest ? (({ pid, pidStart, ...rest }) => rest)(c.boardSuggest) : null, boardSplits: (c.boardSplits || []).map(({ pid, pidStart, ...rest }) => rest) };
+    return { ...lane.broker.view(lane.c, options), task: this.public(task), parallelTasks: this.list(c), checkpoints: {}, boardRevision: c.boardRevision || 0, boardSuggest: c.boardSuggest ? (({ pid, pidStart, answers, ...rest }) => ({ ...rest, ...(answers ? { answered: true } : {}) }))(c.boardSuggest) : null, boardSplits: (c.boardSplits || []).map(({ pid, pidStart, ...rest }) => rest) };
   }
 
   // A task's own changes, reviewed by another agent from inside the task (#88). The reviewer reads a copy of the files the
@@ -709,6 +800,37 @@ export class TaskCoordinator {
     const broker = lane?.c ? lane.broker : this.main, conversation = lane?.c || c;
     if (!task.execution) throw fail('Refresh this task after its legacy policy has been restored.');
     return broker.execution.change(conversation, { ...input, taskId: task.execution.taskId });
+  }
+  // Flow ended while this task worked on Flow's say-so (src/board.mjs flowEnded): it carries on as a task you started in
+  // Normal, with the agent it's on. Its run finishes, and its tests, its review and its next subtask go on as for any card,
+  // but Flow decides nothing more for it: no handoff near a limit, no wait for a reset and no choosing an agent. Its own
+  // conversation is taken over first, which revokes what its run left pending (src/execution-policy.mjs change). The
+  // workspace's record of the policy and the task's token follow it, as the card's tests and review check that token.
+  // A run still starting, while Flow chooses its agent or before its agent's process is up, starts first, as a run already
+  // going would, and the task is taken over then: a start checks the policy once more just before the process, so a
+  // takeover in between would only fail the card. Once the process is up, the run has passed that check.
+  // Only a task with something going is taken over: one working, or with its lane open, as every task that worked or was
+  // looked at since Codeshi started has. One that finished before has nothing of Flow's pending, so it isn't opened for this.
+  leaveFlow(c, task) {
+    const id = task.execution?.taskId, policy = id ? this.main.execution.current(c, id) : null;
+    if (!policy || policy.mode !== 'flow' || ENDED.has(task.status) || ['lost', 'detached'].includes(task.status)) return false;
+    const open = this.lanes.get(task.id);
+    if (!open && !['running', 'blocked'].includes(task.status)) return false;
+    const lane = open || (task.conversationId ? this.lane(c, task) : null);
+    if (lane && !lane.c) lane.c = lane.broker.conversations.get(task.conversationId) || null;
+    const starting = lane?.broker.running;
+    if (starting && (starting.purpose === 'routing' || !starting.child)) {
+      setTimeout(() => { if (this.closed) return; try { this.leaveFlow(c, task); } catch (error) { console.error('Codeshi could not take a task over from Flow:', error.message); } }, 100).unref?.();
+      return true;
+    }
+    const own = lane?.c ? lane.broker.execution.current(lane.c, id) : null;
+    if (own?.mode === 'flow') lane.broker.execution.change(lane.c, { taskId: id, revision: own.revision, action: 'takeover' });
+    const after = own ? lane.broker.execution.current(lane.c, id) : null;
+    const next = after?.mode === 'normal' ? after : { ...executionConfig({ ...policy, mode: 'normal', override: null }), taskId: id, revision: Math.max(policy.revision, own?.revision || 0) + 1, authorization: { source: 'manual-takeover', at: new Date().toISOString() } };
+    if (lane?.c && !after) lane.broker.record(lane.c, { type: 'execution_policy', policy: next });
+    this.main.record(c, { type: 'execution_policy', policy: next });
+    this.update(c, task, { execution: { taskId: id, revision: next.revision } });
+    return true;
   }
 
   // Reading a file or diff associated with a task, whether from its active copy, kept branch, saved merge record or the merged folder.
@@ -895,7 +1017,8 @@ export class TaskCoordinator {
       applyPlan(task.repoRoot, plan);
       const count = plan.writes.length, changes = integrationChanges(plan.files);
       if (!quiet) this.main.message(c, 'system', count ? `Merged “${task.title}” into ${task.folderName}: ${count} file${count === 1 ? '' : 's'}.` : `“${task.title}” had nothing left to merge into ${task.folderName}.`);
-      this.finish(c, task, { status: 'integrated', integration: { files: count, at: new Date().toISOString(), changes, ...(plan.files.length > changes.length ? { totalFiles: plan.files.length } : {}) } });
+      // Past the files saved with their diffs, the names alone are kept, so work that builds on this starts with them all (mergedBefore).
+      this.finish(c, task, { status: 'integrated', integration: { files: count, at: new Date().toISOString(), changes, ...(plan.files.length > changes.length ? { totalFiles: plan.files.length, rest: plan.files.slice(changes.length, changes.length + MAX_INTEGRATION_REST).map(file => file.path) } : {}) } });
       if (count) noteActivity('merges');
       return { merged: count, task: this.public(task) };
     });
@@ -924,7 +1047,8 @@ export class TaskCoordinator {
   // Ending a task frees its working copy. The conversation stays, so what it did can still be read.
   finish(c, task, changes) {
     const lane = this.lanes.get(task.id);
-    this.update(c, task, { ...changes, reason: null, endedAt: task.endedAt || new Date().toISOString() });
+    // A reason given here is kept, such as why a card's task never started (src/board.mjs flowEnded).
+    this.update(c, task, { reason: null, ...changes, endedAt: task.endedAt || new Date().toISOString() });
     // A copy still being prepared is removed once that ends, so nothing is deleted from under it.
     if (task.worktree && task.repoRoot && fs.existsSync(task.repoRoot) && !this.preparing.has(task.id)) { try { removeWorktree(task.repoRoot, task.worktree, task.id, task.setup?.dependencies); } catch (error) { console.error('Codeshi could not remove a task’s working copy:', error.message); } }
     // Prompts queued in it go no further: what they would have worked on has gone.
@@ -939,7 +1063,7 @@ export class TaskCoordinator {
     const lists = await Promise.all(this.all().filter(({ task }) => task.conversationId).map(async ({ task }) => {
       const ledger = await readLedger(path.join(this.directory(task), 'journal', `${task.conversationId}.jsonl`), options);
       // A Plan card counts toward its group's total (#162), as a plan step counts toward its plan's.
-      return ledger.tasks.map(item => ({ ...item, parallelTask: task.id, folder: task.folderName, ...(task.plan ? { plan: { id: task.plan.id, part: 'step', stepId: task.plan.stepId, number: task.plan.number } } : task.board?.group ? { plan: { id: `group:${task.board.group}`, part: 'step', stepId: task.board.cardId } } : {}) }));
+      return ledger.tasks.map(item => ({ ...item, parallelTask: task.id, folder: task.folderName, ...(task.role || task.board?.role ? { role: task.role || task.board.role } : {}), ...(task.board?.files?.length ? { scopeFiles: task.board.files.length } : {}), ...(task.plan ? { plan: { id: task.plan.id, part: 'step', stepId: task.plan.stepId, number: task.plan.number } } : task.board ? { plan: { id: task.board.group ? `group:${task.board.group}` : `board:${task.board.run || task.board.cardId}`, part: 'step', stepId: task.board.cardId } } : {}) }));
     }));
     return lists.flat();
   }

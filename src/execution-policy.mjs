@@ -68,6 +68,8 @@ export class ExecutionPolicies {
         const queued = this.current(c, item.execution.taskId);
         if (queued && queued.taskId !== taskId) this.broker.record(c, { type: 'execution_policy', policy: { ...queued, mode: 'normal', automation: Object.fromEntries(actions.map(action => [action, false])), revision: queued.revision + 1, authorization: policy.authorization } });
       }
+      // Flow's Run Ready starts nothing more: its cards still waiting go back to Ready (src/board.mjs flowEnded).
+      this.broker.board?.flowEnded?.(c);
     }
     if (c.queue.some(item => item.routing) && !c.queuePaused) this.broker.queue.pause(c, 'You took over from Flow. Queued prompts will run with the agent shown on each when you resume.');
     for (const run of c.runs.filter(run => run.taskId === taskId)) this.broker.automaticReviews?.invalidate(c, run, 'Task authority changed. Choose the next review manually.');

@@ -40,9 +40,36 @@ export const highest = (usage, model) => {
 };
 
 export class HandoffMonitor {
-  constructor(broker, { usage = providerUsage, account = accountStatus, models = listModels, preferences = () => ({ threshold: 90, automatic: false }), firstCheckMs = HANDOFF_FIRST_CHECK_MS, checkMs = HANDOFF_CHECK_MS } = {}) {
-    Object.assign(this, { broker, usage, account, models, preferences, firstCheckMs, checkMs });
+  constructor(broker, { usage = providerUsage, account = accountStatus, models = listModels, localCatalog = null, preferences = () => ({ threshold: 90, automatic: false }), firstCheckMs = HANDOFF_FIRST_CHECK_MS, checkMs = HANDOFF_CHECK_MS } = {}) {
+    Object.assign(this, { broker, usage, account, models, localCatalog, preferences, firstCheckMs, checkMs });
     this.timers = new Map(); this.closed = false;
+  }
+
+  // Other parallel tasks actively running on the same agent across workspace lanes (#12).
+  activeTasksOn(provider, excludeRunId = null) {
+    const root = this.broker.main || this.broker;
+    let count = 0;
+    for (const broker of [root, ...(root.tasks?.openLanes() || [])]) {
+      const running = broker.running;
+      if (running && running.id !== excludeRunId && running.provider === provider && !running.local && !running.stopped) count++;
+    }
+    return count;
+  }
+
+  async verifiedLocalFallback({ needs = null } = {}) {
+    const query = this.localCatalog || this.broker.localCatalog;
+    if (typeof query !== 'function') return null;
+    try {
+      const catalog = await query();
+      if (catalog?.installed === false || catalog?.available === false) return null;
+      const models = (catalog?.models || []).filter(m => {
+        if (!m || !(m.id || m.name || m.model)) return false;
+        if (needs?.images && m.vision !== true) return false;
+        if (needs?.contextTokens && typeof m.contextWindow === 'number' && m.contextWindow > 0 && m.contextWindow < needs.contextTokens) return false;
+        return true;
+      });
+      return models.length ? { endpoint: catalog.endpoint || 'http://127.0.0.1:11434', models } : null;
+    } catch { return null; }
   }
 
   watch(run) {
@@ -88,6 +115,9 @@ export class HandoffMonitor {
     // Continue the original task, rather than classifying the synthetic "continue" prompt as a new request.
     const request = c.messages.find(message => message.role === 'user' && message.text !== continuationRequest &&
       (message.runId === run.taskId || c.taskOfRun?.[message.runId] === run.taskId)) || c.messages.find(message => message.role === 'user' && message.runId === run.id);
+    const outcomes = globalThis.relayRouting.measuredOutcomes?.(c?.runs) || null;
+    const neededSkills = this.broker.skills?.neededForTask?.(c, { text: request?.text || '', relation: 'continuation' }) || [];
+    const contextTokens = c.lastRun?.contextUsage?.used || c.lastRun?.contextUsage?.lastRequestInput || 0;
     for (const provider of this.broker.availableProviders().filter(value => value !== run.provider && !exclude.includes(value))) {
       const options = this.broker.usageOptions(provider);
       let account, usage, models;
@@ -104,11 +134,23 @@ export class HandoffMonitor {
       const allowedModels = models.map(row => row.id || row.model || row.value).filter(id => id && allowed(id));
       if (models.length ? !allowedModels.length : !allowed(null)) continue;
       const usualSpend = usualWindowSpend(c, provider);
-      candidates.push({ provider, models, billingSource: account.billingSource, usage, eligible: true, images: this.broker.imageConnection?.(c, provider, account), ...(models.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}) });
+      const activeTasks = this.activeTasksOn(provider, run.id);
+      const nativeSkills = provider === 'claude' && !this.broker.configuredBins?.claude && (provider === c.provider ? c.transport || 'auto' : c.transports?.claude || 'auto') !== 'cli';
+      const unsupportedSkills = this.broker.skills?.unsupportedFor?.(c, provider, { native: nativeSkills }) || [];
+      candidates.push({ provider, models, billingSource: account.billingSource, usage, eligible: true, images: this.broker.imageConnection?.(c, provider, account), ...(models.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}), ...(activeTasks ? { activeTasks } : {}), ...(outcomes ? { outcomes } : {}), ...(unsupportedSkills.length ? { unsupportedSkills } : {}) });
     }
-    const choice = globalThis.relayRouting.route({ text: request?.text || '', attachments: request?.attachments?.length || 0, needs: globalThis.relayRouting.taskNeeds(request?.attachments), assessment: run.routing?.assessment || null, mode, candidates, quotaThreshold: threshold });
+    const savedAssessment = run.routing?.assessment?.tier ? run.routing.assessment : null;
+    const tier = savedAssessment?.tier || run.routing?.tier;
+    const baseReason = savedAssessment?.reason || String(run.routing?.reason || '').split(' · ').find(part => part && !/^(Moved at a handoff|Lower model Tier|Best available|Low remaining|Room under|Fits before)/.test(part)) || '';
+    const assessment = savedAssessment || (['light', 'standard', 'deep'].includes(tier) ? { tier, ...(run.effort ? { effort: run.effort } : {}), ...(baseReason ? { reason: baseReason } : {}) } : null);
+    const needs = globalThis.relayRouting.taskNeeds(request?.attachments, {
+      ...(contextTokens >= 4000 ? { contextTokens } : {}),
+      ...(neededSkills.length ? { skills: neededSkills } : {}),
+    });
+    const choice = globalThis.relayRouting.route({ text: request?.text || '', attachments: request?.attachments?.length || 0, needs, assessment, mode, candidates, quotaThreshold: threshold });
     if (choice.error || choice.quota.state !== 'ok' || !atLimit && !choice.handoffLine?.fits) return null;
-    const { quota, bindingWindow, handoffLine, ...routing } = choice;
+    const { quota, bindingWindow, handoffLine, alternatives, assessment: _choiceAssessment, ...routing } = choice;
+    if (savedAssessment?.id && savedAssessment?.source) routing.assessment = savedAssessment;
     return { provider: choice.provider, model: choice.model, effort: choice.effort, routing, mode: run.mode, approvalPolicy: run.approvalPolicy,
       billingSource: 'subscription', usedPercent: quota.usedPercent, quota: quota.state, quotaEvidence: quota };
   }
@@ -117,9 +159,9 @@ export class HandoffMonitor {
     const threshold = this.policy(run).threshold;
     let best = null;
     for (const provider of this.broker.availableProviders().filter(value => value !== run.provider && !exclude.includes(value))) {
-      const model = c.models[provider] || null, options = this.broker.usageOptions(provider);
+      const model = c.models[provider] || null, effort = c.efforts?.[provider]?.[model || 'default'] ?? null, options = this.broker.usageOptions(provider);
       // Never offer a move the task's limits would refuse: the old agent is stopped before the new one starts (#87).
-      if (!this.broker.execution.allows(c, run.execution, { action: 'manual', provider, model }) || this.broker.budget.refusal(c, { task: { id: run.taskId, relation: 'continuation' }, provider, model, previousProvider: run.provider })) continue;
+      if (!this.broker.execution.allows(c, run.execution, { action: 'manual', provider, model, effort }) || this.broker.budget.refusal(c, { task: { id: run.taskId, relation: 'continuation' }, provider, model, previousProvider: run.provider })) continue;
       let usage = null; try { usage = await this.usage(provider, options); } catch {}
       this.observe(c, provider, usage);
       const assessment = assessQuota(usage, model, { threshold });
@@ -128,7 +170,7 @@ export class HandoffMonitor {
       if (!account?.installed || account.authenticated === false || !this.supportsWorkspace(provider, account, run)) continue;
       const binding = globalThis.relayRouting.bindingWindow(assessment);
       const spendability = binding ? binding.spendability : Math.max(0, 100 - (assessment.usedPercent ?? 100));
-      const candidate = { provider, model, mode: run.mode, approvalPolicy: run.approvalPolicy, billingSource: account.billingSource || 'unknown', usedPercent: assessment.usedPercent, quota: assessment.state, quotaEvidence: assessment, spendability };
+      const candidate = { provider, model, ...(effort ? { effort } : {}), mode: run.mode, approvalPolicy: run.approvalPolicy, billingSource: account.billingSource || 'unknown', usedPercent: assessment.usedPercent, quota: assessment.state, quotaEvidence: assessment, spendability };
       // Prefer subscription allowance, then the agent with the highest spendability.
       const rank = value => (value.billingSource === 'subscription' ? 0 : 2000) + (value.quota === 'ok' ? 1000 - value.spendability : 1000);
       if (!best || rank(candidate) < rank(best)) best = candidate;
@@ -167,7 +209,7 @@ export class HandoffMonitor {
     if (preferences.mode) {
       // A routed run moves by the same test that chose it (#12): kept while it fits under its mode's line, so a task
       // started past the line because no other agent fitted isn't moved at its first check.
-      const fit = globalThis.relayRouting.handoffFit(usage, model, { mode: preferences.mode, current: true, tier: run.routing?.tier || null, usual: usualWindowSpend(c, run.provider) });
+      const fit = globalThis.relayRouting.handoffFit(usage, model, { mode: preferences.mode, current: true, tier: run.routing?.tier || null, usual: usualWindowSpend(c, run.provider), activeTasks: this.activeTasksOn(run.provider, run.id) });
       if (!top || fit.fits || !['near', 'exhausted'].includes(fit.quota.state)) return;
     } else {
       const assessment = assessQuota(usage, model, { threshold: preferences.threshold, now: Date.now(), tier: run.routing?.tier || null });
@@ -220,7 +262,7 @@ export class HandoffMonitor {
     // The person agreed to the prompts they were shown.
     if (queueDigest !== undefined && queueDigest !== (offer.queue?.digest ?? null)) await stale('The queued prompts changed since this offer was made.');
     const current = await this.destination(c, run);
-    if (!current || current.provider !== offer.to.provider || current.model !== offer.to.model || current.effort !== offer.to.effort || current.mode !== offer.to.mode || current.approvalPolicy !== offer.to.approvalPolicy || current.billingSource !== offer.to.billingSource) await stale(`${to} is no longer available with the same settings.`, `${to} no longer had room, or the same model and access, when it was about to start`);
+    if (!current || current.provider !== offer.to.provider || current.model !== offer.to.model || (current.effort ?? null) !== (offer.to.effort ?? null) || current.mode !== offer.to.mode || current.approvalPolicy !== offer.to.approvalPolicy || current.billingSource !== offer.to.billingSource) await stale(`${to} is no longer available with the same settings.`, `${to} no longer had room, or the same model and access, when it was about to start`);
     if (automatic && current.quota !== 'ok') await stale(`${to}'s current allowance could not be confirmed.`, `${to}'s allowance could not be confirmed when it was about to start`);
     if (current.quota !== offer.to.quota) await stale(`${to}'s allowance reading changed.`, `${to}'s allowance reading changed when it was about to start`);
     if (offer.to.billingSource !== 'subscription' && (automatic || billingConfirmed !== true)) throw Object.assign(new Error(`${names[offer.to.provider]} is not billed to a subscription. Confirm its charges separately to hand off.`), { status: 409, offer, billingRequired: true });
@@ -235,7 +277,7 @@ export class HandoffMonitor {
       this.broker.execution.assert(c, offer.execution, { action: automatic ? 'handoff' : 'manual' });
       const queue = await this.moveQueue(c, offer.from.provider, offer.to, { covered: offer.queue?.items || [], billingConfirmed: queueBillingConfirmed === true, verifyExecution: () => this.broker.execution.assert(c, offer.execution, { action: automatic ? 'handoff' : 'manual' }) });
       this.broker.message(c, 'system', `${names[offer.from.provider]} was close to its usage limit, so ${automatic ? 'Codeshi handed' : 'you handed'} the task to ${names[offer.to.provider]}.${this.queueNote(queue, offer.from.provider, offer.to.provider)}`);
-      const result = this.broker.start(c, { provider: offer.to.provider, model: offer.to.model, ...(offer.to.routing ? { effort: offer.to.effort, routing: offer.to.routing } : {}), mode: offer.to.mode, approvalPolicy: offer.to.approvalPolicy, fresh: true, text: continuationRequest, billingConfirmed: offer.to.billingSource !== 'subscription' && billingConfirmed === true, requestId: `handoff-${offer.id}` }, { execution: offer.execution, executionAction: automatic ? 'handoff' : 'manual' });
+      const result = this.broker.start(c, { provider: offer.to.provider, model: offer.to.model, ...(offer.to.effort ? { effort: offer.to.effort } : {}), ...(offer.to.routing ? { routing: offer.to.routing } : {}), mode: offer.to.mode, approvalPolicy: offer.to.approvalPolicy, fresh: true, text: continuationRequest, billingConfirmed: offer.to.billingSource !== 'subscription' && billingConfirmed === true, requestId: `handoff-${offer.id}` }, { execution: offer.execution, executionAction: automatic ? 'handoff' : 'manual' });
       if (automatic) this.broker.emit('notify', { conversationId: c.id, kind: 'started', title: `Handed off to ${names[offer.to.provider]}`, body: `${names[offer.from.provider]} was close to its usage limit, so the task continues with ${names[offer.to.provider]}.` });
       return result;
     } finally {
@@ -259,7 +301,7 @@ export class HandoffMonitor {
         const result = await Promise.race([this.models(to.provider, this.broker.usageOptions(to.provider)), new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('Timed out')), 5000); timer.unref?.(); })]);
         // The size the prompt was queued with, not a fresh guess from its words (#12). It is still rated and routed with
         // fresh usage when it runs; this only places it with the agent that took over.
-        const tier = item.routing?.assessment?.tier || item.routing?.tier, assessment = ['light', 'standard', 'deep'].includes(tier) ? { tier, reason: item.routing.assessment?.reason || String(item.routing.reason || '').split(' · ').find(part => part && part !== 'Moved at a handoff') || 'as queued' } : null;
+        const tier = item.routing?.assessment?.tier || item.routing?.tier, assessment = ['light', 'standard', 'deep'].includes(tier) ? { tier, ...(item.routing?.assessment?.effort ? { effort: item.routing.assessment.effort } : {}), reason: item.routing.assessment?.reason || String(item.routing.reason || '').split(' · ').find(part => part && part !== 'Moved at a handoff') || 'as queued' } : null;
         return globalThis.relayRouting.routeTo(to.provider, result?.models || result?.data || result || [], { text: item.text, attachments: item.attachments?.length || 0, mode: item.routing?.mode, assessment }) || fallback;
       } catch { return fallback; }
     };
@@ -328,15 +370,24 @@ export class HandoffMonitor {
         // The person may have sent something while the prompts moved; theirs still goes ahead.
         if (this.closed || this.broker.running || c.lastRun?.id !== run.id || !this.broker.execution.allows(c, run.execution, { action: 'handoff' })) return done(true);
         this.broker.message(c, 'system', `${limit}, so Codeshi handed the task to ${names[to.provider]}.${this.queueNote(queue, run.provider, to.provider)}`);
-        this.broker.start(c, { provider: to.provider, model: to.model, ...(to.routing ? { effort: to.effort, routing: to.routing } : {}), mode: to.mode, approvalPolicy: to.approvalPolicy, fresh: true, text: continuationRequest, requestId: `limit-${run.id}` }, { limitChain: tried, execution: run.execution, executionAction: 'handoff' });
+        this.broker.start(c, { provider: to.provider, model: to.model, ...(to.effort ? { effort: to.effort } : {}), ...(to.routing ? { routing: to.routing } : {}), mode: to.mode, approvalPolicy: to.approvalPolicy, fresh: true, text: continuationRequest, requestId: `limit-${run.id}` }, { limitChain: tried, execution: run.execution, executionAction: 'handoff' });
         this.broker.emit('notify', { conversationId: c.id, kind: 'started', title: `Handed off to ${names[to.provider]}`, body: `${from} reached its usage limit, so the task continues with ${names[to.provider]}.` });
         return done(true);
       }
-      const providers = await this.subscriptionAgents();
+      const [providers, localFallback] = await Promise.all([this.subscriptionAgents(), this.verifiedLocalFallback()]);
       if (this.closed || this.broker.running || c.lastRun?.id !== run.id || !this.broker.execution.allows(c, run.execution, { action: 'handoff' })) return done(true);
-      if (!providers.length) return done(false);
+      if (localFallback) c.localFallback = { ...localFallback, runId: run.id };
+      if (!providers.length) {
+        if (localFallback) {
+          const modelName = localFallback.models[0].name || localFallback.models[0].id || localFallback.models[0].model;
+          this.broker.message(c, 'system', `${limit}, and no other cloud agent is connected. A verified local model (${modelName}) is ready to continue the task if you choose.`);
+          return done(true);
+        }
+        return done(false);
+      }
       this.broker.resume.schedule(c, { providers, execution: run.execution, mode: run.mode, approvalPolicy: run.approvalPolicy, limited: providers, requireQuota: true, routing: run.routing || null });
-      this.broker.message(c, 'system', `${limit}, and no other agent has confirmed room, so the task waits for a fresh allowance reading after a reset.`);
+      const localNote = localFallback ? ` A verified local model (${localFallback.models[0].name || localFallback.models[0].id || localFallback.models[0].model}) is also ready in Continue locally.` : '';
+      this.broker.message(c, 'system', `${limit}, and no other agent has confirmed room, so the task waits for a fresh allowance reading after a reset.${localNote}`);
       this.broker.emit('notify', { conversationId: c.id, kind: 'waiting', title: 'Waiting for a reset', body: `${from} reached its usage limit and no other agent has room. Codeshi will continue when one does.` });
       return done(true);
     } catch (error) {

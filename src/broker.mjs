@@ -27,7 +27,7 @@ import { applyBudgetRecord, finishingRun, isExplicitRetry, TaskBudgets } from '.
 import { noteActivity } from './activity.mjs';
 import { SkillCatalog, CLAUDE_PLUGIN } from './skills.mjs';
 import { fileChanges, toolInput } from './activity-format.mjs';
-import { AttachmentStore } from './attachments.mjs';
+import { AttachmentStore, attachmentLimits } from './attachments.mjs';
 import { processStart, reused } from './mutation-lock.mjs';
 import { parseReviewResult, publicReview, reviewPrompt } from './agent-review.mjs';
 import { validateAutomaticReview } from './automatic-review.mjs';
@@ -44,7 +44,7 @@ import { ExecutionPolicies, executionConfig } from './execution-policy.mjs';
 import { verificationForRun } from './verification.mjs';
 import { Board } from './board.mjs';
 import { FlowSplits, applySplitRecord } from './flow-split.mjs';
-import { applyOrchestration, checkPlanning, orchestrationAction, planningRequest, planningResult, restartedPlanning } from './orchestration.mjs';
+import { applyOrchestration, checkPlanning, invalidatedDownstream, orchestrationAction, planningRequest, planningResult, restartedPlanning } from './orchestration.mjs';
 
 export const PROVIDERS = ['codex', 'claude', 'gemini'];
 // Which file a command is, and which version of it: installing, moving or updating a CLI changes this.
@@ -307,7 +307,7 @@ export class Broker extends EventEmitter {
 
   empty(id) {
     return { id, title: 'New conversation', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', status: 'idle', messages: [], messageById: new Map(),
-      sessions: {}, models: {}, efforts: {}, effort: null, imports: {}, runs: [], transports: {}, requests: {}, reviewRequests: {}, reviews: [], orchestrations: [], snapshots: {}, rewinds: [], context: emptyContext(), model: null, transport: 'auto', settingsRevision: 0, lastRun: null, records: 0, activeRun: null, boardSuggest: null, boardSplits: [], resume: null, resumeEnded: null, queue: [], queuePaused: null, handoffOffer: null, retryOffer: null, routing: null, createdAt: null, updatedAt: null };
+      sessions: {}, models: {}, efforts: {}, effort: null, imports: {}, runs: [], transports: {}, requests: {}, reviewRequests: {}, reviews: [], orchestrations: [], boardArtifacts: {}, boardOutcomes: {}, snapshots: {}, rewinds: [], context: emptyContext(), model: null, transport: 'auto', settingsRevision: 0, lastRun: null, records: 0, activeRun: null, boardSuggest: null, boardSplits: [], resume: null, resumeEnded: null, queue: [], queuePaused: null, handoffOffer: null, retryOffer: null, routing: null, createdAt: null, updatedAt: null };
   }
 
   apply(c, record) {
@@ -369,10 +369,31 @@ export class Broker extends EventEmitter {
     // The task board (#132): cards live in the workspace chat's journal, beside the tasks they start.
     if (record.type === 'board_card') { c.board = [...(c.board || []), record.card]; c.boardRevision = record.seq; }
     if (record.type === 'board_card_update') { const card = c.board?.find(item => item.id === record.id); if (card) Object.assign(card, record.changes); c.boardRevision = record.seq; }
-    if (record.type === 'board_comment' || record.type === 'board_comment_remove') {
+    if (record.type === 'board_card_artifact') {
+      c.boardArtifacts ||= {};
+      c.boardArtifacts[record.cardId] = { cardId: record.cardId, taskId: record.taskId || null, role: record.role || null, kind: record.kind, content: record.content, revision: record.revision, recordedAt: record.at };
+      if (['contract', 'schema'].includes(record.kind)) {
+        const affected = new Set(invalidatedDownstream(c.board || [], record.cardId));
+        for (const item of c.board || []) {
+          if (!affected.has(item.id)) continue;
+          if (['review', 'done'].includes(item.column) || item.result) {
+            item.needsRecheck = true;
+            item.invalidatedBy = { cardId: record.cardId, kind: record.kind, revision: record.revision, at: record.at };
+          }
+        }
+      }
+      c.boardRevision = record.seq;
+    }
+    if (record.type === 'board_card_outcome') {
+      c.boardOutcomes ||= {};
+      c.boardOutcomes[record.cardId] = { cardId: record.cardId, taskId: record.taskId || null, outcome: record.outcome, status: record.status, reason: record.reason, ...(record.command ? { command: record.command } : {}), ...(record.accepted ? { accepted: true } : {}), ...(record.reviewStatus ? { reviewStatus: record.reviewStatus, reviewVerdict: record.reviewVerdict ?? null } : {}), at: record.at };
+      c.boardRevision = record.seq;
+    }
+    if (record.type === 'board_comment' || record.type === 'board_comment_remove' || record.type === 'board_comment_accept') {
       const card = c.board?.find(item => item.id === record.cardId);
       if (card) {
-        card.comments = record.type === 'board_comment' ? [...(card.comments || []), record.comment] : (card.comments || []).filter(item => item.id !== record.commentId);
+        // Accepting an agent's comment (#97) lets the agent doing the card be told it.
+        card.comments = record.type === 'board_comment' ? [...(card.comments || []), record.comment] : record.type === 'board_comment_accept' ? (card.comments || []).map(item => item.id === record.commentId ? { ...item, accepted: true, acceptedAt: record.at } : item) : (card.comments || []).filter(item => item.id !== record.commentId);
         card.revision = record.revision; card.updatedAt = record.comment?.at || record.at;
       }
       c.boardRevision = record.seq;
@@ -707,7 +728,7 @@ export class Broker extends EventEmitter {
 
   // With since, the messages changed after that record; an import can put messages anywhere, so one after it sends them all.
   view(c, { since = null, limit = null, before = null, toRun = null, toMessage = null } = {}) {
-    const { messageById, sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, quotaHistory, usageSeen, parallelTasks, board, boardSuggest, boardSplits, asyncQuestions, semanticObservations, contextRollovers, executionPolicies, executionDefault, executionMigrated, activeExecution, routingRequests, routingAssessment, routingPending, ...visible } = c;
+    const { messageById, sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, quotaHistory, usageSeen, parallelTasks, board, boardSuggest, boardSplits, boardArtifacts, boardOutcomes, asyncQuestions, semanticObservations, contextRollovers, executionPolicies, executionDefault, executionMigrated, activeExecution, routingRequests, routingAssessment, routingPending, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
     if (c.routingPending) { visible.status = 'running'; visible.activeRun = c.routingPending; visible.canAddToRun = false; }
     const contextFor = provider => contextControlView(c, provider, rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: c.routing?.mode || this.contextRouting() }));
@@ -775,7 +796,10 @@ export class Broker extends EventEmitter {
     const copy = this.guarded.find(folder => folder.copy), others = this.guarded.filter(folder => !folder.copy && !this.workspaces.some(root => same(root, folder.path)));
     if (!copy && !others.length) return null;
     const list = folders => folders.map(folder => `${folder.name} (${folder.path})`).join(', ');
-    const own = copy ? `This task works in its own copy of ${copy.name}, at ${copy.copy}, made from that folder's last commit. Paths in the request under ${copy.path} mean the same files in this copy: read and change them here, and run commands here. Codeshi refuses changes to the real ${copy.name} folder; the person reviews this copy's changes and merges them.` : `This task works directly in ${this.workspace} and changes only that folder.`;
+    // The work a task builds on is merged into the folder without a commit, so its copy has those files from the folder
+    // (task-coordinator.mjs copyFor). Its agent is told, or it would look for them in the folder it can't change.
+    const single = copy?.carried?.files === 1, carried = copy?.carried ? `The work this task builds on is merged into ${copy.name} but isn't in that commit, so this copy also has the ${single ? 'file' : `${copy.carried.files} files`} it changed, as ${single ? 'it is' : 'they are'} in ${copy.name} now (\`git diff --stat ${String(copy.carried.from).slice(0, 12)} ${String(copy.carried.base).slice(0, 12)}\` lists ${single ? 'it' : 'them'}). ` : '';
+    const own = copy ? `This task works in its own copy of ${copy.name}, at ${copy.copy}, made from that folder's last commit. ${carried}Paths in the request under ${copy.path} mean the same files in this copy: read and change them here, and run commands here. Codeshi refuses changes to the real ${copy.name} folder; the person reviews this copy's changes and merges them.` : `This task works directly in ${this.workspace} and changes only that folder.`;
     const one = others.length === 1;
     const rest = others.length ? ` It can read the workspace's other ${one ? 'folder' : 'folders'}, ${list(others)}, copy files out of ${one ? 'it' : 'them'} into this task's folder or a scratch folder, and run ${one ? 'its' : 'their'} builds, tests, type checks, linters and dev servers there, but Codeshi refuses changes there, such as edits, installs, formatting and Git commits: if something in ${one ? 'it' : 'them'} needs to change, say so in your reply instead.` : '';
     return own + rest;
@@ -817,6 +841,8 @@ export class Broker extends EventEmitter {
       this.execution.change(c, { taskId: active.taskId, revision: active.revision, action: 'takeover' });
     } else {
       this.execution.setDefault(c, { ...defaults, mode: routing ? 'flow' : 'normal', automation: undefined, routingMode: routing?.mode || 'smart', ...(!routing ? { override: null } : {}) }, { expectedRevision: input.executionRevision });
+      // Leaving Flow with no Flow task of its own still ends what Flow's Run Ready was trusted to start (src/board.mjs).
+      if (!routing) this.board?.flowEnded?.(c);
     }
     this.record(c, { type: 'routing', routing });
     return this.view(c, viewOptions);
@@ -970,10 +996,16 @@ export class Broker extends EventEmitter {
     if (!run?.routing) return null;
     const mode = run.routing.mode || 'smart';
     const request = run.message?.text ? run.message : c.messages.find(m => m.runId === run.id && m.role === 'user'), text = request?.text || '';
-    const assessment = run.routing.assessment || null;
+    const savedAssessment = run.routing.assessment?.tier ? run.routing.assessment : null;
+    const tier = savedAssessment?.tier || run.routing.tier;
+    const baseReason = savedAssessment?.reason || String(run.routing.reason || '').split(' · ').find(part => part && !/^(Moved at a handoff|Lower model Tier|Best available|Low remaining|Room under|Fits before)/.test(part)) || '';
+    const assessment = savedAssessment || (['light', 'standard', 'deep'].includes(tier) ? { tier, ...(run.effort ? { effort: run.effort } : {}), ...(baseReason ? { reason: baseReason } : {}) } : null);
     const allowApi = run.billingConfirmed === true;
     // The mode's handoff line, so the fallback never starts an agent the running task would leave at its first check (#12).
     const threshold = globalThis.relayRouting.handoffThresholds[globalThis.relayRouting.normalizeMode(mode)] ?? 90;
+    const outcomes = globalThis.relayRouting.measuredOutcomes?.(c?.runs) || null;
+    const neededSkills = this.skills?.neededForTask?.(c, { text, relation: 'continuation' }) || [];
+    const contextTokens = c.lastRun?.contextUsage?.used || c.lastRun?.contextUsage?.lastRequestInput || 0;
     const candidates = [];
     const providers = this.availableProviders();
     for (const provider of providers) {
@@ -995,10 +1027,17 @@ export class Broker extends EventEmitter {
       }
       if (models.length ? !allowedModels.length : !allowed(null)) continue;
       const usualSpend = usualWindowSpend(c, provider);
-      candidates.push({ provider, account, models: models.filter(m => !allowedModels.length || allowedModels.includes(m.id || m.model || m.value)), billingSource: account.billingSource, usage: provUsage, eligible: true, images: this.imageConnection(c, provider, account), ...(allowedModels.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}) });
+      const activeTasks = this.handoff?.activeTasksOn?.(provider, run.id) || 0;
+      const nativeSkills = provider === 'claude' && !this.configuredBins?.claude && (provider === c.provider ? c.transport || 'auto' : c.transports?.claude || 'auto') !== 'cli';
+      const unsupportedSkills = this.skills?.unsupportedFor?.(c, provider, { native: nativeSkills }) || [];
+      candidates.push({ provider, account, models: models.filter(m => !allowedModels.length || allowedModels.includes(m.id || m.model || m.value)), billingSource: account.billingSource, usage: provUsage, eligible: true, images: this.imageConnection(c, provider, account), ...(allowedModels.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}), ...(activeTasks ? { activeTasks } : {}), ...(outcomes ? { outcomes } : {}), ...(unsupportedSkills.length ? { unsupportedSkills } : {}) });
     }
     if (!candidates.length) return null;
-    const choice = globalThis.relayRouting.route({ text, attachments: request?.attachments?.length || 0, needs: globalThis.relayRouting.taskNeeds(request?.attachments), assessment, mode, candidates, current: failedProvider, allowApi, quotaThreshold: threshold });
+    const needs = globalThis.relayRouting.taskNeeds(request?.attachments, {
+      ...(contextTokens >= 4000 ? { contextTokens } : {}),
+      ...(neededSkills.length ? { skills: neededSkills } : {}),
+    });
+    const choice = globalThis.relayRouting.route({ text, attachments: request?.attachments?.length || 0, needs, assessment, mode, candidates, current: failedProvider, allowApi, quotaThreshold: threshold });
     if (!choice || choice.error || choice.quota?.state !== 'ok') return null;
     const chosenRow = candidates.find(item => item.provider === choice.provider);
     return {
@@ -1006,7 +1045,7 @@ export class Broker extends EventEmitter {
       model: choice.model,
       effort: choice.effort,
       steppedDown: choice.steppedDown || false,
-      routing: { mode, reason: choice.reason, tier: choice.tier },
+      routing: { mode, reason: choice.reason, tier: choice.tier, ...(savedAssessment ? { assessment: savedAssessment } : {}), ...(choice.escalation ? { escalation: choice.escalation } : {}) },
       usage: chosenRow?.usage || null,
       account: chosenRow?.account || null,
       quota: choice.quota
@@ -1025,10 +1064,31 @@ export class Broker extends EventEmitter {
     routing = review || local ? null : routingNote(routing);
     if (typeof text !== 'string' || !text.trim() || text.length > 100000) throw Object.assign(new Error('Enter a message between 1 and 100,000 characters.'), { status: 400 });
     if (typeof requestId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(requestId)) throw Object.assign(new Error('Invalid request ID.'), { status: 400 });
+    // Answering a planner's questions (before drafting, or to redraft) keeps the brief or files attached to the request it asked about.
+    if (orchestrate) {
+      const chats = this.mainConversation && this.mainConversation !== c ? [c, this.mainConversation] : [c];
+      let priorFiles = [];
+      if (typeof replaces === 'string') {
+        for (const chat of chats) {
+          const plan = chat.orchestrations?.find(item => item.id === replaces);
+          if (plan) { priorFiles = chat.messages.find(m => m.role === 'user' && m.orchestrationId === plan.id)?.attachments || []; break; }
+        }
+      } else if (c.orchestrations?.[0]?.status === 'questions') {
+        priorFiles = c.messages.find(m => m.role === 'user' && m.orchestrationId === c.orchestrations[0].id)?.attachments || [];
+      }
+      const carry = priorFiles.filter(file => !file.plan && file.name !== 'Workspace chat.md' && file.id && !attachmentIds.includes(file.id)).map(file => file.id);
+      if (carry.length) {
+        try {
+          const merged = [...carry, ...attachmentIds].slice(0, attachmentLimits.count);
+          this.attachments.select(merged);
+          attachmentIds = merged;
+        } catch { /* If a carried file is gone or the new message's own files fill the limit, keep the new message's files. */ }
+      }
+    }
     const attachments = this.attachments.select(attachmentIds);
     // A planning run plans from the text files attached to its message: a brief, a spec or requirements (#155). A Plan
     // attachment is the person's own plan of the work, not requirements, so it isn't named as one.
-    const documents = orchestrate ? attachments.filter(file => file.kind === 'text' && !file.plan).map(file => file.name) : [];
+    const documents = orchestrate ? attachments.filter(file => file.kind === 'text' && !file.plan && file.name !== 'Workspace chat.md').map(file => file.name) : [];
     // With the whole Plan attached, the planner changes that Plan rather than drafting a second one beside it (#162).
     const revising = orchestrate && attachments.some(file => file.plan?.whole && file.plan?.ids && !file.withheld);
     if (local && attachments.some(file => file.kind !== 'text')) throw Object.assign(new Error('This local connection supports text and code attachments. Remove image attachments or choose a cloud agent; your draft stays saved.'), { status: 400 });

@@ -16,6 +16,8 @@ A policy contains `version: 1`, `taskId`, `revision`, `mode`, `routingMode`, `au
 
 Pending handoff/retry offers and reset waits are invalidated. Routed queue decisions are revoked and paused for inspection; fixed queued prompts retain their explicit settings. Edit a routed prompt to choose a fixed model or clear its routing before resuming. Completed output, file changes and accounting stay available. No repair, reassignment, assessment or reviewer can start under the old revision.
 
+Taking control, or turning routing off, also ends what Flow started by itself: the cards of a Run Ready started in Flow and the parts of a message Flow split without asking (`flowEnded` in `src/board.mjs`). Those not yet started are cancelled with the reason and return to Ready. Each one working is taken over in its own lane and in the workspace record, and its task token moves to the new revision (`leaveFlow` in `src/task-coordinator.mjs`): its native turn finishes, its card tests and Plan review still run as an approved sequence, and later subtasks run with the agent it's on, while handoffs, reset waits and routing stop. A run still starting, while it is routed or before its process is up, is taken over once its process is up, because revoking it there would only fail the card. A split Flow made by itself is handed to the Plan at once. Splits you chose to run as tasks and cards run in Normal keep their own policies.
+
 ## Shared API
 
 `GET /api/conversations/:id` returns `execution.defaults`, `execution.active` and recent `execution.policies`. Lane conversations expose their own task policy. Desktop, paired phone and encrypted remote phone use the same backend routes.

@@ -396,3 +396,20 @@ test('a plan nobody planned and whose steps reported no tokens keeps its tokens 
   assert.equal(total.usage.runsWithTokens, 0);
   assert.equal(combineUsage([]).input, null);
 });
+
+test('context scope array and role stay in ledger exports when prompts and commands are excluded (#89)', () => {
+  const scope = [{ folder: 'api', files: ['pricing.mjs'] }, { folder: 'web', files: ['summary.mjs'] }];
+  const records = [
+    submission('spec', 0, { role: 'frontend', context: { bytes: 420, policy: 'task', sessionMode: 'fresh', scope } }, 'Secret prompt'),
+    { type: 'check', runId: 'spec', check: { status: 'passed', command: 'npm run secret-check' } },
+    end(1),
+  ];
+  const plain = ledgerFromRecords(records), detailed = ledgerFromRecords(records, { prompts: true });
+  assert.equal(plain.runs[0].role, 'frontend');
+  assert.deepEqual(plain.runs[0].context.scope, scope);
+  assert.deepEqual(Object.keys(plain.tasks[0].roles), ['frontend']);
+  assert.equal(JSON.stringify(plain).includes('Secret prompt'), false);
+  assert.equal(JSON.stringify(plain).includes('secret-check'), false);
+  assert.equal(detailed.tasks[0].prompt, 'Secret prompt');
+  assert.equal(detailed.runs[0].check.command, 'npm run secret-check');
+});

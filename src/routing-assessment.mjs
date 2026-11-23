@@ -148,11 +148,25 @@ export class RoutingDispatcher {
     return work;
   }
 
-  // What the message needs from a model beyond its size: images it carries (#12).
-  needs(input) { return globalThis.relayRouting.taskNeeds(this.broker.attachments.select(input.attachments || [])); }
+  // What the message needs from a model beyond its size: images it carries, context window tokens when substantial or
+  // measured, and skills the request invokes (#12).
+  needs(input, c = null) {
+    const files = this.broker.attachments.select(input.attachments || []);
+    const textBytes = Buffer.byteLength(String(input.text || '')) + files.reduce((sum, file) => sum + (file?.kind === 'text' ? (file.bytes || Buffer.byteLength(file.text || '')) : 0), 0);
+    const requestTokens = textBytes >= 16000 ? Math.ceil(textBytes / 4) : 0;
+    const reportedTokens = c?.lastRun?.contextUsage?.used || c?.lastRun?.contextUsage?.lastRequestInput || 0;
+    const contextTokens = Math.max(input.needs?.contextTokens || 0, requestTokens + reportedTokens);
+    const skills = c && this.broker.skills ? this.broker.skills.neededForTask(c, { text: input.text }) : [];
+    return globalThis.relayRouting.taskNeeds(files, {
+      ...(contextTokens >= 4000 ? { contextTokens } : {}),
+      ...(skills.length ? { skills } : {}),
+      ...(input.needs?.tools?.length ? { tools: input.needs.tools } : {}),
+    });
+  }
 
   rows(c, input, providers) {
     const broker = this.broker, policy = broker.budget.policy(c), multiple = broker.workspaces.length > 1;
+    const outcomes = globalThis.relayRouting.measuredOutcomes?.(c?.runs) || null;
     return providers.flatMap(provider => {
       const reading = this.readings.get(provider);
       if (!reading || reading.bin !== broker.usageOptions(provider).bin) return [];
@@ -161,7 +175,10 @@ export class RoutingDispatcher {
       broker.observeQuota(c, provider, usage);
       const eligible = account?.installed !== false && account?.authenticated !== false && (provider !== 'gemini' || ((input.mode !== 'read' && input.orchestrate !== true) || !antigravity) && (!multiple || (antigravity ? account?.capabilities?.additionalDirectories === true : broker.workspaces.length <= 6)));
       const usualSpend = usualWindowSpend(c, provider);
-      return [{ provider, models, usage, eligible: eligible && (!policy.allowedProviders || policy.allowedProviders.includes(provider)), account, bin, readAt: at, billingSource: account?.billingSource || 'unknown', images: broker.imageConnection?.(c, provider, account), allowedModels: policy.allowedModels?.[provider], ...(usualSpend ? { usualSpend } : {}) }];
+      const activeTasks = broker.handoff?.activeTasksOn?.(provider) || 0;
+      const nativeSkills = provider === 'claude' && !broker.configuredBins?.claude && (provider === c?.provider ? c?.transport || 'auto' : c?.transports?.claude || 'auto') !== 'cli';
+      const unsupportedSkills = broker.skills ? broker.skills.unsupportedFor(c, provider, { native: nativeSkills }) : [];
+      return [{ provider, models, usage, eligible: eligible && (!policy.allowedProviders || policy.allowedProviders.includes(provider)), account, bin, readAt: at, billingSource: account?.billingSource || 'unknown', images: broker.imageConnection?.(c, provider, account), allowedModels: policy.allowedModels?.[provider], ...(usualSpend ? { usualSpend } : {}), ...(activeTasks ? { activeTasks } : {}), ...(outcomes ? { outcomes } : {}), ...(unsupportedSkills.length ? { unsupportedSkills } : {}) }];
     });
   }
 
@@ -175,7 +192,7 @@ export class RoutingDispatcher {
     await settle(this.settleMs);
     let rows = this.rows(c, input, providers), current = c.lastRun?.provider, allowApi = c.routing?.allowApi === true || input.routing.allowApi === true;
     const allowNear = input.proceedWithNearQuota === true;
-    const needs = this.needs(input);
+    const needs = this.needs(input, c);
     let routed = globalThis.relayRouting.route({ text: input.text, attachments: input.attachments?.length || 0, needs, mode: input.routing.mode, candidates: rows, allowApi, allowNear });
     const keepsSession = () => !current || !providers.includes(current) || rows.some(row => row.provider === current && Date.now() - row.readAt < READING_LIFETIME_MS);
     if (!routed.error && routed.quota.state === 'ok' && keepsSession()) return rows;
@@ -365,7 +382,8 @@ export class RoutingDispatcher {
       // An explicitly previewed build/review workflow binds its builder and model. Respect that concrete choice while
       // assessing effort, rather than silently invalidating the review consent by switching to another builder.
       if (input.automaticReview) candidates = candidates.filter(row => row.provider === input.provider).map(row => ({ ...row, models: input.model ? row.models.filter(model => (model.id || model.model || model.value) === input.model) : [], ...(input.model ? { allowedModels: [input.model] } : {}) }));
-      const evaluate = list => override && list.length ? { provider: override.provider, model: override.model, effort: override.effort, mode: routingMode, tier: assessment.tier, reason: 'Your explicit task selection', selectedBy: 'you', quota: globalThis.relayRouting.assessQuota(list[0].usage, override.model, { threshold: 95 }) } : globalThis.relayRouting.route({ text: input.text, attachments, needs: this.needs(input), assessment, mode: routingMode, candidates: list, current: c.lastRun?.provider || c.provider, allowApi, allowNear });
+      const taskNeeds = this.needs(input, c);
+      const evaluate = list => override && list.length ? { provider: override.provider, model: override.model, effort: override.effort, mode: routingMode, tier: assessment.tier, reason: 'Your explicit task selection', selectedBy: 'you', quota: globalThis.relayRouting.assessQuota(list[0].usage, override.model, { threshold: 95 }) } : globalThis.relayRouting.route({ text: input.text, attachments, needs: taskNeeds, assessment, mode: routingMode, candidates: list, current: c.lastRun?.provider || c.provider, allowApi, allowNear });
       // A Plan review card (#89) first tries the agents that didn't build what it checks; when none of them can take it,
       // it runs on the best agent anyway, and the card says it wasn't independent.
       const avoid = Array.isArray(input.routing.avoid) ? input.routing.avoid.filter(provider => typeof provider === 'string') : [];
@@ -392,8 +410,17 @@ export class RoutingDispatcher {
           if (!choice.error && choice.quota.state === 'ok') break;
         }
       }
-      if (choice.error) throw fail(choice.error);
-      if (!confirmed(choice)) throw fail('Auto could not confirm fresh allowance for the assessed task. Refresh plan usage or choose a model yourself.');
+      if (choice.error || !confirmed(choice)) {
+        const localFallback = await broker.handoff?.verifiedLocalFallback?.({ needs: taskNeeds });
+        if (localFallback) {
+          c.localFallback = { ...localFallback, requestId: input.requestId };
+          const localName = localFallback.models[0].name || localFallback.models[0].id || localFallback.models[0].model;
+          const baseError = choice.error || 'Auto could not confirm fresh allowance for the assessed task. Refresh plan usage or choose a model yourself.';
+          throw Object.assign(fail(`${baseError} A verified local model (${localName}) is ready in Continue locally.`), { localFallback });
+        }
+        if (choice.error) throw fail(choice.error);
+        throw fail('Auto could not confirm fresh allowance for the assessed task. Refresh plan usage or choose a model yourself.');
+      }
       const row = candidates.find(item => item.provider === choice.provider);
       if (row?.billingSource !== 'subscription' && !input.billingConfirmed) throw fail('The final agent bills by use. Confirm billing or choose a subscription agent before sending.');
       // The parts were for the split only: the run keeps the rating.

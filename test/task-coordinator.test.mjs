@@ -11,7 +11,7 @@ import { captureReview, listReviewChanges, reviewFreshness } from '../src/agent-
 import { Broker } from '../src/broker.mjs';
 import { MutationCoordinator } from '../src/mutation-lock.mjs';
 import { createRelayServer } from '../src/server.mjs';
-import { applyPlan, checkCombined, folderIdentity, ignoredPaths, integrationPlan, markerLabels, ownCheck, pathsOverlap, planIsolation, prepareResolution, unrestricted } from '../src/task-isolation.mjs';
+import { applyPlan, checkCombined, createWorktree, folderIdentity, ignoredPaths, integrationPlan, markerLabels, ownCheck, pathsOverlap, planIsolation, prepareResolution, refreshWorktree, uncommittedCount, unrestricted } from '../src/task-isolation.mjs';
 import { stageChanges, unstageChanges, commitChanges } from '../src/workspace-commit.mjs';
 
 const fixture = fileURLToPath(new URL('./mock-cli.mjs', import.meta.url));
@@ -720,6 +720,131 @@ test('a dependency keeps its work in order, and a copy has to be merged before w
   assert.throws(() => env.broker.tasks.discard(env.c, after.id), /Stop this task/);
   env.release(env.task(after.id).scopePath); await finished(env, after);
   assert.throws(() => env.start('b', 'Later', { dependsOn: 'missing' }), /no longer here/);
+});
+
+// Merging writes to the folder without committing, and a copy is made from the last commit. So the work a task builds on
+// is brought into its copy from the folder, in a commit the copy starts from.
+const files = {
+  put: (folder, list) => { for (const [name, text] of Object.entries(list)) { const file = path.join(folder, name); if (text === null) fs.rmSync(file); else { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); } } },
+  read: (folder, name) => fs.existsSync(path.join(folder, name)) ? fs.readFileSync(path.join(folder, name), 'utf8') : null,
+};
+test('a copy starts with the folder’s version of the files its task builds on, and only those, and its changes are still only its own', { skip: noSymlinks }, t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-built-on-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { put, read } = files, repo = repository(path.join(root, 'repo'), { 'api.js': 'one\ntwo\nthree\n', 'old.js': 'old\n', 'mine.js': 'mine\n' });
+  fs.appendFileSync(path.join(repo, '.gitignore'), 'secret.env\nout/\n'); git(repo, 'commit', '-qam', 'ignore');
+  const head = git(repo, 'rev-parse', 'HEAD').trim(), identity = folderIdentity(repo);
+  // What an earlier card merged, uncommitted as a merge leaves it: a change, a new file in a new folder and a deletion.
+  put(repo, { 'api.js': 'one\nTWO merged\nthree\n', 'lib/new.js': 'new\n', 'old.js': null });
+  // The person's own work, which no card merged, and what a copy never has: ignored files, a link and a folder.
+  put(repo, { 'mine.js': 'mine, edited\n', 'draft.txt': 'draft\n', 'secret.env': 'KEY=1\n', 'out/shot.png': 'png' });
+  fs.symlinkSync(path.join(root, 'elsewhere'), path.join(repo, 'link')); fs.mkdirSync(path.join(repo, 'folder'));
+  const status = git(repo, 'status', '--porcelain'), copy = path.join(root, 'copy');
+  const made = createWorktree(identity, copy, 'built-on', ['api.js', 'lib/new.js', 'old.js', 'api.js', 'secret.env', 'out/shot.png', 'link', 'folder', '../outside.js', '.git/config', 'never.js', ':odd']);
+  assert.deepEqual(made.brought, ['api.js', 'lib/new.js', 'old.js']);
+  assert.equal(made.from, head); assert.equal(git(repo, 'rev-parse', `${made.base}^`).trim(), head, 'The copy starts from a commit of Codeshi’s own, on the folder’s last one.');
+  assert.deepEqual([read(copy, 'api.js'), read(copy, 'lib/new.js'), read(copy, 'old.js')], ['one\nTWO merged\nthree\n', 'new\n', null], 'What that work changed, added and deleted is in the copy.');
+  assert.deepEqual([read(copy, 'mine.js'), read(copy, 'draft.txt'), read(copy, 'secret.env'), read(copy, 'out/shot.png'), fs.existsSync(path.join(copy, 'link')), fs.existsSync(path.join(copy, 'folder'))], ['mine\n', null, null, null, false, false], 'Nothing else comes from the folder: not the person’s own changes, a file Git ignores or a link.');
+  assert.equal(git(copy, 'status', '--porcelain'), '', 'It is a commit there, so the copy shows only what its own task changes.');
+  assert.equal(git(repo, 'rev-parse', 'refs/codeshi/tasks/built-on/base').trim(), made.base);
+  assert.deepEqual([git(repo, 'status', '--porcelain'), git(repo, 'rev-parse', 'HEAD').trim(), git(repo, 'branch', '--list').trim().split('\n').length], [status, head, 1], 'The folder, its index and its branches are left alone.');
+  // The person is told how much the copy leaves out, without what it was given: a new folder is counted file by file.
+  assert.equal(uncommittedCount(repo), 6, 'api.js, old.js, mine.js, draft.txt, lib/ and the link.');
+  assert.equal(uncommittedCount(repo, made.brought), 3, 'mine.js, draft.txt and the link.');
+  put(repo, { 'lib/own.js': 'the person’s\n' });
+  assert.equal(uncommittedCount(repo, made.brought), 4, 'A file of the person’s own beside one the copy has still counts.');
+  put(repo, { 'lib/own.js': null });
+  // The task's work on top: merging it brings back only what the task itself changed, against the versions it began with.
+  put(copy, { 'api.js': 'one\nTWO merged\nthree\nfour\n', 'lib/own.js': 'own\n' });
+  git(copy, 'add', '-A'); git(copy, 'commit', '-qm', 'task');
+  const plan = integrationPlan({ root: repo, base: made.base, result: git(copy, 'rev-parse', 'HEAD').trim() });
+  assert.deepEqual(plan.files.map(file => [file.path, file.change, file.status]), [['api.js', 'update', 'clean'], ['lib/own.js', 'add', 'clean']]);
+  assert.deepEqual([plan.files[0].added, plan.files[0].removed], [1, 0], 'The earlier card’s change isn’t shown as this task’s.');
+  applyPlan(repo, plan);
+  assert.deepEqual([read(repo, 'api.js'), read(repo, 'lib/own.js'), read(repo, 'mine.js')], ['one\nTWO merged\nthree\nfour\n', 'own\n', 'mine, edited\n']);
+  // With nothing to bring, or only files that are as the last commit has them, a copy starts from that commit as before.
+  const plain = createWorktree(identity, path.join(root, 'plain'), 'plain'), same = createWorktree(identity, path.join(root, 'same'), 'same', ['.gitignore', 'never.js']);
+  assert.deepEqual([plain.base, plain.brought, same.base, same.brought], [head, [], head, []]);
+});
+
+test('a copy that is kept gets what the work before it merged since, and the task’s own changes stay', t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-refresh-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { put, read } = files, repo = repository(path.join(root, 'repo'), { 'export.js': 'a\nb\nc\n', 'both.js': '1\n2\n3\n4\n5\n', 'clash.js': 'x\n', 'gone.js': 'g\n', 'calm.js': 'k\n' });
+  const copy = path.join(root, 'copy'), made = createWorktree(folderIdentity(repo), copy, 'again');
+  // What the task did in its copy: tests of its own, and a change to two files the repair will change too.
+  put(copy, { 'both.js': 'ONE\n2\n3\n4\n5\n', 'clash.js': 'mine\n', 'own.test.js': 'test\n' });
+  // What a repair merged into the folder since: a fix, a new file and a deletion, and its changes to those two files.
+  put(repo, { 'export.js': 'a\nb\nC fixed\n', 'rows.js': 'rows\n', 'gone.js': null, 'both.js': '1\n2\n3\n4\nFIVE\n', 'clash.js': 'theirs\n' });
+  const named = ['export.js', 'rows.js', 'gone.js', 'both.js', 'clash.js', 'calm.js'], status = git(repo, 'status', '--porcelain');
+  const fresh = refreshWorktree({ root: repo, worktree: copy, id: 'again', base: made.base, files: named });
+  assert.deepEqual(fresh.files, ['both.js', 'export.js', 'gone.js', 'rows.js']);
+  assert.deepEqual([read(copy, 'export.js'), read(copy, 'rows.js'), read(copy, 'gone.js')], ['a\nb\nC fixed\n', 'rows\n', null], 'Files the task left alone are as the folder has them now.');
+  assert.equal(read(copy, 'both.js'), 'ONE\n2\n3\n4\nFIVE\n', 'A file changed on both sides, in lines that don’t touch, has both changes.');
+  assert.deepEqual([read(copy, 'clash.js'), read(copy, 'own.test.js'), read(copy, 'calm.js')], ['mine\n', 'test\n', 'k\n'], 'One changed in the same lines stays as the task has it, like the rest of its work.');
+  assert.equal(git(repo, 'rev-parse', 'refs/codeshi/tasks/again/base').trim(), fresh.base);
+  assert.deepEqual([git(repo, 'show', `${fresh.base}:export.js`), git(repo, 'show', `${fresh.base}:both.js`), git(repo, 'show', `${fresh.base}:clash.js`)], ['a\nb\nC fixed\n', '1\n2\n3\n4\nFIVE\n', 'x\n'], 'What it’s compared with holds the folder’s versions, except for the file left as it was.');
+  assert.equal(git(repo, 'status', '--porcelain'), status, 'Only the copy is written.');
+  // So merging the task still brings back only its own changes, and says where both sides changed the same lines.
+  git(copy, 'add', '-A'); git(copy, 'commit', '-qm', 'task');
+  const plan = integrationPlan({ root: repo, base: fresh.base, result: git(copy, 'rev-parse', 'HEAD').trim() });
+  assert.deepEqual(plan.files.map(file => [file.path, file.status, file.kind || null]), [['both.js', 'clean', null], ['clash.js', 'conflict', 'lines'], ['own.test.js', 'clean', null]]);
+  // Nothing new in the folder: nothing moves.
+  assert.deepEqual(refreshWorktree({ root: repo, worktree: copy, id: 'again', base: fresh.base, files: named }), { base: fresh.base, files: [] });
+});
+
+test('a file that can’t be brought into a copy stays as the last commit has it, and the others still come', t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-awkward-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { put, read } = files, repo = repository(path.join(root, 'repo'), { 'api.js': 'one\n', 'conf': 'c\n', 'lib/x.js': 'x\n' });
+  // A repository inside this one, whose files are its own; a folder where the last commit has a file; and the other way round.
+  fs.mkdirSync(path.join(repo, 'vendor')); git(path.join(repo, 'vendor'), 'init', '-q');
+  fs.rmSync(path.join(repo, 'conf')); fs.rmSync(path.join(repo, 'lib'), { recursive: true });
+  put(repo, { 'api.js': 'two\n', 'vendor/v.js': 'v\n', 'conf/app.json': '{}\n', 'lib': 'now a file\n' });
+  const copy = path.join(root, 'copy'), made = createWorktree(folderIdentity(repo), copy, 'awkward', ['vendor/v.js', 'conf', 'conf/app.json', 'api.js', 'lib', 'lib/x.js']);
+  assert.deepEqual(made.brought, ['api.js'], 'One path Git won’t take keeps only itself out.');
+  assert.deepEqual([read(copy, 'api.js'), read(copy, 'conf'), read(copy, 'lib/x.js'), fs.existsSync(path.join(copy, 'vendor'))], ['two\n', 'c\n', 'x\n', false]);
+});
+
+test('a task that waits for another starts in a copy with what that one merged, also through a task in between, and is told so', { skip: scriptCLIs }, async t => {
+  const env = setup(t, root => ({ a: repository(path.join(root, 'a'), { 'api.js': 'one\n', 'other.js': 'o\n' }), b: repository(path.join(root, 'b')) }), { policy: { maxConcurrent: 5 } });
+  const { read } = files, folder = env.folders.a, head = git(folder, 'rev-parse', 'HEAD').trim(), merge = async task => env.broker.tasks.integrate(env.c, task.id, { digest: env.broker.tasks.review(env.c, task.id).digest });
+  const first = hold(env, 'a', 'Hold A'); await working(env, first);
+  const second = env.start('a', 'Hold B', { dependsOn: first.id }), third = env.start('a', 'Hold C', { dependsOn: second.id }), elsewhere = env.start('b', 'Hold A', { dependsOn: first.id });
+  edit(env, first, 'api.js', 'two\n'); edit(env, first, 'lib/new.js', 'new\n'); await finish(env, first);
+  // The person's own work in the folder, which the copy leaves out as before.
+  fs.writeFileSync(path.join(folder, 'other.js'), 'o, edited\n'); fs.writeFileSync(path.join(folder, 'draft.txt'), 'draft\n');
+  await merge(first);
+  assert.equal(git(folder, 'rev-parse', 'HEAD').trim(), head, 'Merging commits nothing.');
+  // A merge of more files than are saved with their diffs keeps the names of the rest, which count as merged and stay off the page.
+  env.broker.tasks.update(env.c, env.task(first.id), { integration: { ...env.task(first.id).integration, rest: ['lib/more.js'] } });
+  assert.deepEqual(env.broker.tasks.mergedBefore(env.c, env.task(third.id), env.task(first.id).repoRoot).sort(), ['api.js', 'lib/more.js', 'lib/new.js']);
+  assert.deepEqual(Object.keys(env.broker.tasks.public(env.task(first.id)).integration).sort(), ['at', 'changes', 'files']);
+  await working(env, second);
+  const copy = env.task(second.id).scopePath;
+  assert.deepEqual([read(copy, 'api.js'), read(copy, 'lib/new.js'), read(copy, 'other.js'), read(copy, 'draft.txt')], ['two\n', 'new\n', 'o\n', null], 'It starts with what the first one merged, and without the person’s own changes.');
+  assert.deepEqual([env.task(second.id).carried, env.task(second.id).uncommitted], [{ from: head, files: 2 }, 2]);
+  assert.notEqual(env.task(second.id).base, head);
+  assert.deepEqual(env.broker.tasks.list(env.c).find(task => task.id === second.id).carried.files, 2, 'The page can say what the copy has.');
+  // Its agent is told the copy has that work, and how to list it, so it doesn't look for it in the folder it can't change.
+  const scope = env.captured(copy)[0].context.taskScope;
+  assert.ok(scope.includes(`made from that folder's last commit. The work this task builds on is merged into a but isn't in that commit, so this copy also has the 2 files it changed, as they are in a now (\`git diff --stat ${head.slice(0, 12)} ${env.task(second.id).base.slice(0, 12)}\` lists them). Paths in the request under`), scope);
+  assert.equal(git(copy, 'diff', '--stat', head.slice(0, 12), env.task(second.id).base.slice(0, 12)).trim().split('\n').length, 3, 'That command lists the two files and their total.');
+  // What it changes is still only its own, on top of the first one's.
+  edit(env, second, 'api.js', 'two\nthree\n'); await finish(env, second);
+  assert.deepEqual(env.broker.tasks.review(env.c, second.id).files.map(file => [file.path, file.change, file.status, file.added, file.removed]), [['api.js', 'update', 'clean', 1, 0]]);
+  await merge(second);
+  assert.equal(read(folder, 'api.js'), 'two\nthree\n');
+  // A task two steps on has both: what the second changed and what the first added.
+  await working(env, third);
+  assert.deepEqual([read(env.task(third.id).scopePath, 'api.js'), read(env.task(third.id).scopePath, 'lib/new.js'), env.task(third.id).carried.files], ['two\nthree\n', 'new\n', 2]);
+  // Another repository has none of it, and its copy starts from its own last commit as before.
+  await working(env, elsewhere);
+  assert.deepEqual([env.task(elsewhere.id).carried, env.task(elsewhere.id).base], [null, git(env.folders.b, 'rev-parse', 'HEAD').trim()]);
+  assert.ok(env.captured(env.task(elsewhere.id).scopePath)[0].context.taskScope.includes("made from that folder's last commit. Paths in the request under"));
+  for (const task of [third, elsewhere]) { env.release(env.task(task.id).scopePath); await finished(env, task); }
+  // Once the person commits that work, the last commit has it, so nothing is brought.
+  git(folder, 'add', '-A'); git(folder, 'commit', '-qm', 'the merged work');
+  const later = env.start('a', 'Hold B', { dependsOn: second.id }); await working(env, later);
+  assert.deepEqual([env.task(later.id).carried, env.task(later.id).base, read(env.task(later.id).scopePath, 'lib/new.js')], [null, git(folder, 'rev-parse', 'HEAD').trim(), 'new\n']);
+  env.release(env.task(later.id).scopePath); await finished(env, later);
 });
 
 test('every task shares the workspace’s limit, with the main run, and starts when a slot frees', { skip: scriptCLIs }, async t => {

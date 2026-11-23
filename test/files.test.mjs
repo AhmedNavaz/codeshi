@@ -46,7 +46,7 @@ test('attachment snapshots are immutable, bounded, content-verified and isolated
   assert.throws(()=>f.store.read('../../private'),/Invalid attachment/);
   assert.throws(()=>f.store.select([one.id,one.id]),/different files/);
   assert.throws(()=>describeAttachment('image.png',Buffer.from('not an image')),/format/);
-  assert.throws(()=>describeAttachment('file.pdf',Buffer.from('%PDF-1.2')),/format/);
+  assert.throws(()=>describeAttachment('file.pdf',Buffer.from('%PDF-1.2')),/doesn't preview PDFs/);
   assert.throws(()=>describeAttachment('big.txt',Buffer.alloc(65537,65)),/64 KB/);
   assert.throws(()=>f.store.put({name:'bad',data:'!base64'}),/Invalid/);
   const image=f.store.put({name:'screen.png',data:png});assert.equal(image.kind,'image');assert.equal(f.store.imageInput(image.id).data,png);

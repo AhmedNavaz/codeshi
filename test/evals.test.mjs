@@ -9,6 +9,7 @@ import { fixtures, fixtureById } from '../evals/fixtures.mjs';
 import { compareResults, parsePolicy, repeatedFileReads, reportMarkdown, runCheck, runFixture } from '../evals/harness.mjs';
 import { scriptCLIs } from './platform.mjs';
 import { checkPin, experimentInputs, fingerprint, validatePin } from '../evals/experiment.mjs';
+import { measuredComparisons, measuredMarkdown } from '../evals/compare.mjs';
 
 const cli = fileURLToPath(new URL('../evals/cli.mjs', import.meta.url));
 
@@ -60,7 +61,7 @@ test('recorded Claude routing uses the SDK assessor and CLI builder without losi
 });
 
 test('every kind of task the issue asks for has a fixture with a check the agent cannot see', () => {
-  assert.deepEqual(fixtures.map(fixture => fixture.id), ['small-edit', 'cross-folder', 'bug-repair', 'quota-handoff', 'context-heavy', 'memory-reuse', 'skill-procedure', 'skill-handoff', 'long-thread', 'long-chat', 'long-chat-short', 'long-task', 'review', 'view-states', 'api-endpoint', 'data-migration', 'accessible-toolbar', 'review-intent', 'test-writing', 'routing-assessment']);
+  assert.deepEqual(fixtures.map(fixture => fixture.id), ['small-edit', 'cross-folder', 'bug-repair', 'quota-handoff', 'context-heavy', 'memory-reuse', 'skill-procedure', 'skill-handoff', 'long-thread', 'long-chat', 'long-chat-short', 'long-task', 'review', 'view-states', 'api-endpoint', 'data-migration', 'accessible-toolbar', 'review-intent', 'test-writing', 'routing-assessment', 'single-agent-feature', 'specialist-team-feature']);
   for (const fixture of fixtures) {
     assert(fixture.check || fixture.checkReply, fixture.id);
     assert(fixture.rubric, fixture.id);
@@ -399,4 +400,64 @@ test('CLI repeats a saved pin, rejects overrides and drift, and never implies li
   assert.match(run('--pin', 'live.json', '--live').stderr, /State a budget/);
   for (const invalid of ['Infinity', '-1', '1.5']) assert.equal(run('--pin', 'live.json', '--live', '--max-runs', invalid).status, 2);
   assert.equal(run('--pin', file, '--repeat', '-1').status, 2);
+});
+
+test('specialist-team benchmark runs contract -> parallel specialists -> QA, enforces team budgets, and compares against single-agent baseline (#89)', { skip: scriptCLIs }, async t => {
+  const single = await runFixture(fixtureById('single-agent-feature'), parsePolicy({ agent: 'codex' }));
+  assert.equal(single.failure, undefined);
+  assert.equal(single.check.passed, true);
+  assert.equal(single.outcome.firstAttemptSuccess, true);
+  assert.equal(single.coordination, undefined);
+
+  const budget = { maxRuns: 4, runs: 0, tokens: 0 };
+  const team = await runFixture(fixtureById('specialist-team-feature'), parsePolicy({ agent: 'codex', to: 'claude' }), { budget });
+  assert.equal(team.failure, undefined);
+  assert.equal(team.check.passed, true, JSON.stringify(team.check));
+  assert.equal(team.outcome.firstAttemptSuccess, true);
+  assert.equal(team.outcome.verifiedCompletion, true);
+  assert.equal(team.outcome.missingUsage, 0);
+  assert.equal(budget.runs, 4);
+  assert.deepEqual(team.coordination, {
+    cards: 4,
+    cardsDone: 4,
+    contractsPublished: 1,
+    outcomesRecorded: 4,
+    invalidations: 0,
+    handoffs: 3,
+    worktreesIntegrated: 4,
+    repairRounds: 0,
+    plans: 1,
+  });
+  assert.deepEqual(Object.keys(team.accounting.roles).sort(), ['backend', 'frontend', 'qa']);
+  assert.equal(team.accounting.roles.backend.runs, 2);
+  assert.equal(team.accounting.roles.frontend.runs, 1);
+  assert.equal(team.accounting.roles.qa.runs, 1);
+  assert.equal(team.plans.length, 1);
+  assert.equal(team.plans[0].id, 'group:Promo feature');
+  assert.equal(team.plans[0].steps, 4);
+
+  // Team budget reserves all cards up front and skips before starting when maxRuns is too small.
+  const tooSmall = { maxRuns: 3, runs: 0, tokens: 0 };
+  const skipped = await runFixture(fixtureById('specialist-team-feature'), parsePolicy({ agent: 'codex' }), { budget: tooSmall });
+  assert.equal(skipped.skipped, 'budget');
+  assert.equal(skipped.runs.length, 0);
+  assert.equal(tooSmall.runs, 0);
+
+  // Report & team comparison preset include coordination metrics without breaking existing formatting.
+  assert.match(reportMarkdown(compareResults([team])), /\| Fixture \/ policy \| Cards done \| Contracts \| Outcomes \| Handoffs \| Integrated \| Repairs \|/);
+  const compared = measuredComparisons([single, team], { preset: 'team' });
+  assert.equal(compared.length, 1);
+  assert.equal(compared[0].baseline, 'single-agent-feature');
+  assert.equal(compared[0].routed, 'specialist-team-feature');
+  assert.equal(compared[0].coordination.cardsDone, 4);
+  assert.match(measuredMarkdown(compared), /\| Comparison \| Agent \| Cards done \| Contracts \| Outcomes \| Handoffs \| Integrated \| Repairs \|/);
+
+  const results = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-eval-team-'));
+  t.after(() => fs.rmSync(results, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(results, 'single.json'), JSON.stringify(single));
+  fs.writeFileSync(path.join(results, 'team.json'), JSON.stringify(team));
+  const cliOut = spawnSync(process.execPath, [cli, 'compare', '--preset', 'team'], { encoding: 'utf8', env: { ...process.env, CODESHI_EVAL_RESULTS: results } });
+  assert.equal(cliOut.status, 0, cliOut.stderr);
+  assert.match(cliOut.stdout, /single-agent-feature → specialist-team-feature/);
+  assert.match(cliOut.stdout, /\| 4\.0 \/ 4 \| 1\.0 \| 4\.0 \| 3\.0 \| 4\.0 \| 0\.0 \|/);
 });

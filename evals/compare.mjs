@@ -7,6 +7,10 @@ import { compare, METHOD } from '../src/smart-results.mjs';
 import { fingerprint, observedModels } from './experiment.mjs';
 
 export const MEASURED = Object.freeze({ ...METHOD, minTasks: 3, minVerified: 2, minPerSize: 3, minCheckedShare: 1 });
+export const COMPARISON_PRESETS = Object.freeze({
+  routing: { baseline: 'small-edit', routed: 'routing-assessment' },
+  team: { baseline: 'single-agent-feature', routed: 'specialist-team-feature' },
+});
 
 // Only what makes two fixtures the same task: the repository, the checks, the agent family, the context policy and the
 // engine. The routing policy and recorded traces differ by design.
@@ -21,7 +25,10 @@ export function evalRow(result, size) {
     workingMs: outcome.workingMs || 0, newTokens: complete ? usage.input + usage.output + (usage.cacheWrite || 0) : null, providers: [...new Set(observedModels(result.runs || []).map(agent => agent.provider))].sort() };
 }
 
-export function measuredComparisons(results, { baseline = 'small-edit', routed = 'routing-assessment', method = MEASURED } = {}) {
+export function measuredComparisons(results, { preset = null, baseline = null, routed = null, method = MEASURED } = {}) {
+  const selected = (preset && COMPARISON_PRESETS[preset]) || COMPARISON_PRESETS.routing;
+  baseline = baseline || selected.baseline;
+  routed = routed || selected.routed;
   const usable = results.filter(result => !result.skipped && !result.failure && result.experiment?.version === 1);
   const cohorts = new Map();
   for (const result of usable) {
@@ -34,7 +41,17 @@ export function measuredComparisons(results, { baseline = 'small-edit', routed =
   return [...cohorts.values()].map(cohort => {
     const size = `${baseline}→${routed}`;
     const result = compare(cohort.routed.map(item => evalRow(item, size)), cohort.baseline.map(item => evalRow(item, size)), method);
-    return { baseline, routed, live: cohort.live, provider: cohort.provider, repeats: { baseline: cohort.baseline.length, routed: cohort.routed.length }, ...result };
+    const coordinated = cohort.routed.filter(item => item.coordination);
+    const coordination = coordinated.length ? {
+      cards: coordinated[0].coordination.cards,
+      cardsDone: coordinated.reduce((sum, item) => sum + (item.coordination.cardsDone || 0), 0) / coordinated.length,
+      contractsPublished: coordinated.reduce((sum, item) => sum + (item.coordination.contractsPublished || 0), 0) / coordinated.length,
+      outcomesRecorded: coordinated.reduce((sum, item) => sum + (item.coordination.outcomesRecorded || 0), 0) / coordinated.length,
+      handoffs: coordinated.reduce((sum, item) => sum + (item.coordination.handoffs || 0), 0) / coordinated.length,
+      worktreesIntegrated: coordinated.reduce((sum, item) => sum + (item.coordination.worktreesIntegrated || 0), 0) / coordinated.length,
+      repairRounds: coordinated.reduce((sum, item) => sum + (item.coordination.repairRounds || 0), 0) / coordinated.length,
+    } : null;
+    return { baseline, routed, live: cohort.live, provider: cohort.provider, repeats: { baseline: cohort.baseline.length, routed: cohort.routed.length }, ...result, ...(coordination ? { coordination } : {}) };
   });
 }
 
@@ -49,5 +66,13 @@ export function measuredMarkdown(rows) {
     lines.push(`| ${row.baseline} → ${row.routed} | ${row.provider || 'unknown'} | ${row.live ? 'live' : 'recorded'} | ${row.repeats.baseline} / ${row.repeats.routed} | ${row.status}${row.missing?.length ? ` (${row.missing.map(item => `${item.need} ${item.have}/${item.want}`).join(', ')})` : ''} | ${quality ? `${pct(quality.verifiedShare.baseline)} / ${pct(quality.verifiedShare.routed)}` : 'n/a'} | ${per(time)} | ${pct(time?.relative)} | ${range(time)} | ${per(tokens)} | ${pct(tokens?.relative)} | ${range(tokens)} |`);
   }
   lines.push('', 'Difference is manual minus routed, as a share of manual: positive means routed used less per verified run. Failed runs count in usage. A range that includes zero is no clear difference, and a lower routed verified share than manual (by more than 5 points) is a quality regression, not a saving. Recorded runs replay saved traces: they check the arithmetic and accounting, not live efficiency. Only live results with enough repeats are evidence, and only for this fixture and agent.');
+  const coordinated = rows.filter(row => row.coordination);
+  if (coordinated.length) {
+    lines.push('', '| Comparison | Agent | Cards done | Contracts | Outcomes | Handoffs | Integrated | Repairs |', '| --- | --- | --- | --- | --- | --- | --- | --- |');
+    for (const row of coordinated) {
+      const coord = row.coordination;
+      lines.push(`| ${row.baseline} → ${row.routed} | ${row.provider || 'unknown'} | ${coord.cardsDone.toFixed(1)} / ${coord.cards} | ${coord.contractsPublished.toFixed(1)} | ${coord.outcomesRecorded.toFixed(1)} | ${coord.handoffs.toFixed(1)} | ${coord.worktreesIntegrated.toFixed(1)} | ${coord.repairRounds.toFixed(1)} |`);
+    }
+  }
   return lines.join('\n') + '\n';
 }

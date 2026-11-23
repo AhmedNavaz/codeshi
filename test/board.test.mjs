@@ -10,10 +10,11 @@ import { scriptCLIs } from './platform.mjs';
 import { Broker } from '../src/broker.mjs';
 import { MutationCoordinator } from '../src/mutation-lock.mjs';
 import { createRelayServer } from '../src/server.mjs';
-import { LIMITS, planChanges, openQuestions } from '../src/board.mjs';
+import { AGENT_COMMENTS, LIMITS, commentItems, planChanges, openQuestions } from '../src/board.mjs';
 import { TaskBudgets } from '../src/task-budget.mjs';
 import { TaskCoordinator } from '../src/task-coordinator.mjs';
 import { openPlan, parsePlan, parseSuggest, planningRequest } from '../src/orchestration.mjs';
+import { summarizePlans } from '../src/task-ledger.mjs';
 import { prepareContext } from '../src/context.mjs';
 
 // The task board (#132, first stage): cards you write and run by hand, each run an ordinary task (#88).
@@ -229,6 +230,78 @@ test('a card that saves files Git ignores waits for its folder rather than work 
   assert.equal(env.task(tasks[notes.id]).mode, 'direct', 'It works in the folder itself.');
 });
 
+// A card works in a copy made from the last commit, and merging a card commits nothing. So the cards a card waits for
+// would be missing from its copy: their files are brought into it from the folder (task-coordinator.mjs before).
+// What the mock agent does for each card is found by the card's title at the start of its request, followed by a line
+// break: a card's request also names, in quotes, the cards it builds on and the cards after it.
+function chain(t, scripts, { ignore = '' } = {}) {
+  const env = setup(t), folder = env.folder('a'), file = path.join(folder, '.mock-scenarios.json');
+  env.broker.tasks.tests = { saved: () => null };
+  const own = Object.fromEntries(Object.entries(scripts).map(([key, value]) => [key.startsWith('~') ? `${key}\n` : key, value]));
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), ...own }));
+  if (ignore) fs.appendFileSync(path.join(folder, '.gitignore'), ignore);
+  git(folder, 'commit', '-qam', 'script');
+  const taskOf = card => env.task(env.card(card.id).task);
+  return { env, folder, taskOf, head: git(folder, 'rev-parse', 'HEAD').trim(),
+    read: (place, name) => fs.existsSync(path.join(place, name)) ? fs.readFileSync(path.join(place, name), 'utf8') : null,
+    started: card => until(() => { const task = taskOf(card); return task?.scopePath && env.captured(task.scopePath).length ? task : null; }, `“${card.title}” to start`),
+    inReview: card => until(() => column(env, card) === 'review' && taskOf(card)?.stepCheck?.status === 'done', `“${card.title}” to reach Review`),
+    merge: card => env.broker.tasks.integrate(env.c, taskOf(card).id, { digest: env.broker.tasks.review(env.c, taskOf(card).id).digest }) };
+}
+
+test('a card starts with what the cards it waits for merged, in this run or an earlier one, and a card sent back with what it merged itself (#162)', { skip: scriptCLIs }, async t => {
+  const { env, folder, taskOf, head, read, started, inReview, merge } = chain(t, {
+    '~Write the docs': { behavior: 'hold', text: 'Wrote the docs.' },
+    '~Build the page': { behavior: 'hold', text: 'Built the page.' },
+    '~Build the API': { text: 'Built the API.', write: { 'api.js': 'api\n' } },
+  });
+  const api = env.add({ title: 'Build the API', column: 'ready' }), page = env.add({ title: 'Build the page', column: 'ready', dependsOn: [api.id] }), docs = env.add({ title: 'Write the docs', column: 'ready', dependsOn: [page.id] });
+  // An earlier run: the API card alone, merged and accepted. Merging commits nothing.
+  env.board.run(env.c, { ids: [api.id] });
+  await inReview(api); await merge(api); env.board.accept(env.c, api.id);
+  assert.deepEqual([column(env, api), git(folder, 'rev-parse', 'HEAD').trim(), git(folder, 'status', '--porcelain')], ['done', head, '?? api.js\n']);
+  // A later run: the page waits for the API on the Plan, though its task waits for no task of this run.
+  env.board.run(env.c, { ids: [page.id] });
+  const first = await started(page), sent = env.captured(first.scopePath)[0].context;
+  assert.deepEqual([first.dependsOn, first.mode, read(first.scopePath, 'api.js'), first.carried], [null, 'worktree', 'api\n', { from: head, files: 1 }]);
+  assert.match(sent.currentRequest, /- “Build the API”\n {2}Its changes were merged into the folder\.\n {2}Files it changed: api\.js/);
+  assert.ok(sent.taskScope.includes('so this copy also has the file it changed, as it is in a now (`git diff --stat '), sent.taskScope);
+  // The page's own work is merged, and the card is then sent back: its next run carries on from what it merged.
+  fs.writeFileSync(path.join(first.scopePath, 'page.js'), 'page\n'); env.release(first.scopePath);
+  await inReview(page);
+  assert.deepEqual(env.broker.tasks.review(env.c, first.id).files.map(file => file.path), ['page.js'], 'Its changes are only its own, not the API card’s.');
+  await merge(page);
+  env.board.sendBack(env.c, page.id, { reason: 'Add a footer.' });
+  env.board.run(env.c, { ids: [page.id, docs.id] });
+  const second = await started(page);
+  assert.notEqual(second.id, first.id);
+  assert.deepEqual([read(second.scopePath, 'api.js'), read(second.scopePath, 'page.js'), second.carried.files], ['api\n', 'page\n', 2]);
+  fs.writeFileSync(path.join(second.scopePath, 'page.js'), 'page\nfooter\n'); env.release(second.scopePath);
+  await inReview(page);
+  assert.deepEqual(env.broker.tasks.review(env.c, second.id).files.map(file => [file.path, file.change, file.status]), [['page.js', 'update', 'clean']], 'It changed the file it merged before, rather than adding it again beside the folder’s.');
+  await merge(page);
+  // Two cards on, the docs card has all of it: the API from the earlier run, and the page as its second run left it.
+  const third = await started(docs);
+  assert.deepEqual([read(third.scopePath, 'api.js'), read(third.scopePath, 'page.js'), third.carried.files], ['api\n', 'page\nfooter\n', 2]);
+  env.release(third.scopePath); await inReview(docs);
+  assert.equal(git(folder, 'rev-parse', 'HEAD').trim(), head, 'Nothing was committed along the way.');
+});
+
+test('a card after one that worked in the folder itself starts with the files that one changed, and without what Git ignores (#162)', { skip: scriptCLIs }, async t => {
+  const { env, taskOf, read, started } = chain(t, {
+    '~Use the notes': { behavior: 'hold', text: 'Used them.' },
+    '~Write the launch notes': { text: 'Wrote the notes.', write: { 'README.md': 'Launch\n', 'output/notes.md': 'notes\n' }, changes: [{ path: 'README.md', kind: 'add' }, { path: 'output/notes.md', kind: 'add' }] },
+  }, { ignore: 'output/\n' });
+  // A card that saves a file Git ignores works in the folder, as a copy would lose it. The card after it works in a copy.
+  const notes = env.add({ title: 'Write the launch notes', column: 'ready', files: ['output/notes.md', 'README.md'] }), after = env.add({ title: 'Use the notes', column: 'ready', dependsOn: [notes.id] });
+  env.board.run(env.c, { ids: [notes.id, after.id] });
+  const task = await started(after);
+  assert.deepEqual([taskOf(notes).mode, task.mode], ['direct', 'worktree']);
+  assert.deepEqual([read(task.scopePath, 'README.md'), read(task.scopePath, 'output/notes.md'), task.carried.files], ['Launch\n', null, 1]);
+  env.release(task.scopePath);
+  await until(() => column(env, after) === 'review', 'the second card to finish');
+});
+
 test('a card whose copy changed nothing is accepted without merging, and a discarded copy keeps the card in Review', { skip: scriptCLIs }, async t => {
   const env = setup(t);
   env.broker.start(env.c, { text: 'Hold main', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }); const main = env.broker.running;
@@ -381,6 +454,87 @@ test('a card’s comments say who wrote them and when, reach the agent on its ne
   assert.equal(env.card(card.id).revision, 10);
 });
 
+test('a reply’s “Comments for other cards” are read one per item, up to the next heading, and one that says none is none', () => {
+  assert.deepEqual(commentItems('Moved the API to v2.\n\n## Comments for other cards\n- “Build the page”: totals are `total_cents` now.\n  They’re integers.\n- **QA**: try an empty cart.\n\nThat’s all.\n\n## Questions for you\n- Keep v1?'),
+    ['“Build the page”: totals are `total_cents` now.\nThey’re integers.', '**QA**: try an empty cart.']);
+  assert.deepEqual(commentItems('**Comments for other cards:**\n1. Release: ship the config first.\n2) QA — check the totals.'), ['Release: ship the config first.', 'QA — check the totals.']);
+  assert.deepEqual(commentItems('Comments for other cards: - “QA”: check totals'), ['“QA”: check totals']);
+  assert.deepEqual(commentItems('Done.\n\nComments for other cards: none.'), []);
+  assert.deepEqual(commentItems('### Comments for other cards\nNo comments.'), []);
+  assert.deepEqual(commentItems('Done.\n\n## Comments\n- QA: x'), [], 'Only the heading it was asked for counts.');
+  assert.deepEqual(commentItems('## Comments for other cards\n- QA: x\n\n```json\n{"verdict":"pass"}\n```'), ['QA: x'], 'A review’s verdict ends it.');
+});
+
+test('a card’s agent leaves comments on the cards after it, and the agent doing one is told only those you accept (#97)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  env.broker.tasks.tests = { saved: () => null };
+  const api = env.add({ title: 'Agree the API', column: 'ready' });
+  const page = env.add({ title: 'Build the checkout page', dependsOn: [api.id] });
+  const qa = env.add({ title: 'QA', dependsOn: [page.id] });
+  const secret = env.add({ title: 'Secret pricing', dependsOn: [api.id] });
+  env.board.edit(env.c, secret.id, { closed: true });
+  const readme = env.add({ title: 'Write the README' });
+  // Told which cards come after it, nearest first, and how to comment on them; never a card closed to agents.
+  const asked = env.board.prompt(env.c, env.card(api.id));
+  assert.match(asked, /Other agents do the cards after this one: “Build the checkout page”, “QA”\. If you learned something whoever does one of them should know[\s\S]*heading “Comments for other cards”/);
+  assert.doesNotMatch(asked, /Secret pricing/);
+  assert.doesNotMatch(env.board.prompt(env.c, env.card(readme.id)), /Comments for other cards/, 'A card with none after it isn’t asked.');
+  env.script(api, null, ['Agreed the API: v2, with prices in cents.', '', '## Comments for other cards',
+    '- “Build the checkout page”: totals are `total_cents` now, as integers.', '- **QA**: try an empty cart too.',
+    '- Secret pricing: use the 2027 prices.', '- Agree the API: done.', '- “No such card”: hello.', '- Write the README — mention v2.'].join('\n'));
+  const { tasks } = env.board.run(env.c, { ids: [api.id] });
+  await until(() => column(env, api) === 'review', 'the card to finish');
+  const task = env.task(tasks[api.id]), from = comment => comment.by;
+  const [onPage] = env.board.comments(env.c, page.id), [onQa] = env.board.comments(env.c, qa.id);
+  assert.equal(onPage.text, 'totals are `total_cents` now, as integers.');
+  assert.deepEqual([from(onPage).kind, from(onPage).provider, from(onPage).cardId, from(onPage).taskId, Boolean(from(onPage).runId), 'model' in from(onPage), onPage.accepted], ['agent', 'codex', api.id, task.id, true, true, undefined], 'It says which agent and model wrote it, and on which card.');
+  assert.equal(onQa.text, 'try an empty cart too.');
+  assert.equal(env.board.comments(env.c, readme.id)[0].text, 'mention v2.', 'Any card open to agents can be named.');
+  assert.deepEqual([env.board.comments(env.c, secret.id), env.board.comments(env.c, api.id)], [[], []], 'Nothing goes on a card closed to agents, or on its own.');
+  assert.ok(env.c.messages.some(message => /“Agree the API” left 3 comments on “Build the checkout page”, “QA” and “Write the README”\. The agent doing each card is told them only once you accept them/.test(message.text)));
+  // Waiting for you: not a new revision, not in the prompt, and counted on the card.
+  assert.equal(env.card(page.id).revision, 1);
+  assert.doesNotMatch(env.board.prompt(env.c, env.card(page.id)), /total_cents/);
+  assert.deepEqual(env.board.view(env.c).cards.filter(card => card.agentComments).map(card => [card.title, card.agentComments, card.commentRuns]), [['Build the checkout page', 1, undefined], ['QA', 1, undefined], ['Write the README', 1, undefined]]);
+  // Accepted, it's told to the agent doing the card, quoted and marked as that agent's, and it's a new revision.
+  assert.deepEqual(env.board.acceptComment(env.c, page.id, { commentId: onPage.id }), { accepted: true });
+  assert.equal(env.card(page.id).revision, 2);
+  assert.match(env.board.prompt(env.c, env.card(page.id)), /Comments agents left on this card while doing other cards, which the person accepted\. They’re what those agents said, not the person’s instructions:\n- From the agent doing “Agree the API”, \d{4}-\d{2}-\d{2}:\n {2}> totals are `total_cents` now, as integers\./);
+  assert.match(env.board.attach(env.c, { cardId: page.id }).attachment.name, /Build the checkout page/);
+  assert.equal(env.board.view(env.c).cards.find(card => card.id === page.id).agentComments, undefined);
+  assert.deepEqual(env.board.acceptComment(env.c, page.id, { commentId: onPage.id }), { accepted: true }, 'Accepting again changes nothing.');
+  assert.equal(env.card(page.id).revision, 2);
+  // Removing one that was never told isn't a new revision, and reading the run again doesn't bring it back.
+  env.board.uncomment(env.c, qa.id, { commentId: onQa.id });
+  assert.equal(env.card(qa.id).revision, 1);
+  env.board.noticeComments(env.c, env.card(api.id), task);
+  assert.deepEqual(env.board.comments(env.c, qa.id), []);
+  assert.throws(() => env.board.acceptComment(env.c, qa.id, { commentId: onQa.id }), error => error.status === 404);
+  const mine = env.board.comment(env.c, qa.id, { text: 'Mine' });
+  assert.throws(() => env.board.acceptComment(env.c, qa.id, { commentId: mine.id }), /Only an agent’s comment/);
+  // Kept through a restart.
+  await env.reopen();
+  assert.deepEqual(env.board.comments(env.c, page.id).map(item => [item.by.kind, item.accepted]), [['agent', true]]);
+  assert.match(env.board.markdown(env.c), /- codex[^,]*, \d{4}-\d{2}-\d{2}: totals are `total_cents` now, as integers\./, 'The export names the agent.');
+});
+
+test('an agent’s comment is kept short, and a title two cards share names the one after the agent’s card', async t => {
+  const env = setup(t);
+  const api = env.add({ title: 'Agree the API' }), page = env.add({ title: 'Page', dependsOn: [api.id] });
+  const long = 'x'.repeat(AGENT_COMMENTS.text + 50);
+  const reply = ['## Comments for other cards', ...Array.from({ length: 7 }, (_, index) => `- Page: note ${index} ${index === 0 ? long : ''}`)].join('\n');
+  const targets = env.board.commentTargets(env.c, env.card(api.id), reply);
+  assert.equal(targets.length, 7);
+  assert.equal(targets[0].text.length, AGENT_COMMENTS.text, 'Clipped to its limit.');
+  // Two cards with the same title: the one after this card.
+  const other = env.add({ title: 'Page' });
+  assert.deepEqual(env.board.commentTargets(env.c, env.card(api.id), '## Comments for other cards\n- “Page”: hi').map(item => item.target.id), [page.id]);
+  env.board.remove(env.c, page.id);
+  const copy = env.add({ title: 'Page' });
+  assert.deepEqual(env.board.commentTargets(env.c, env.card(api.id), '## Comments for other cards\n- “Page”: hi'), [], 'Neither is after it, so it names no single card.');
+  assert.ok(other && copy);
+});
+
 test('through the real server: the board is read and changed for the workspace chat', { skip: scriptCLIs }, async t => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-board-server-'))), a = repository(path.join(root, 'a')), cli = path.join(root, 'codex-mock.mjs');
   fs.writeFileSync(cli, `#!${process.execPath}\nimport ${JSON.stringify(pathToFileURL(fixture).href)};\n`, { mode: 0o700 });
@@ -400,6 +554,7 @@ test('through the real server: the board is read and changed for the workspace c
   assert.equal(commented.status, 201); assert.equal(commented.body.comment.text, 'Use the new logo.'); assert.equal(commented.body.card.commentCount, 1); assert.equal(commented.body.card.comments, undefined);
   assert.deepEqual((await call(`/api/board/cards/${id}/comments`)).body.comments.map(item => item.text), ['Use the new logo.']);
   assert.equal((await call(`/api/board/cards/${id}/comment`, { text: '' })).status, 400);
+  assert.equal((await call(`/api/board/cards/${id}/accept-comment`, { commentId: commented.body.comment.id })).status, 400, 'Only an agent’s comment is accepted: yours are told already.');
   assert.deepEqual((await call(`/api/board/cards/${id}/uncomment`, { commentId: commented.body.comment.id })).body.comments, []);
   assert.equal((await call(`/api/board/cards/${id}/comments`, {})).status, 405);
   const placed = await call('/api/board/place', { positions: { [id]: { x: 120, y: 40 } } });
@@ -669,6 +824,132 @@ test('a card in Flow’s Run Ready doesn’t start once the run has used up its 
   assert.equal(env.task(tasks[first.id]).budgetUsed.tokens, 4000, 'What the first card used is kept with its task.');
 });
 
+// Leaving Flow (#132): Flow's Run Ready starts nothing more. Its cards still waiting go back to Ready with the reason,
+// whether Flow chose their agent or you did, and a card already working finishes as usual.
+const tookOver = 'Not started: you took over from Flow. Run it again when you’re ready.';
+test('leaving Flow stops Flow’s Run Ready from starting the cards still waiting, and the card working finishes', { skip: scriptCLIs }, async t => {
+  const env = setup(t, ['a', 'b']);
+  flowOn(env);
+  const first = env.add({ title: 'First', column: 'ready', folderId: 'a' });
+  const auto = env.add({ title: 'Auto next', column: 'ready', folderId: 'b', agent: null, tier: 'light', dependsOn: [first.id] });
+  const pinned = env.add({ title: 'Pinned next', column: 'ready', folderId: 'b', dependsOn: [first.id] });
+  env.script(first, 'hold', 'First is done.');
+  const { tasks } = env.board.run(env.c, { ids: [first.id, auto.id, pinned.id], executionRevision: env.broker.execution.defaults(env.c).revision, assignments: { [auto.id]: { provider: 'claude', model: null, effort: null, auto: true } } });
+  assert.equal(env.task(tasks[auto.id]).board.flow, true, 'Its tasks are Flow’s Run Ready.');
+  await until(() => env.task(tasks[first.id]).status === 'running' && env.task(tasks[first.id]).scopePath, 'the first card to start');
+  // No Flow task of the workspace chat's own is active: leaving Flow still ends the run's waiting cards.
+  assert.equal(env.broker.execution.active(env.c), null);
+  env.broker.setRouting(env.c, { mode: null });
+  for (const card of [auto, pinned]) {
+    assert.equal(env.task(tasks[card.id]).status, 'cancelled');
+    assert.deepEqual([column(env, card), env.card(card.id).reason, env.card(card.id).task], ['ready', tookOver, null], `“${card.title}” is back in Ready with the reason.`);
+  }
+  assert.equal(column(env, first), 'doing', 'The card already working carries on.');
+  env.release(env.task(tasks[first.id]).scopePath);
+  await until(() => column(env, first) === 'review', 'the first card to finish');
+  await until(() => env.c.messages.some(message => /run of 3 cards ended: 1 to review.*2 back in Ready/.test(message.text || '')), 'the run’s end to be noted');
+  assert.deepEqual([column(env, auto), column(env, pinned)], ['ready', 'ready'], 'Finishing it starts neither card that waited for it.');
+  assert.equal(env.lane(tasks[auto.id]), undefined); assert.equal(env.lane(tasks[pinned.id]), undefined);
+});
+
+test('taking manual control from Flow stops only Flow’s Run Ready: cards you ran in Normal still start in turn', { skip: scriptCLIs }, async t => {
+  const env = setup(t, ['a', 'b']);
+  const mine = env.add({ title: 'Mine first', column: 'ready', folderId: 'a' }), mineNext = env.add({ title: 'Mine next', column: 'ready', folderId: 'a', dependsOn: [mine.id] });
+  env.script(mine, 'hold'); env.script(mineNext);
+  const normal = env.board.run(env.c, { ids: [mine.id, mineNext.id] }).tasks;
+  assert.equal(env.task(normal[mineNext.id]).board.flow, undefined, 'A run started in Normal isn’t Flow’s.');
+  flowOn(env);
+  const theirs = env.add({ title: 'Flow first', column: 'ready', folderId: 'b' }), theirsNext = env.add({ title: 'Flow next', column: 'ready', folderId: 'b', agent: null, dependsOn: [theirs.id] });
+  env.script(theirs, 'hold');
+  const flow = env.board.run(env.c, { ids: [theirs.id, theirsNext.id], executionRevision: env.broker.execution.defaults(env.c).revision, assignments: { [theirsNext.id]: { provider: 'claude', model: null, effort: null, auto: true } } }).tasks;
+  // Running, not only preparing its copy: a card still preparing hasn't started, so leaving Flow would send it back too.
+  await until(() => [normal[mine.id], flow[theirs.id]].every(id => env.task(id).status === 'running' && env.task(id).scopePath), 'both first cards to start');
+  // Taking manual control of the workspace chat's Flow task.
+  const chat = env.broker.execution.ensure(env.c, 'chat-task');
+  assert.equal(chat.mode, 'flow');
+  env.broker.execution.change(env.c, { taskId: chat.taskId, revision: chat.revision, action: 'takeover' });
+  assert.equal(env.c.routing, null, 'The workspace left Flow.');
+  assert.deepEqual([env.task(flow[theirsNext.id]).status, column(env, theirsNext), env.card(theirsNext.id).reason], ['cancelled', 'ready', tookOver]);
+  assert.deepEqual([env.task(normal[mineNext.id]).status, column(env, mineNext)], ['waiting', 'doing'], 'The card you ran in Normal still waits for its turn.');
+  env.release(env.task(normal[mine.id]).scopePath);
+  await until(() => column(env, mineNext) === 'review', 'the Normal run’s next card to run after the first');
+  env.release(env.task(flow[theirs.id]).scopePath);
+  await until(() => column(env, theirs) === 'review', 'Flow’s first card to finish');
+  assert.equal(column(env, theirsNext), 'ready', 'Flow’s next card didn’t start.');
+});
+
+// Lanes that can route: each task's own broker reads these accounts, models and usage, and rates every request light.
+// beforeStart, when given, holds each run before its agent's process starts until the promise it returns settles.
+const routedLanes = (env, { beforeStart = null } = {}) => {
+  env.broker.tasks.BrokerClass = class extends Broker {
+    constructor(options) {
+      super(options);
+      this.availableProviders = () => ['codex'];
+      this.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: 'subscription' });
+      this.handoff.models = async () => ({ data: [{ id: 'gpt-6.1-sol', displayName: 'Codex', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'medium' }] }, { id: 'gpt-6-luna', displayName: 'Mini', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }] });
+      this.checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10, resetsAt: new Date(Date.now() + 3600000).toISOString() }] });
+      this.router.worker = async () => JSON.stringify({ tier: 'light', effort: 'low', reason: 'A small change.' });
+      if (beforeStart) { const before = this.checkpoints.before.bind(this.checkpoints); this.checkpoints.before = async (...args) => { await beforeStart(); return before(...args); }; }
+    }
+  };
+};
+
+// A card Flow's Run Ready started that is working when you leave Flow carries on as a Normal task with the agent it's on.
+test('leaving Flow takes a working Flow card off Flow’s decisions: it finishes with no handoff or reset wait, and its tests still run', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  routedLanes(env);
+  env.broker.tasks.tests = { saved: () => ({ command: 'node -e "process.exit(0)"', directory: '' }) };
+  flowOn(env);
+  const card = env.add({ title: 'Working on Auto', column: 'ready', agent: null, tier: 'light' });
+  env.script(card, 'hold', 'Done.');
+  const { tasks } = env.board.run(env.c, { ids: [card.id], executionRevision: env.broker.execution.defaults(env.c).revision, assignments: { [card.id]: { provider: 'codex', model: null, effort: null, auto: true } } });
+  const id = tasks[card.id];
+  await until(() => env.lane(id)?.c?.activeRun && env.captured(env.task(id).scopePath).length, 'the card’s agent to start');
+  const lane = env.lane(id), run = lane.broker.running, policyId = env.task(id).execution.taskId;
+  assert.equal(lane.broker.handoff.policy(run).automatic, true, 'In Flow it hands off by itself near a limit.');
+  env.broker.setRouting(env.c, { mode: null });
+  const own = lane.broker.execution.current(lane.c, policyId);
+  assert.deepEqual([own.mode, Object.values(own.automation).some(Boolean)], ['normal', false], 'Its own conversation is taken over from Flow.');
+  assert.equal(env.broker.execution.current(env.c, policyId).revision, own.revision, 'The workspace records the same policy for it.');
+  assert.deepEqual(env.task(id).execution, { taskId: policyId, revision: own.revision }, 'Its task carries the new one.');
+  assert.equal(lane.broker.handoff.policy(run).automatic, false, 'Flow no longer hands it off.');
+  for (const action of ['handoff', 'wait', 'retry', 'routing']) assert.equal(lane.broker.execution.allows(lane.c, run.execution, { action }), false, `Its run can’t ${action} on Flow’s say-so.`);
+  assert.deepEqual([lane.broker.running, column(env, card)], [run, 'doing'], 'The run it’s on carries on.');
+  env.release(env.task(id).scopePath);
+  await until(() => column(env, card) === 'review' && env.task(id).stepCheck?.status === 'done', 'the card to finish and be tested');
+  assert.deepEqual([env.task(id).stepCheck.command, env.task(id).stepCheck.exitCode], ['node -e "process.exit(0)"', 0], 'Its own tests still ran.');
+});
+
+test('a card with subtasks that Flow’s Run Ready started carries on after you leave Flow, with the agent it’s on', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  let open;
+  const gate = new Promise(resolve => { open = resolve; });
+  t.after(() => open());
+  routedLanes(env, { beforeStart: () => gate });
+  flowOn(env);
+  const card = env.add({ title: 'Two steps', column: 'ready', auto: true, tier: 'light' });
+  for (const title of ['First step', 'Second step']) env.board.subtasks.act(env.c, card.id, { action: 'add', title });
+  scriptMatch(env, 'Subtask 1 of 2', { behavior: 'hold', text: 'First step done.' });
+  const { tasks } = env.board.run(env.c, { ids: [card.id], executionRevision: env.broker.execution.defaults(env.c).revision, assignments: { [card.id]: { provider: 'codex', model: null, effort: null, auto: true } } });
+  const id = tasks[card.id];
+  assert.equal(env.task(id).board.flow, true);
+  await until(() => env.card(card.id).subtasks[0].status === 'running' && env.lane(id)?.c?.activeRun, 'the first subtask');
+  const lane = env.lane(id), policyId = env.task(id).execution.taskId;
+  assert(lane.c.activeRun.routing, 'In Flow its subtask is routed.');
+  assert.ok(!lane.broker.running.child, 'Its agent hasn’t started yet.');
+  // Leaving Flow while that run is still starting: the start goes ahead, as the policy it checks last is still Flow's,
+  // and the card is taken over once its agent is up.
+  env.broker.setRouting(env.c, { mode: null });
+  assert.equal(lane.broker.execution.current(lane.c, policyId).mode, 'flow');
+  open();
+  await until(() => lane.broker.execution.current(lane.c, policyId).mode === 'normal', 'the card to be taken over once its agent started');
+  env.release(env.task(id).scopePath);
+  await until(() => column(env, card) === 'review', 'the card to finish');
+  assert.deepEqual(env.card(card.id).subtasks.map(sub => sub.status), ['done', 'done']);
+  const [first, second] = lane.c.runs.slice(-2);
+  assert.deepEqual([second.provider, second.model, Boolean(second.routing)], [first.provider, first.model, false], 'The next subtask runs with the agent the card was on, not one Flow chose.');
+});
+
 test('a card on Auto can choose Saver, Smart or Ultra, and runs its task in that mode', { skip: scriptCLIs }, async t => {
   const env = setup(t);
   assert.throws(() => env.add({ title: 'Bad mode', column: 'ready', auto: true, routingMode: 'max' }), /Choose Saver, Smart or Ultra/);
@@ -753,21 +1034,23 @@ function reviewRound(t, { second }) {
   env.broker.tasks.tests = { saved: () => null };
   const verdict = value => `I read the changes.\n\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\``;
   const found = { verdict: 'changes', findings: [{ card: 'Build the API', problem: 'The items route has no auth check.', fix: 'Require a session.', file: 'src/items.js' }] };
-  // The mock agent answers by what its request contains, most specific first.
+  // The mock agent answers by what its request contains, most specific first. A card's own request starts with its title
+  // and role, which other requests only name in quotes.
   const folder = env.folder('a'), file = path.join(folder, '.mock-scenarios.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
   Object.assign(saved, {
     '~The cards you reviewed had one repair run': { text: verdict(second) },
     '~asked for changes. Fix these': { behavior: 'hold', text: 'Added the session check to the items route.' },
-    '~Write the docs': { text: 'Wrote the docs.' },
-    '~Review the API': { text: verdict(found) },
-    '~Build the API': { text: 'Built the items route.' },
+    '~Write the docs\n': { text: 'Wrote the docs.' },
+    '~Review the API (reviewer)\n': { text: verdict(found) },
+    '~Build the API (backend)\n': { text: 'Built the items route.' },
   });
   fs.writeFileSync(file, JSON.stringify(saved)); git(folder, 'commit', '-qam', 'script');
   const api = env.add({ title: 'Build the API', column: 'ready', role: 'backend' });
   const review = env.add({ title: 'Review the API', column: 'ready', role: 'reviewer', agent: { provider: 'claude' }, dependsOn: [api.id] });
   const docs = env.add({ title: 'Write the docs', column: 'ready', dependsOn: [review.id] });
   env.board.run(env.c, { ids: [api.id, review.id, docs.id] });
-  const taskOf = card => env.task(env.card(card.id).task), requests = () => [...new Set([folder, ...(env.c.parallelTasks || []).map(item => item.scopePath)].filter(Boolean).map(place => fs.realpathSync(place)))].flatMap(place => env.captured(place)).map(capture => capture.context.currentRequest);
+  // What each agent was sent, read from the folder and from every copy that is still there (a merged or discarded one is gone).
+  const taskOf = card => env.task(env.card(card.id).task), requests = () => [...new Set([folder, ...(env.c.parallelTasks || []).map(item => item.scopePath)].filter(place => place && fs.existsSync(place)).map(place => fs.realpathSync(place)))].flatMap(place => env.captured(place)).map(capture => capture.context.currentRequest);
   return { env, api, review, docs, taskOf, requests, folder };
 }
 
@@ -816,6 +1099,44 @@ test('findings left after the repair round wait for you, never repair twice, and
   env.board.proceed(env.c, review.id);
   assert.equal(taskOf(review).review.accepted, true);
   await until(() => env.card(docs.id).column === 'review', 'the docs card to run');
+});
+
+test('a repair that changed files in its card’s own copy is merged before the review checks again, and the review then reads it in its own copy (#89)', { skip: scriptCLIs }, async t => {
+  const { env, api, review, docs, taskOf, requests } = reviewRound(t, { second: { verdict: 'pass' } });
+  await until(() => requests().some(text => /asked for changes\. Fix these/.test(text)), 'the repair to start');
+  // The repair's work is in the API card's own copy, and nothing reaches the folder until it is merged.
+  const copy = taskOf(api).scopePath, told = () => env.c.messages.filter(message => message.role === 'system' && /was repaired in its own copy/.test(message.text));
+  fs.mkdirSync(path.join(copy, 'src')); fs.writeFileSync(path.join(copy, 'src/items.js'), 'session check\n');
+  env.release(copy);
+  await until(() => taskOf(review)?.review?.waiting === 'Waiting for “Build the API” to be merged, so the review can read its repair.', 'the review to wait for the merge');
+  assert.equal(taskOf(review).review.status, 'repairing');
+  assert.ok(!requests().some(text => text.startsWith('The cards you reviewed had one repair run')), 'The second review doesn’t run on a copy without the repair.');
+  assert.deepEqual(told().map(message => message.text), ['“Build the API” was repaired in its own copy. Review and merge it from its card, and “Review the API” reviews again. Discarding it ends the repair round.']);
+  const shown = env.board.list(env.c);
+  assert.deepEqual([shown.find(item => item.id === review.id).taskState.review.waiting, shown.find(item => item.id === api.id).column, taskOf(docs).status], ['Waiting for “Build the API” to be merged, so the review can read its repair.', 'review', 'waiting']);
+  env.board.reviews.drive(env.c);
+  assert.equal(told().length, 1, 'It is said once.');
+  // You merge it: the review checks again, with the repaired file in its own copy.
+  await env.broker.tasks.integrate(env.c, taskOf(api).id, { digest: env.broker.tasks.review(env.c, taskOf(api).id).digest });
+  await until(() => taskOf(review)?.review?.status === 'passed', 'the second review to pass');
+  assert.match(requests().find(text => text.startsWith('The cards you reviewed had one repair run')), /\nThe repairs are merged, and your copy now has what changed since your review, 1 file: `git diff [0-9a-f]{12} [0-9a-f]{12}` shows it\.\n/);
+  assert.equal(fs.readFileSync(path.join(taskOf(review).scopePath, 'src/items.js'), 'utf8'), 'session check\n');
+  assert.equal(env.board.list(env.c).find(item => item.id === review.id).taskState.review.repairs[0].status, 'done');
+  await until(() => env.card(docs.id).column === 'review', 'the docs card to finish');
+});
+
+test('a repair whose copy is discarded ends the repair round, and the cards after the review wait for you (#89)', { skip: scriptCLIs }, async t => {
+  const { env, api, review, docs, taskOf, requests } = reviewRound(t, { second: { verdict: 'pass' } });
+  await until(() => requests().some(text => /asked for changes\. Fix these/.test(text)), 'the repair to start');
+  fs.writeFileSync(path.join(taskOf(api).scopePath, 'items.js'), 'session check\n'); env.release(taskOf(api).scopePath);
+  await until(() => /to be merged/.test(taskOf(review)?.review?.waiting || ''), 'the review to wait for the merge');
+  env.broker.tasks.discard(env.c, taskOf(api).id);
+  await until(() => taskOf(review)?.review?.status === 'held', 'the repair round to end');
+  assert.equal(taskOf(review).review.reason, 'The repair on “Build the API” was discarded, so the cards after the review wait for you.');
+  assert.equal(taskOf(review).review.waiting, null);
+  assert.deepEqual(taskOf(review).review.repairs.map(item => [item.status, item.reason]), [['failed', 'Its repair was discarded.']]);
+  assert.ok(!requests().some(text => text.startsWith('The cards you reviewed had one repair run')));
+  assert.equal(taskOf(docs).status, 'waiting');
 });
 
 test('a review that ends without a verdict holds the cards after it, and a plan’s final review is added only for new plans (#89)', async () => {
@@ -1168,8 +1489,8 @@ test('each subtask runs with the agent and model chosen on it, is routed at its 
   const { Subtasks, parseSplit } = await import('../src/subtasks.mjs');
   const card = { id: 'k', title: 'Card', split: true, auto: true, subtasks: [{ id: 'a', title: 'One', instructions: 'Do one.', tier: 'light', agent: null, status: 'pending' }, { id: 'b', title: 'Two', instructions: '', tier: 'deep', agent: { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' }, status: 'pending' }] };
   const calls = [], board = { cards: () => [card], update: (c, target, changes) => Object.assign(target, changes), main: { tasks: { update() {}, sync() {}, admit() { if (full) throw Object.assign(new Error('2 tasks are already running, the most this workspace\'s task limits allow at once.'), { status: 409 }); }, closed: false } } };
-  let full = false;
-  const lane = { c: {}, broker: { start: (c, input) => { calls.push(['start', input]); return {}; }, dispatch: async (c, input) => { calls.push(['dispatch', input]); } } };
+  let full = false, routes = true;
+  const lane = { c: {}, broker: { execution: { allows: (c, token, { action }) => routes || action !== 'routing' }, start: (c, input) => { calls.push(['start', input]); return {}; }, dispatch: async (c, input) => { calls.push(['dispatch', input]); } } };
   const subtasks = new Subtasks(board), base = { id: 't', board: { cardId: 'k' }, provider: 'codex', model: 'gpt-6.1-sol', effort: 'medium', accessMode: 'edit', approvalPolicy: 'ask', billingConfirmed: false, execution: {} };
   card.task = 't';
   await subtasks.launch({}, { ...base, routing: { mode: 'smart', planned: 'standard' } }, lane, card, card.subtasks[0]);
@@ -1186,6 +1507,10 @@ test('each subtask runs with the agent and model chosen on it, is routed at its 
   full = true; card.subtasks[0].status = 'pending'; const before = calls.length;
   assert.throws(() => subtasks.launch({}, { ...base, routing: { mode: 'smart', planned: 'standard' } }, lane, card, card.subtasks[0]), /already running, the most/);
   assert.equal(calls.length, before); assert.equal(card.subtasks[0].status, 'pending'); full = false;
+  // A card you took over from Flow (its policy no longer allows routing): a subtask on Smart runs with the card's agent.
+  routes = false; card.subtasks[0].status = 'pending';
+  subtasks.launch({}, { ...base, routing: { mode: 'smart', planned: 'standard' } }, lane, card, card.subtasks[0]);
+  assert.deepEqual(calls.slice(before).map(([how, input]) => [how, input.provider, input.model, input.effort ?? null, input.routing ?? null]), [['start', 'codex', 'gpt-6.1-sol', 'medium', null]]);
   // Splitting several cards in one run: one list per card, in order; a card the reply leaves out gets none.
   const { parseSplitCards } = await import('../src/subtasks.mjs');
   assert.deepEqual(parseSplitCards('{"cards":[{"card":2,"subtasks":[{"title":"B1"}]},{"card":1,"subtasks":[{"title":"A1"},{"title":"A2"}]}]}', 3).map(list => list?.map(item => item.title) ?? null), [['A1', 'A2'], ['B1'], null]);
@@ -1269,7 +1594,7 @@ test('Suggest next reads the card and open neighbors in a read-only run, drafts 
   // Real suggest run with mock-cli returning 2 linked cards (including a contract root card after builder to exercise plan check).
   const reply = JSON.stringify({
     summary: 'Verify login and document the session contract.',
-    questions: ['Keep GitHub only for now?'],
+    questions: [],
     steps: [
       { title: 'Document session contract', instructions: 'Write auth session schema.', done: ['Session fields listed'], tier: 'light', dependsOn: [], role: 'backend', artifact: 'contract' },
       { title: 'Test OAuth flow', instructions: 'Run login integration tests.', done: ['All login tests pass'], tier: 'standard', dependsOn: [1], role: 'qa', check: 'npm test', phase: 'Verify' },
@@ -1324,6 +1649,60 @@ test('Suggest next reads the card and open neighbors in a read-only run, drafts 
   await env.reopen();
   assert.equal(env.c.boardSuggest.status, 'interrupted');
   assert.match(env.c.boardSuggest.summary, /restarted/i);
+});
+
+test('Suggest next asks before drafting, resumes the same agent from saved answers, and refuses stale answers (#162)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  const target = env.add({ title: 'Add login', column: 'ready' }), other = env.add({ title: 'Other work' });
+  const questions = [{ question: 'Which login provider?', options: ['GitHub', 'Google'] }];
+  const steps = [{ title: 'Test GitHub login', instructions: 'Verify the GitHub login flow.', done: ['Login works'], tier: 'light', dependsOn: [] }];
+  const choice = { provider: 'codex', model: 'gpt-6.1-sol', effort: 'high' };
+  const prompt = env.board.suggestPrompt(env.c, env.card(target.id));
+  assert.match(prompt, /When questions has any, return steps \[\] and say in summary what you’ll suggest once they answer/);
+  assert.doesNotMatch(prompt, /Suggest next always returns its cards/);
+  assert.doesNotMatch(prompt, /The person’s answers to your questions/, 'A first run is told of no answers.');
+  // Even a mixed reply must ask first, with no draft based on an unanswered decision.
+  scriptMatch(env, 'Suggest 1 to 3 follow-up cards', { text: JSON.stringify({ summary: 'Choose the login provider first.', questions, steps }) });
+  env.board.suggest(env.c, target.id, choice);
+  await until(() => env.c.boardSuggest?.status === 'complete', 'the suggestion questions');
+  const asked = env.c.boardSuggest.id;
+  assert.deepEqual(env.c.boardSuggest.questions, questions);
+  assert.deepEqual(env.c.boardSuggest.cards, []);
+  assert.equal(env.c.board.length, 2);
+  await env.reopen();
+  assert.equal(env.c.boardSuggest.id, asked, 'Questions remain answerable after a restart.');
+  assert.deepEqual(env.board.view(env.c).suggest.questions, questions);
+  const answer = { asked, answers: 'Use GitHub.' };
+  for (const input of [{ ...answer, asked: 'old-job' }, { answers: answer.answers }, { asked, answers: '' }]) {
+    assert.throws(() => env.board.suggest(env.c, target.id, input), /Those questions are gone/);
+  }
+  assert.throws(() => env.board.suggest(env.c, other.id, answer), /Those questions are gone/);
+  // Another genuine decision can be asked, retaining the first answer for the final draft.
+  scriptMatch(env, 'Suggest 1 to 3 follow-up cards', { text: JSON.stringify({ summary: 'Choose where to test it.', questions: [{ question: 'Where should the login be tested?', options: ['Staging', 'Local'] }], steps: [] }) });
+  const second = env.board.suggest(env.c, target.id, { ...answer, provider: 'claude', model: 'changed-model', effort: 'low' });
+  assert.deepEqual([second.provider, second.model, second.effort], [choice.provider, choice.model, choice.effort], 'Continuing cannot silently switch the agent shown with the questions.');
+  // The page is told the run has answers, not what they are: they stay with the run that reads them.
+  assert.deepEqual([second.answered, 'answers' in second], [true, false]);
+  assert.match(env.c.boardSuggest.answers, /Which login provider\?[\s\S]*Use GitHub\./);
+  await until(() => env.c.boardSuggest?.status === 'complete', 'the follow-up questions');
+  assert.equal(env.c.board.length, 2);
+  const captured = env.captured(fs.realpathSync(env.folder('a'))).at(-1);
+  assert.match(captured.prompt, /Which login provider\?[\s\S]*Use GitHub\./);
+  assert.match(captured.prompt, /don’t ask again what they answered\. Where they left a question unanswered, go with the option you recommended/);
+  assert.deepEqual(captured.args.slice(captured.args.indexOf('--sandbox'), captured.args.indexOf('--sandbox') + 2), ['--sandbox', 'read-only']);
+  assert.throws(() => env.board.suggest(env.c, target.id, answer), /Those questions are gone/);
+  const secondId = env.c.boardSuggest.id;
+  scriptMatch(env, 'Suggest 1 to 3 follow-up cards', { text: JSON.stringify({ summary: 'Test the chosen login.', questions: [], steps }) });
+  env.board.suggest(env.c, target.id, { asked: secondId, answers: 'Use staging.' });
+  await until(() => env.c.boardSuggest?.status === 'complete', 'the answered suggestion to draft');
+  const finalPrompt = env.captured(fs.realpathSync(env.folder('a'))).at(-1).prompt;
+  assert.match(finalPrompt, /Which login provider\?[\s\S]*Use GitHub\.[\s\S]*Where should the login be tested\?[\s\S]*Use staging\./);
+  assert.equal(env.c.board.length, 3);
+  const drafted = env.card(env.c.boardSuggest.cards[0]);
+  assert.deepEqual(drafted.dependsOn, [target.id]);
+  assert.equal(drafted.column, 'backlog');
+  assert.ok(drafted.draft, 'Answering only drafts the suggestion; it does not accept or run it.');
+  assert.throws(() => env.board.suggest(env.c, target.id, { asked: secondId, answers: 'Use staging.' }), /Those questions are gone/);
 });
 
 test('Update the Plan reads a finished card’s findings and the Plan, and drafts changes, removals and new cards named after it', { skip: scriptCLIs }, async t => {
@@ -1404,6 +1783,16 @@ test('a report’s “Plan changes” section is read up to the next heading or 
   assert.equal(planChanges('Checked it.\n\nPlan changes\n\nNone.'), '');
   assert.equal(planChanges('### Plan changes\n- No changes needed'), '');
   assert.equal(planChanges('Nothing about the plan here.'), '');
+  // Asked to leave the section out, a real agent often writes it on one line with “none”, and its questions the same way
+  // (#162, seen live). That starts no update, with or without a sentence after it.
+  assert.equal(planChanges('Created notes/alpha.txt.\n\nPlan changes: none.\n\nQuestions for you: none.'), '');
+  assert.equal(planChanges('Done.\n\n**Plan changes:** None.\n\n**Questions for you:** None.'), '');
+  assert.equal(planChanges('Done.\n\nPlan changes: None. The Plan fits as it is.\n\nThanks.'), '');
+  assert.equal(planChanges('Done.\n\n## Plan changes\nNo plan changes are needed.'), '');
+  // A change is still a change: one that starts with “None of…”, one listed under “None.”, and one before the questions.
+  assert.equal(planChanges('Plan changes: None of the cards covers rate limits, so add one.'), 'None of the cards covers rate limits, so add one.');
+  assert.equal(planChanges('## Plan changes\nNone.\n- Except: drop “Add Redis”.'), 'None.\n- Except: drop “Add Redis”.');
+  assert.equal(planChanges('Plan changes: add a card for the footer links.\n\nQuestions for you: keep the old route?'), 'add a card for the footer links.');
 });
 
 test('a card whose report says the Plan should change updates it by itself, and the cards after it wait until you settle it', { skip: scriptCLIs }, async t => {
@@ -1442,6 +1831,31 @@ test('a card whose report says the Plan should change updates it by itself, and 
   env.board.follow(env.c, env.task(tasks[research.id]));
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.equal(env.c.boardSuggest.id, id);
+});
+
+test('a Plan update a card starts by itself waits while Suggest next’s questions wait for you, and starts once they are dismissed (#162)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  env.broker.tasks.tests = { saved: () => null };
+  const login = env.add({ title: 'Add login', column: 'ready' });
+  const research = env.add({ title: 'Research sessions', column: 'ready', artifact: 'findings' });
+  scriptMatch(env, 'Suggest 1 to 3 follow-up cards', { text: JSON.stringify({ summary: 'Choose the login provider first.', questions: [{ question: 'Which login provider?', options: ['GitHub', 'Google'] }], steps: [] }) });
+  env.board.suggest(env.c, login.id, { provider: 'codex' });
+  await until(() => env.c.boardSuggest?.status === 'complete', 'the suggestion’s questions');
+  const asked = env.c.boardSuggest.id;
+  // A card finishes meanwhile and says the Plan should change. Its update would take the questions away, so it waits.
+  env.script(research, null, 'Sessions already live in Postgres.\n\n## Plan changes\n- Add a card that indexes the Postgres sessions table.');
+  scriptMatch(env, 'has finished, and its findings are below', { text: JSON.stringify({ summary: 'One new card.', steps: [{ title: 'Index the sessions table', instructions: 'Add an index on user_id.', tier: 'light' }] }) });
+  env.board.run(env.c, { ids: [research.id] });
+  await until(() => env.card(research.id).autoUpdate, 'the card to say the Plan should change');
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(env.c.boardSuggest.id, asked, 'The questions stay on the Plan.');
+  assert.deepEqual([env.card(research.id).autoUpdate.jobId, env.card(research.id).autoUpdate.error], [null, null], 'The update is queued, not failed.');
+  assert.equal(env.board.view(env.c).suggest.questions.length, 1);
+  // Dismissing the questions, like answering them, lets the queued update start.
+  env.board.dismissSuggest(env.c);
+  await until(() => env.c.boardSuggest?.kind === 'update', 'the queued update to start');
+  assert.equal(env.c.boardSuggest.cardId, research.id);
+  await until(() => env.c.boardSuggest?.status === 'complete', 'the update to draft');
 });
 
 test('a reply’s questions for the person are read from its heading or a last paragraph of questions, and “None” asks nothing', () => {
@@ -1640,4 +2054,238 @@ test('a merged or kept Plan card preserves its changed files, stats and diffs af
   const fallback = env.board.answer(env.c, directCard.id);
   assert.equal(fallback.filesSource, 'recorded');
   assert.deepEqual(fallback.files, [{ path: 'src/app.mjs' }]);
+});
+
+test("answering a planner's questions carries forward the attached brief across ask-first and redraft turns (#162)", { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  const brief = env.broker.attachments.put({ name: "brief.md", data: Buffer.from("# Brief\nUse SQLite and session cookies.\n").toString("base64") });
+  const workspaceNote = env.broker.attachments.put({ name: "Workspace chat.md", data: Buffer.from("# Workspace chat\nContext.\n").toString("base64") });
+  const folder = env.folder("a"), scenariosFile = path.join(folder, ".mock-scenarios.json");
+  const askReply = JSON.stringify({ summary: "One question before drafting.", steps: [], questions: [{ question: "Storage?", options: ["SQLite", "Postgres"] }] });
+  const draftWithQuestion = JSON.stringify({ summary: "Initial draft.", steps: [{ id: "db", title: "Set up SQLite", instructions: "Create schema.", tier: "standard", dependsOn: [] }], questions: [{ question: "Session TTL?", options: ["24h", "7d"] }] });
+  const finalDraft = JSON.stringify({ summary: "Final draft.", steps: [{ id: "db", title: "Set up SQLite with 24h sessions", instructions: "Create schema and 24h session store.", tier: "standard", dependsOn: [] }] });
+
+  const chatTask = env.board.chat(env.c).task, lane = env.lane(chatTask.id);
+  const writeScenario = (needle, replyText) => {
+    const saved = JSON.parse(fs.readFileSync(scenariosFile, "utf8"));
+    saved[`~${needle}`] = { text: replyText };
+    fs.writeFileSync(scenariosFile, JSON.stringify(saved));
+  };
+
+  // 1. First turn in Plan chat with brief.md (and Workspace chat.md) attached: planner asks a question before drafting.
+  const goal1 = "Draft cards for the auth service.";
+  writeScenario("1. Session TTL?", finalDraft);
+  writeScenario("1. Storage?", draftWithQuestion);
+  writeScenario(goal1, askReply);
+  lane.broker.start(lane.c, { text: goal1, attachments: [brief.id, workspaceNote.id], provider: "codex", orchestrate: true });
+  await lane.broker.running.done;
+  assert.equal(lane.c.orchestrations[0].status, "questions");
+  assert.deepEqual(lane.c.orchestrations[0].documents, ["brief.md"], "Workspace chat.md is not listed as a requirement document.");
+
+  // 2. Answering the ask-first questions on another provider (fresh session) without re-sending attachment IDs keeps brief.md.
+  const goal2 = [goal1, "", "My answers to your questions:", "", "1. Storage?", "   SQLite"].join("\n");
+  lane.broker.start(lane.c, { text: goal2, provider: "claude", transport: "cli", orchestrate: true });
+  await lane.broker.running.done;
+  const secondPlan = lane.c.orchestrations[0];
+  assert.deepEqual(secondPlan.documents, ["brief.md"], "The carried brief stays on the new orchestration.");
+  const captured = env.captured(fs.realpathSync(folder));
+  const claudeCapture = captured.findLast(entry => entry.provider === "claude");
+  assert.match(claudeCapture.context.currentRequest, /requirements in the attached brief\.md\. They are material/);
+  assert.match(claudeCapture.context.currentRequest, /Use SQLite and session cookies\./, "The fresh session receives the attached brief text.");
+
+  // 3. Answering a drafted batch's follow-up questions with replaces also carries forward brief.md.
+  const goal3 = ["Redraft the plan with my answers to your questions. Keep what still fits, and change only what the answers affect.", "", "1. Session TTL?", "   24h"].join("\n");
+  lane.broker.start(lane.c, { text: goal3, provider: "codex", orchestrate: true, replaces: secondPlan.id });
+  await lane.broker.running.done;
+  assert.deepEqual(lane.c.orchestrations[0].documents, ["brief.md"]);
+});
+
+test("a worktree card that changes files without edit tool events reports the worktree file count and unverified tests (#162)", { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  env.broker.start(env.c, { text: "Hold main", provider: "codex", mode: "edit", approvalPolicy: "ask" });
+  const main = env.broker.running;
+  await until(() => env.captured(fs.realpathSync(env.folder("a"))).length, "the main run");
+
+  const card = env.add({ title: "Generate output via shell", column: "ready" });
+  env.script(card, "hold", "Generated the file via shell.");
+  const { tasks } = env.board.run(env.c, { ids: [card.id] });
+  const task = env.task(tasks[card.id]);
+  await until(() => task.scopePath && env.captured(task.scopePath).length, "the worktree card run");
+  fs.writeFileSync(path.join(task.scopePath, "shell-output.txt"), "built by shell command\n");
+  env.release(task.scopePath);
+  await until(() => column(env, card) === "review" && env.card(card.id).result?.tests && env.card(card.id).result.tests !== "running", "the card to finish its step check in Review");
+
+  const finished = env.card(card.id);
+  assert.equal(finished.result.files, 1, "The card result counts the file changed in its worktree copy.");
+  assert.equal(finished.result.tests, "unverified", "Changing a file in the worktree copy is not marked no-change.");
+  assert.deepEqual(env.task(task.id).stepResult.files, ["shell-output.txt"]);
+  assert.equal(env.task(task.id).stepCheck.outcome, "unverified");
+  assert.equal(env.board.answer(env.c, card.id).files.length, 1);
+
+  env.release(fs.realpathSync(env.folder("a")));
+  await main.done;
+});
+
+test('Suggest next warns on out-of-order specialist steps and ignores draft, done or closed contracts (#89)', t => {
+  const env = setup(t);
+  const now = new Date().toISOString();
+  const contract = env.add({ title: 'Agree promo contract', column: 'ready', role: 'backend', artifact: 'contract', group: 'Promo' });
+  const draftContract = env.add({ title: 'Draft promo contract', column: 'backlog', role: 'backend', artifact: 'contract', group: 'Promo' });
+  env.board.update(env.c, env.card(draftContract.id), { draft: { by: { kind: 'agent' }, at: now, batch: { id: 'b1', summary: 'Draft' }, notes: [] } });
+  const doneContract = env.add({ title: 'Done promo contract', column: 'ready', role: 'backend', artifact: 'contract', group: 'Promo' });
+  env.board.update(env.c, env.card(doneContract.id), { column: 'done' });
+  env.add({ title: 'Closed promo contract', column: 'ready', role: 'backend', artifact: 'contract', group: 'Promo', closed: true });
+  env.add({ title: 'Other group contract', column: 'ready', role: 'backend', artifact: 'contract', group: 'Other' });
+  const target = env.add({ title: 'Prepare promo assets', column: 'ready', group: 'Promo' });
+
+  const [missingId] = env.board.draftSuggested(env.c, env.card(target.id), parseSuggest(JSON.stringify({
+    summary: 'Add frontend step.',
+    steps: [{ title: 'Build promo banner', instructions: 'Render banner.', tier: 'light', role: 'frontend', dependsOn: [] }],
+  })), { suggestId: 'sug-order-1' });
+  const missingNotes = env.card(missingId).draft.notes.join(' ');
+  assert.match(missingNotes, /doesn’t wait for “Agree promo contract”/);
+  assert.doesNotMatch(missingNotes, /Draft promo contract|Done promo contract|Closed promo contract|Other group contract/);
+
+  // Once the open contract is done, no missing-contract warning is emitted.
+  env.board.update(env.c, env.card(contract.id), { column: 'done' });
+  const [cleanId] = env.board.draftSuggested(env.c, env.card(target.id), parseSuggest(JSON.stringify({
+    summary: 'Add second frontend step.',
+    steps: [{ title: 'Build promo footer', instructions: 'Render footer.', tier: 'light', role: 'frontend', dependsOn: [] }],
+  })), { suggestId: 'sug-order-2' });
+  assert.equal(env.card(cleanId).draft.notes.some(n => /doesn’t wait for/.test(n)), false);
+
+  // Build step following QA/reviewer warns; contract/schema following build work warns.
+  const qa = env.add({ title: 'Verify promo flow', column: 'ready', role: 'qa', group: 'QA' });
+  const [afterQaId] = env.board.draftSuggested(env.c, env.card(qa.id), parseSuggest(JSON.stringify({
+    summary: 'Follow-up UI.',
+    steps: [{ title: 'Fix promo UI', instructions: 'Adjust spacing.', tier: 'light', role: 'frontend', dependsOn: [] }],
+  })), { suggestId: 'sug-order-3' });
+  assert.match(env.card(afterQaId).draft.notes.join(' '), /builds on “Verify promo flow”, a QA card/);
+
+  const reviewer = env.add({ title: 'Review promo flow', column: 'ready', role: 'reviewer', group: 'Review' });
+  const [afterRevId] = env.board.draftSuggested(env.c, env.card(reviewer.id), parseSuggest(JSON.stringify({
+    summary: 'Follow-up API.',
+    steps: [{ title: 'Adjust promo API', instructions: 'Fix endpoint.', tier: 'light', role: 'backend', dependsOn: [] }],
+  })), { suggestId: 'sug-order-4' });
+  assert.match(env.card(afterRevId).draft.notes.join(' '), /builds on “Review promo flow”, a review card/);
+
+  const built = env.add({ title: 'Implement checkout', column: 'ready', role: 'backend', group: 'Checkout' });
+  const [lateContractId] = env.board.draftSuggested(env.c, env.card(built.id), parseSuggest(JSON.stringify({
+    summary: 'Document contract.',
+    steps: [{ title: 'Define checkout contract', instructions: 'Write spec.', tier: 'light', role: 'backend', artifact: 'contract', dependsOn: [] }],
+  })), { suggestId: 'sug-order-5' });
+  assert.match(env.card(lateContractId).draft.notes.join(' '), /This contract comes after building work \(“Implement checkout”\)/);
+});
+
+test('Board.run enforces specialist workflow ordering across contract, schema, build and check cards (#89)', t => {
+  const env = setup(t);
+  // 1. Specialist build cannot depend (even transitively) on a check card.
+  const qa = env.add({ title: 'Run QA', column: 'ready', role: 'qa', group: 'G1' });
+  const mid = env.add({ title: 'Summarize QA', column: 'ready', role: 'builder', group: 'G1', dependsOn: [qa.id] });
+  const feAfterCheck = env.add({ title: 'Build UI after QA', column: 'ready', role: 'frontend', group: 'G1', dependsOn: [mid.id] });
+  assert.throws(() => env.board.run(env.c, { ids: [qa.id, mid.id, feAfterCheck.id] }), /cannot depend on check card “Run QA”/);
+
+  // 2. Contract or schema card cannot depend on a non-contract build card.
+  const buildFirst = env.add({ title: 'Build first', column: 'ready', role: 'frontend', group: 'G2' });
+  const lateSchema = env.add({ title: 'Write schema', column: 'ready', role: 'database', artifact: 'schema', group: 'G2', dependsOn: [buildFirst.id] });
+  assert.throws(() => env.board.run(env.c, { ids: [buildFirst.id, lateSchema.id] }), /cannot depend on build card “Build first”/);
+
+  // 3. Specialist builds must wait for non-done same-group contract cards, and database/backend must wait for schema cards.
+  const contract = env.add({ title: 'Define promo contract', column: 'ready', role: 'backend', artifact: 'contract', group: 'Promo' });
+  const feNoContract = env.add({ title: 'Build promo UI', column: 'ready', role: 'frontend', group: 'Promo' });
+  assert.throws(() => env.board.run(env.c, { ids: [feNoContract.id] }), /must depend on contract card “Define promo contract”/);
+
+  const schema = env.add({ title: 'Add promo schema', column: 'ready', role: 'database', artifact: 'schema', group: 'Promo', dependsOn: [contract.id] });
+  const beNoSchema = env.add({ title: 'Implement promo API', column: 'ready', role: 'backend', group: 'Promo', dependsOn: [contract.id] });
+  assert.throws(() => env.board.run(env.c, { ids: [contract.id, schema.id, beNoSchema.id] }), /must depend on schema card “Add promo schema”/);
+  assert.equal(env.c.parallelTasks?.length || 0, 0, 'Rejected runs record no tasks.');
+});
+
+test('board_card_artifact and board_card_outcome persist, invalidate downstream cards on contract/schema changes, and clear on recheck or rerun (#89)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  let command = { command: 'node -e "process.exit(0)"', directory: '' };
+  env.broker.tasks.tests = { saved: () => command };
+
+  const contract = env.add({ title: 'Agree API contract', column: 'ready', role: 'backend', artifact: 'contract', group: 'Feature' });
+  const ui = env.add({ title: 'Build feature UI', column: 'ready', role: 'frontend', dependsOn: [contract.id], files: ['src/ui.js'], group: 'Feature' });
+  env.script(contract, null, 'Contract v1: POST /promo returns { discountPct }.');
+  env.script(ui, null, 'Built feature UI.');
+
+  env.board.run(env.c, { ids: [contract.id, ui.id] });
+  await until(() => column(env, contract) === 'review' && column(env, ui) === 'review' && env.card(ui.id).result?.tests === 'passed', 'initial run to finish');
+  assert.equal(env.c.boardArtifacts?.[contract.id]?.kind, 'contract');
+  assert.match(env.c.boardArtifacts?.[contract.id]?.content || '', /Contract v1/);
+  assert.equal(env.c.boardOutcomes?.[ui.id]?.outcome, 'passed');
+  assert.equal(env.card(ui.id).needsRecheck, undefined);
+
+  // Material edit on an upstream contract/schema card invalidates finished downstream cards.
+  env.board.edit(env.c, contract.id, { notes: 'Contract v2: return { discountCents }.' });
+  assert.equal(env.card(ui.id).needsRecheck, true);
+  assert.deepEqual([env.card(ui.id).invalidatedBy?.cardId, env.card(ui.id).invalidatedBy?.kind, env.card(ui.id).invalidatedBy?.revision], [contract.id, 'contract', '2']);
+
+  await env.reopen();
+  assert.equal(env.card(ui.id).needsRecheck, true);
+  assert.equal(env.board.list(env.c).find(item => item.id === ui.id).needsRecheck, true);
+  assert.equal(env.c.boardArtifacts?.[contract.id]?.kind, 'contract');
+  assert.equal(env.c.boardOutcomes?.[ui.id]?.outcome, 'passed');
+
+  // Rechecking the downstream card with passing tests clears needsRecheck/invalidatedBy.
+  env.broker.tasks.tests = { saved: () => command };
+  env.board.recheck(env.c, ui.id);
+  await until(() => env.card(ui.id).needsRecheck === false && env.task(env.card(ui.id).task)?.stepCheck?.status === 'done', 'recheck to clear needsRecheck');
+  assert.equal(env.card(ui.id).invalidatedBy, null);
+
+  // Re-running an upstream contract card to completion records a fresh board_card_artifact and re-invalidates downstream Review/Done cards.
+  env.board.accept(env.c, ui.id);
+  assert.equal(column(env, ui), 'done');
+  env.board.sendBack(env.c, contract.id, { reason: 'Revise contract' });
+  env.script(contract, null, 'Contract v3: add currency field.');
+  env.board.run(env.c, { ids: [contract.id] });
+  await until(() => column(env, contract) === 'review' && /Contract v3/.test(env.c.boardArtifacts?.[contract.id]?.content || ''), 're-run contract to record new artifact');
+  assert.equal(env.card(ui.id).needsRecheck, true);
+  assert.equal(env.card(ui.id).invalidatedBy?.cardId, contract.id);
+
+  // Failing a card's tests and calling proceed records an accepted board_card_outcome; re-running an invalidated card clears needsRecheck.
+  env.board.accept(env.c, contract.id);
+  env.board.move(env.c, ui.id, { column: 'ready' });
+  command = { command: 'node -e "process.exit(2)"', directory: '' };
+  env.board.run(env.c, { ids: [ui.id] });
+  assert.equal(env.card(ui.id).needsRecheck, false);
+  await until(() => env.task(env.card(ui.id).task)?.stepCheck?.outcome === 'failed', 'ui tests to fail');
+  env.board.proceed(env.c, ui.id);
+  await env.reopen();
+  assert.equal(env.c.boardOutcomes?.[ui.id]?.status, 'accepted');
+  assert.equal(env.c.boardOutcomes?.[ui.id]?.accepted, true);
+});
+
+test('TaskCoordinator.ledgers attributes role, scopeFiles and board vs group plan IDs, and summarizePlans aggregates them (#89)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  env.broker.tasks.tests = { saved: () => null };
+  const ungrouped = env.add({ title: 'Standalone backend fix', column: 'ready', role: 'backend', files: ['src/a.js', 'src/b.js'] });
+  const grouped = env.add({ title: 'Grouped frontend UI', column: 'ready', role: 'frontend', group: 'Checkout', files: ['public/checkout.js'] });
+  env.script(ungrouped, null, 'Fixed backend.');
+  env.script(grouped, null, 'Built checkout UI.');
+
+  const { tasks } = env.board.run(env.c, { ids: [ungrouped.id, grouped.id] });
+  await until(() => column(env, ungrouped) === 'review' && column(env, grouped) === 'review', 'both cards to reach Review');
+
+  const ledgers = await env.broker.tasks.ledgers();
+  const byTask = new Map(ledgers.map(item => [item.parallelTask, item]));
+  const uEntry = byTask.get(tasks[ungrouped.id]);
+  const gEntry = byTask.get(tasks[grouped.id]);
+  assert.equal(uEntry.role, 'backend');
+  assert.equal(uEntry.scopeFiles, 2);
+  assert.equal(uEntry.plan.id, `board:${env.task(tasks[ungrouped.id]).board.run}`);
+  assert.equal(gEntry.role, 'frontend');
+  assert.equal(gEntry.scopeFiles, 1);
+  assert.equal(gEntry.plan.id, 'group:Checkout');
+
+  const plans = summarizePlans(ledgers);
+  assert.equal(plans.length, 2);
+  const checkoutPlan = plans.find(item => item.id === 'group:Checkout');
+  const boardPlan = plans.find(item => item.id.startsWith('board:'));
+  assert.equal(checkoutPlan.steps, 1);
+  assert.ok(checkoutPlan.roles.frontend);
+  assert.equal(boardPlan.steps, 1);
+  assert.ok(boardPlan.roles.backend);
 });

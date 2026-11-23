@@ -123,6 +123,7 @@
     }
     async function send(answers) {
       if (sending) return;
+      const hadFocus = Boolean(article.contains?.(document.activeElement) || document.getElementById('pending-approvals')?.contains(document.activeElement));
       sending = true; skip.disabled = true; changed();
       const body = { runId: item.runId, questionId: item.id, ...(answers ? { answers } : { skip: true }) };
       try {
@@ -130,7 +131,14 @@
         if (result.draft) api().prepareQuestionAnswer(conversationId, result.draft, projectId);
       }
       catch (error) { api().showNotice(error.message || 'Your answer could not be sent. Please try again.'); }
-      finally { sending = false; skip.disabled = false; changed(); await api().refresh(); }
+      finally {
+        sending = false; skip.disabled = false; changed(); await api().refresh();
+        if (hadFocus && (!document.activeElement || document.activeElement === document.body || !document.activeElement.isConnected)) {
+          const box = document.getElementById('pending-approvals'), next = [...(box?.querySelectorAll('button') || []), ...(box?.querySelectorAll('input') || [])].find(el => !el.disabled && !el.hidden);
+          const stop = document.getElementById('stop-button');
+          (next || (stop && !stop.hidden && !stop.disabled ? stop : null) || document.getElementById('message-input'))?.focus?.();
+        }
+      }
     }
     primary.addEventListener('click', () => { if (answered()) send(groups.map(entry => entry.values())); else if (groups[current].values().length) advance(); });
     skip.addEventListener('click', () => send(null));

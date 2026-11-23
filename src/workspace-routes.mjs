@@ -59,7 +59,7 @@ export function createWorkspaceRoutes({ registry, body, json, readGitHub = githu
         if (req.method === 'POST' && url.pathname === '/api/attachments') {
           const input = await body(req, 7 * 1024 * 1024);
           registry.get(projectId); // It may have been removed during upload.
-          json(res, 201, store.put(input)); return true;
+          json(res, 201, await store.upload(input)); return true;
         }
         if (req.method === 'GET' && url.pathname === '/api/attachments/preview') {
           json(res, 200, store.read(url.searchParams.get('id'))); return true;

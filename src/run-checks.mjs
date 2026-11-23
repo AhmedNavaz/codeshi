@@ -128,6 +128,7 @@ export class RunChecks {
     try { snapshot = captureReview(folders, selections); } catch { return false; }
 
     const candidates = [], taskId = run.taskId || run.id;
+    const outcomes = globalThis.relayRouting.measuredOutcomes?.(c?.runs) || null;
     for (const provider of this.broker.availableProviders().filter(value => value !== run.provider)) {
       const options = this.broker.usageOptions(provider);
       if (provider === 'gemini' && isAntigravityACP(options.bin)) continue;
@@ -143,7 +144,8 @@ export class RunChecks {
       const allowedModels = models.map(row => row.id || row.model || row.value).filter(id => id && allowed(id));
       if (models.length ? !allowedModels.length : !allowed(null)) continue;
       const usualSpend = usualWindowSpend(c, provider);
-      candidates.push({ provider, models, billingSource: 'subscription', usage, eligible: true, ...(models.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}) });
+      const activeTasks = this.broker.handoff?.activeTasksOn?.(provider, run.id) || 0;
+      candidates.push({ provider, models, billingSource: 'subscription', usage, eligible: true, ...(models.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}), ...(activeTasks ? { activeTasks } : {}), ...(outcomes ? { outcomes } : {}) });
     }
     if (!candidates.length || this.closed || this.broker.running || c.lastRun?.id !== run.id) return false;
     const goal = (c.messages.find(message => message.role === 'user' && message.runId === (run.retryOf || run.id))?.text || run.prompt || c.context?.goal || 'Review the finished changes').slice(0, 4000);
@@ -212,7 +214,7 @@ export class RunChecks {
       try { this.retry(c, run, step, command, result); return; }
       catch (error) { return this.hold(c, `The retry could not start: ${error.message}`, 'Tests failed', `The retry with ${stepName(step)} could not start.`); }
     }
-    const offer = { id: randomUUID(), execution: run.execution, runId: run.id, provider: step.provider, model: step.model || null, modelName: step.modelName || null, effort: step.effort || null, tier: step.tier || null, mode: run.mode, approvalPolicy: run.approvalPolicy, billingConfirmed: run.billingConfirmed === true, routingMode: run.routing.mode, command: command.command, directory: command.directory || '', exitCode: result.exitCode, output: result.output, ...(blocked ? { blocked } : {}), createdAt: new Date().toISOString() };
+    const offer = { id: randomUUID(), execution: run.execution, runId: run.id, provider: step.provider, model: step.model || null, modelName: step.modelName || null, effort: step.effort || null, tier: step.tier || null, mode: run.mode, approvalPolicy: run.approvalPolicy, billingConfirmed: run.billingConfirmed === true, routingMode: run.routing.mode, ...(run.routing.assessment ? { assessment: run.routing.assessment } : {}), command: command.command, directory: command.directory || '', exitCode: result.exitCode, output: result.output, ...(blocked ? { blocked } : {}), createdAt: new Date().toISOString() };
     this.broker.record(c, { type: 'retry_offer', offer });
     this.hold(c, CHECK_PAUSE, 'Tests failed', `Retry with ${stepName(step)}?`);
   }
@@ -224,7 +226,7 @@ export class RunChecks {
     let usage = null;
     try { usage = await this.usage(step.provider, this.broker.usageOptions(step.provider)); } catch { return `${names[step.provider]}'s allowance could not be checked`; }
     const routing = globalThis.relayRouting, mode = routing.normalizeMode(run.routing.mode);
-    const fit = routing.handoffFit(usage, step.model, { mode, current: step.provider === run.provider, tier: step.tier || run.routing.tier || null, usual: usualWindowSpend(c, step.provider) });
+    const fit = routing.handoffFit(usage, step.model, { mode, current: step.provider === run.provider, tier: step.tier || run.routing.tier || null, usual: usualWindowSpend(c, step.provider), activeTasks: this.broker.handoff?.activeTasksOn?.(step.provider, run.id) || 0 });
     if (fit.fits) return null;
     const quota = fit.quota;
     if (quota.state === 'unknown' || quota.state === 'stale') return `${names[step.provider]}'s allowance is ${quota.state}`;
@@ -234,8 +236,12 @@ export class RunChecks {
   }
 
   retry(c, run, step, command, result, automatic = true) {
+    const prevAssessment = run.routing?.assessment;
+    const assessment = prevAssessment && typeof prevAssessment.id === 'string'
+      ? { ...prevAssessment, ...(step.tier ? { tier: step.tier } : {}), ...(['low', 'medium', 'high'].includes(step.effort) ? { effort: step.effort } : {}) }
+      : null;
     return this.broker.start(c, { text: retryPrompt(command, result), provider: step.provider, model: step.model || null, effort: step.effort || null, mode: run.mode, approvalPolicy: run.approvalPolicy, billingConfirmed: run.billingConfirmed === true,
-      routing: { mode: run.routing.mode, tier: step.tier, reason: 'The tests failed, so one step up' }, requestId: `retry-${run.id}` }, { retryOf: run.id, execution: run.execution, executionAction: automatic ? 'retry' : 'manual' });
+      routing: { mode: run.routing.mode, tier: step.tier, reason: 'The tests failed, so one step up', ...(assessment ? { assessment } : {}) }, requestId: `retry-${run.id}` }, { retryOf: run.id, execution: run.execution, executionAction: automatic ? 'retry' : 'manual' });
   }
 
   // A retry the person accepted from an offer.
@@ -246,7 +252,7 @@ export class RunChecks {
     if (c.lastRun?.id !== offer.runId) throw Object.assign(new Error('Another run has finished since. Send a new message instead.'), { status: 409 });
     this.broker.record(c, { type: 'retry_offer_end', id: offer.id, outcome: 'accepted' });
     this.broker.execution.assert(c, offer.execution, { action: 'manual' });
-    const run = { id: offer.runId, execution: offer.execution, mode: offer.mode, approvalPolicy: offer.approvalPolicy, billingConfirmed: offer.billingConfirmed, routing: { mode: offer.routingMode } };
+    const run = { id: offer.runId, execution: offer.execution, mode: offer.mode, approvalPolicy: offer.approvalPolicy, billingConfirmed: offer.billingConfirmed, routing: { mode: offer.routingMode, ...(offer.assessment ? { assessment: offer.assessment } : {}) } };
     return this.retry(c, run, offer, { command: offer.command, directory: offer.directory }, { exitCode: offer.exitCode, output: offer.output }, false);
   }
   dismiss(c, offerId) {
