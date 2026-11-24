@@ -60,6 +60,9 @@
     <script src="/vendor/addon-web-links.js" defer></script>
     <script src="/bottom-panel.js" defer></script>
     <script src="/preview.js" defer></script>
+    <link rel="stylesheet" href="/sketch.css" />
+    <script src="/sketch-logic.js" defer></script>
+    <script src="/sketch.js" defer></script>
     <script src="/terminal.js" defer></script>
     <script src="/cli-tab.js" defer></script>
     <link rel="stylesheet" href="/voice.css" />
@@ -210,6 +213,7 @@
             <label class="github-repos-search"><span class="sr-only">Search repositories</span><input id="github-repos-search" type="search" autocomplete="off" spellcheck="false" placeholder="Search your repositories" aria-controls="github-repos-list" disabled /></label>
             <div id="github-repos-list" class="github-repos-list" role="list" aria-label="Your repositories" aria-busy="true"></div>
             <div class="github-clone-folder"><label for="github-clone-folder">Clone into</label><input id="github-clone-folder" autocomplete="off" spellcheck="false" placeholder="~/Developer" /><button id="github-clone-pick" class="secondary-button" type="button" hidden>Choose…</button></div>
+            <div id="github-signin" class="github-signin" hidden><p id="github-signin-text" class="github-signin-text" role="status"></p><div class="github-signin-actions"><button id="github-signin-start" class="secondary-button" type="button" hidden>Sign in with GitHub</button><button id="github-signout" class="secondary-button" type="button" hidden>Sign out</button></div></div>
             <p id="github-repos-error" class="project-error" role="alert" hidden></p>
           </section>
           <form id="project-form" class="project-form" role="tabpanel" aria-labelledby="project-source-folders">

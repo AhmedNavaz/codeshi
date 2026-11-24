@@ -2289,3 +2289,35 @@ test('TaskCoordinator.ledgers attributes role, scopeFiles and board vs group pla
   assert.equal(boardPlan.steps, 1);
   assert.ok(boardPlan.roles.backend);
 });
+
+test('a Design card hands design notes to the frontend, and a card carries its screenshots to its task (#125)', t => {
+  const env = setup(t);
+  // A Design card produces design notes unless you chose what it produces, and is told how to write them.
+  const design = env.add({ title: 'Design the pricing page', column: 'ready', role: 'design', group: 'Pricing' });
+  assert.equal(design.artifact, 'design');
+  assert.equal(env.add({ title: 'Design tokens', role: 'design', artifact: 'diff' }).artifact, 'diff', 'What you chose stays.');
+  assert.match(env.board.prompt(env.c, env.card(design.id)), /your report is this card’s design notes[\s\S]*You are the designer for this card[\s\S]*heading “Design notes”/);
+  // The frontend card in its group waits for it; once it does, it can run.
+  const frontend = env.add({ title: 'Build the pricing page', column: 'ready', role: 'frontend', group: 'Pricing' });
+  assert.throws(() => env.board.run(env.c, { ids: [frontend.id] }), /must depend on design card “Design the pricing page”/);
+  env.board.edit(env.c, frontend.id, { dependsOn: [design.id] });
+  assert.match(env.board.prompt(env.c, env.card(frontend.id), { [design.id]: { status: 'integrated', files: [], summary: '## Design notes\n1. Plans: three cards.' } }), /“Design the pricing page” \(design\)\n {2}Its changes were merged into the folder\.\n {2}Its design notes, in its own words:\n {4}## Design notes\n {4}1\. Plans: three cards\./);
+
+  // Attachments: saved files only, up to 6, named in the prompt and the export, and sent with the card's task.
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const shot = env.broker.attachments.put({ name: 'design-page.png', data: png });
+  assert.throws(() => env.add({ title: 'Missing', attachments: ['0'.repeat(64)] }), /no longer available/);
+  assert.throws(() => env.add({ title: 'Too many', attachments: Array(7).fill(shot.id) }), /up to 6 files/);
+  assert.throws(() => env.add({ title: 'Not ids', attachments: [{ id: shot.id }] }), /up to 6 files/);
+  const card = env.add({ title: 'Apply the design notes', column: 'ready', notes: 'Design notes for the preview of localhost:3000, 1 section.', attachments: [shot.id] });
+  assert.deepEqual(card.attachments, [{ id: shot.id, name: 'design-page.png', kind: 'image', mime: 'image/png', bytes: shot.bytes }]);
+  assert.match(env.board.prompt(env.c, env.card(card.id)), /Attached to this card, and given with this message: design-page\.png\./);
+  assert.match(env.board.markdown(env.c), /Attached: design-page\.png/);
+  const before = env.card(card.id).revision;
+  env.board.edit(env.c, card.id, { attachments: [] });
+  assert.equal(env.card(card.id).revision, before + 1, 'Taking a screenshot off changes what the agent gets.');
+  assert.doesNotMatch(env.board.prompt(env.c, env.card(card.id)), /Attached to this card/);
+  env.board.edit(env.c, card.id, { attachments: [shot.id] });
+  const { tasks } = env.board.run(env.c, { ids: [card.id] });
+  assert.deepEqual(env.task(tasks[card.id]).attachments, [shot.id]);
+});

@@ -17,7 +17,10 @@
   //    goes to a model below deep only when no deep model has usable allowance.
   // 7: weekly windows resetting within burndown hours get steeper spendability and fit under handoff so expiring
   //    allowance is used before fresh weeks on other agents, and Ultra uses Fable/Astra while their weekly limit is expiring.
-  const POLICY_VERSION = 7;
+  // 8: room is left for other tasks running on the same agent, models with three or more tested runs are ranked by how
+  //    often they pass within a tier, and agents that can't run a needed skill or fit a reported context are skipped.
+  //    Gemini 4 Carbon (Ultra deep only) and Neon are rated deep, and the 3.6 and Flash-Lite models light, from Google's model page.
+  const POLICY_VERSION = 8;
   const LEGACY_MODES = Object.freeze({ saving: 'saver', balanced: 'smart', quality: 'ultra' });
   const normalizeMode = mode => MODES.includes(mode) ? mode : LEGACY_MODES[mode] || null;
   const modeNames = { saver: 'Saver', smart: 'Smart', ultra: 'Ultra', saving: 'Saver', balanced: 'Smart', quality: 'Ultra' };
@@ -209,8 +212,10 @@
   // from measured quality; review the list when an agent's catalog changes. ultra: chosen on its own only for deep work
   // in Ultra, with the agent's other deep model used when its allowance is tight (Astra and Fable, Nov 16, 2026).
   // manual: rated, but only ever chosen by you. Raise POLICY_VERSION when a change here changes what gets chosen.
-  const MODEL_LIST_DATE = '2026-11-16';
+  const MODEL_LIST_DATE = '2026-11-24';
   const rate = (tier, ids, extra = {}) => ids.map(id => [id, { tier, ...extra }]);
+  // A Gemini model's plain id and the older listing's ids with the thinking level on the end.
+  const gemini = ids => ids.flatMap(id => [id, `${id}-low`, `${id}-medium`, `${id}-high`]);
   const MODEL_LIST = new Map([
     // Codex
     ...rate('light', ['gpt-6-luna', 'gpt-5.6-luna']),
@@ -222,14 +227,19 @@
     ...rate('standard', ['sonnet', 'claude-sonnet-5', 'claude-sonnet-4-6'], { images: true }),
     ...rate('deep', ['opus', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6'], { images: true }),
     ...rate('deep', ['fable', 'claude-fable-5', 'claude-fable-5-2'], { ultra: true, images: true }),
-    // Gemini, through Antigravity: its catalog has no descriptions. Argon is the strongest, as its own weekly limit
-    // suggests (like Fable's), Hydrogen sits in the middle and Flash is light (your rating, Nov 16, 2026). Antigravity
-    // reports plain ids (gemini-4-argon) with the thinking level as the effort; the older agy listing put the level in
-    // the id, and every level shares one rating. All take images, per Google's model documentation; the connection
-    // must report image input as well (imageConnection).
-    ...rate('light', ['gemini-3.8-flash', 'gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-high'], { images: true }),
-    ...rate('standard', ['gemini-4-hydrogen', 'gemini-4-hydrogen-low', 'gemini-4-hydrogen-medium', 'gemini-4-hydrogen-high'], { images: true }),
-    ...rate('deep', ['gemini-4-argon', 'gemini-4-argon-low', 'gemini-4-argon-medium', 'gemini-4-argon-high'], { images: true }),
+    // Gemini, through Antigravity: its catalog has no descriptions, so these ratings follow Google's model page
+    // (ai.google.dev/gemini-api/docs/models, read Nov 24, 2026). Carbon is "our strongest reasoning model", so like
+    // Fable and Astra it is chosen on its own only for deep work in Ultra. Neon is "frontier-level" and Argon is the
+    // efficient frontier model, both deep (Argon was rated deep by you, Nov 16). Hydrogen is "everyday coding and
+    // agentic workflows" (standard). The Flash models, including the older 3.6 Flash and the Flash-Lite ones, are light,
+    // as you rated 3.8 Flash. Models that aren't for coding (live, speech, image, video, embedding) and older retiring
+    // ones stay unrated, so routing never picks them. Antigravity reports plain ids with the thinking level as the
+    // effort; the older agy listing put the level in the id, and every level shares one rating. All take text, image,
+    // audio, video and PDF; the connection must report image input as well (imageConnection). Each takes 1M tokens.
+    ...rate('light', gemini(['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite']), { images: true, contextWindow: 1000000 }),
+    ...rate('standard', gemini(['gemini-4-hydrogen']), { images: true, contextWindow: 1000000 }),
+    ...rate('deep', gemini(['gemini-4-argon', 'gemini-4-neon']), { images: true, contextWindow: 1000000 }),
+    ...rate('deep', gemini(['gemini-4-carbon']), { ultra: true, images: true, contextWindow: 1000000 }),
     // Codex's catalog lists each model's input types (inputModalities), so its entries carry no images rating.
   ]);
   const modelId = row => row?.id || row?.model || row?.value || '';

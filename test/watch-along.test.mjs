@@ -34,7 +34,7 @@ function fakeRelay() {
   return { factory, get };
 }
 const config = { projectId: 'codeshi-test', apiKey: 'A'.repeat(30), databaseURL: 'https://codeshi-test.firebaseio.com', phoneURL: 'https://phone.example.com' };
-const until = async (check, label) => { for (let i = 0; i < 300; i++) { const value = check(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 10)); } throw Error(`Timed out: ${label}`); };
+const until = async (check, label) => { for (let i = 0; i < 300; i++) { const value = await check(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 10)); } throw Error(`Timed out: ${label}`); };
 
 test('a watcher sees an allowlisted view: no host paths, raw step output or settings', () => {
   const view = watchView({
@@ -253,4 +253,180 @@ test('in Codeshi, a teammate’s message joins the workspace queue with its agen
   assert.deepEqual(item.author, { name: 'Sara', room: roomId });
   assert.equal(item.billingConfirmed, false);
   await assert.rejects(watch({ action: 'send', id: 'nope' }), /already sent or dismissed/);
+});
+
+test('running together: a teammate runs on their own account, streams progress, records the turn, and returns a reviewed patch with conflict checks and undo', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'watch-run-')), relay = fakeRelay();
+  const hostWorkspace = path.join(dir, 'host-ws'), peerWorkspace = path.join(dir, 'peer-ws');
+  fs.mkdirSync(hostWorkspace); fs.mkdirSync(peerWorkspace);
+  fs.writeFileSync(path.join(hostWorkspace, 'auth.js'), 'export const ttl = 60;\n');
+  fs.writeFileSync(path.join(peerWorkspace, 'auth.js'), 'export const ttl = 60;\n');
+
+  const messages = [{ id: 'm1', role: 'user', text: 'Check token expiry' }];
+  let hostStatus = 'idle', releaseRun = null;
+  const host = createWatchAlong({
+    config, storeFile: path.join(dir, 'host.json'), clientFactory: relay.factory,
+    workspaceName: () => 'demo-app',
+    workspaceFor: () => hostWorkspace,
+    readConversation: () => watchView({ id: 'c1', title: 'Auth', status: hostStatus, messages }),
+    recordTurn: (_projectId, turn) => {
+      messages.push({ id: `u-${messages.length}`, role: 'user', text: turn.prompt, author: turn.author });
+      if (turn.reply) messages.push({ id: `a-${messages.length}`, role: 'assistant', provider: turn.provider, model: turn.model, text: turn.reply, author: turn.author });
+    },
+    notePatch: (_projectId, text) => { messages.push({ id: `s-${messages.length}`, role: 'system', text }); },
+  });
+  const viewer = createWatchAlong({
+    config, storeFile: path.join(dir, 'viewer.json'), clientFactory: relay.factory,
+    workspaceName: () => 'peer-copy',
+    workspaceFor: () => peerWorkspace,
+    readConversation: () => null,
+    runLocal: async ({ prompt, provider, onStep, registerCancel }) => {
+      let stopped = false;
+      registerCancel(() => { stopped = true; releaseRun?.(); });
+      onStep('$ npm test');
+      await new Promise(resolve => { releaseRun = resolve; });
+      if (stopped) return { status: 'stopped', reply: '', provider, model: 'gpt-5' };
+      fs.writeFileSync(path.join(peerWorkspace, 'auth.js'), 'export const ttl = 300;\n');
+      fs.writeFileSync(path.join(peerWorkspace, 'refresh.js'), 'export function refresh() { return true; }\n');
+      return { status: 'complete', reply: `Updated ttl for: ${prompt}`, provider, model: 'gpt-5' };
+    },
+  });
+
+  try {
+    await host.manage({ action: 'invite', projectId: 'p1' });
+    const { joined } = await viewer.manage({ action: 'join', link: host.status('p1').host.invite.link, name: 'Sara' });
+    const roomId = host.status('p1').host.watchers[0].id;
+    await host.manage({ action: 'allow', projectId: 'p1', id: roomId });
+    await viewer.manage({ action: 'look', id: joined, looking: true });
+    await until(() => viewer.status().watching[0].state === 'active', 'allowed');
+
+    // Without 'run' permission, running on their own account is refused.
+    await assert.rejects(viewer.manage({ action: 'run', id: joined, localProjectId: 'peer-p1', text: 'Extend token TTL' }), /haven’t let you run on your own account/);
+    await host.manage({ action: 'level', projectId: 'p1', id: roomId, level: 'run' });
+    await until(() => viewer.status().watching[0].level === 'run', 'run level active');
+
+    // Mutual exclusion: while the host conversation is busy, a teammate cannot start a conflicting run.
+    hostStatus = 'running';
+    await assert.rejects(viewer.manage({ action: 'run', id: joined, localProjectId: 'peer-p1', text: 'Extend token TTL' }), /Wait for their current run to finish first/);
+    hostStatus = 'idle';
+
+    // Start a run in the background (wait: false) so we can observe live progress and host cancellation.
+    await viewer.manage({ action: 'run', id: joined, localProjectId: 'peer-p1', text: 'Cancel this run', provider: 'codex', wait: false });
+    await until(() => host.status('p1').host.teammateRun?.step === 'Running npm test', 'live step streamed to host');
+    assert.equal(host.status('p1').host.teammateRun.from, 'Sara');
+    assert.equal(host.status('p1').host.teammateRun.provider, 'codex');
+
+    // Host can stop the teammate's active run.
+    await host.manage({ action: 'cancel-run', projectId: 'p1' });
+    await until(() => !host.status('p1').host.teammateRun && !viewer.status().watching[0].running, 'cancelled run cleared');
+
+    // Now run a full turn to completion.
+    const runPromise = viewer.manage({ action: 'run', id: joined, localProjectId: 'peer-p1', text: 'Extend token TTL to 300s', provider: 'codex' });
+    await until(() => host.status('p1').host.teammateRun?.step === 'Running npm test', 'second run started');
+    releaseRun();
+    const completed = await runPromise;
+    assert.equal(completed.run.status, 'complete');
+    assert.deepEqual(completed.run.files, ['auth.js', 'refresh.js']);
+
+    // The prompt and reply are recorded on the shared conversation with ranOn: 'peer'.
+    const userTurn = messages.find(m => m.role === 'user' && m.text === 'Extend token TTL to 300s');
+    const replyTurn = messages.find(m => m.role === 'assistant' && m.text.includes('Updated ttl'));
+    assert.deepEqual(userTurn.author, { name: 'Sara', room: roomId, ranOn: 'peer' });
+    assert.deepEqual(replyTurn.author, { name: 'Sara', room: roomId, ranOn: 'peer' });
+    const saraView = viewer.status().watching[0].view;
+    assert.deepEqual(saraView.messages.find(m => m.text === 'Extend token TTL to 300s').author, { name: 'Sara', mine: true, ranOn: 'peer' });
+
+    // The returned file changes sit in a patch card on the host for diff review.
+    const [patch] = host.status('p1').host.suggestions;
+    assert.equal(patch.kind, 'patch');
+    assert.equal(patch.from, 'Sara');
+    assert.equal(patch.files.length, 2);
+
+    const { patchPreview } = await host.manage({ action: 'preview-patch', projectId: 'p1', id: patch.id });
+    assert.equal(patchPreview.conflicts.length, 0);
+    assert.match(patchPreview.files.find(f => f.path === 'auth.js').diff, /-export const ttl = 60;[\s\S]*\+export const ttl = 300;/);
+
+    // If the host's file diverges before applying, preview flags the conflict and apply refuses.
+    fs.writeFileSync(path.join(hostWorkspace, 'auth.js'), 'export const ttl = 120;\n');
+    const { patchPreview: conflicted } = await host.manage({ action: 'preview-patch', projectId: 'p1', id: patch.id });
+    assert.equal(conflicted.conflicts.length, 1);
+    await assert.rejects(host.manage({ action: 'apply-patch', projectId: 'p1', id: patch.id, digest: conflicted.digest }), /changed on your computer since their baseline/);
+
+    // Restore baseline, review, apply cleanly, verify files on disk, then undo back to baseline.
+    fs.writeFileSync(path.join(hostWorkspace, 'auth.js'), 'export const ttl = 60;\n');
+    const { patchPreview: clean } = await host.manage({ action: 'preview-patch', projectId: 'p1', id: patch.id });
+    await host.manage({ action: 'apply-patch', projectId: 'p1', id: patch.id, digest: clean.digest });
+    assert.equal(fs.readFileSync(path.join(hostWorkspace, 'auth.js'), 'utf8'), 'export const ttl = 300;\n');
+    assert.equal(fs.readFileSync(path.join(hostWorkspace, 'refresh.js'), 'utf8'), 'export function refresh() { return true; }\n');
+    assert.equal(host.status('p1').host.suggestions[0].status, 'applied');
+
+    await host.manage({ action: 'undo-patch', projectId: 'p1', id: patch.id });
+    assert.equal(fs.readFileSync(path.join(hostWorkspace, 'auth.js'), 'utf8'), 'export const ttl = 60;\n');
+    assert.equal(fs.existsSync(path.join(hostWorkspace, 'refresh.js')), false);
+    assert.equal(host.status('p1').host.suggestions[0].status, 'pending');
+  } finally {
+    await host.close(); await viewer.close(); fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('two Codeshi instances run together on the teammate’s own computer and account, then apply and undo the patch on the host', { skip: scriptCLIs }, async t => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'watch-two-servers-')), relay = fakeRelay();
+  const hostWorkspace = path.join(folder, 'host-workspace'), peerWorkspace = path.join(folder, 'peer-workspace');
+  fs.mkdirSync(hostWorkspace); fs.mkdirSync(peerWorkspace);
+  fs.writeFileSync(path.join(hostWorkspace, 'index.js'), 'export const version = 1;\n');
+  fs.writeFileSync(path.join(peerWorkspace, 'index.js'), 'export const version = 1;\n');
+  fs.writeFileSync(path.join(peerWorkspace, '.mock-scenarios.json'), JSON.stringify({
+    '~Bump version to 2': {
+      text: 'Bumped version to 2 in index.js.',
+      write: { 'index.js': 'export const version = 2;\n' },
+    },
+  }));
+  const bin = path.join(folder, 'codex-mock.mjs');
+  fs.writeFileSync(bin, `#!${process.execPath}\nimport ${JSON.stringify(pathToFileURL(fileURLToPath(new URL('./mock-cli.mjs', import.meta.url))).href)};\n`, { mode: 0o700 });
+
+  const hostApp = createRelayServer({ workspace: hostWorkspace, dataRoot: path.join(folder, 'host-data'), accessToken: 'host-token', lock: false, bins: { codex: bin },
+    phoneOptions: { interfaces: () => [], remoteConfig: config, remoteClientFactory: relay.factory, watchClientFactory: relay.factory } });
+  const peerApp = createRelayServer({ workspace: peerWorkspace, dataRoot: path.join(folder, 'peer-data'), accessToken: 'peer-token', lock: false, bins: { codex: bin },
+    phoneOptions: { interfaces: () => [], remoteConfig: config, remoteClientFactory: relay.factory, watchClientFactory: relay.factory } });
+  t.after(async () => { await peerApp.close({ force: true }); await hostApp.close({ force: true }); fs.rmSync(folder, { recursive: true, force: true }); });
+
+  hostApp.server.listen(0, '127.0.0.1'); await once(hostApp.server, 'listening');
+  peerApp.server.listen(0, '127.0.0.1'); await once(peerApp.server, 'listening');
+  const hostBase = `http://127.0.0.1:${hostApp.server.address().port}`, hostHeaders = { 'X-AI-Relay-Token': 'host-token', 'X-AI-Relay': '1', 'Content-Type': 'application/json' };
+  const peerBase = `http://127.0.0.1:${peerApp.server.address().port}`, peerHeaders = { 'X-AI-Relay-Token': 'peer-token', 'X-AI-Relay': '1', 'Content-Type': 'application/json' };
+  const hostProjectId = hostApp.registry.list()[0].id, peerProjectId = peerApp.registry.list()[0].id;
+
+  const hostWatch = async body => { const res = await fetch(`${hostBase}/api/watch?projectId=${hostProjectId}`, { method: 'POST', headers: hostHeaders, body: JSON.stringify(body) }); const value = await res.json(); if (!res.ok) throw Error(value.error); return value; };
+  const peerWatch = async body => { const res = await fetch(`${peerBase}/api/watch?projectId=${peerProjectId}`, { method: 'POST', headers: peerHeaders, body: JSON.stringify(body) }); const value = await res.json(); if (!res.ok) throw Error(value.error); return value; };
+
+  const link = (await hostWatch({ action: 'invite' })).host.invite.link;
+  const { joined } = await peerWatch({ action: 'join', link, name: 'Sara' });
+  const roomId = (await (await fetch(`${hostBase}/api/watch?projectId=${hostProjectId}`, { headers: hostHeaders })).json()).host.watchers[0].id;
+  await hostWatch({ action: 'allow', id: roomId });
+  await peerWatch({ action: 'look', id: joined, looking: true });
+  await until(async () => (await (await fetch(`${peerBase}/api/watch`, { headers: peerHeaders })).json()).watching[0]?.state === 'active', 'peer active');
+  await hostWatch({ action: 'level', id: roomId, level: 'run' });
+  await until(async () => (await (await fetch(`${peerBase}/api/watch`, { headers: peerHeaders })).json()).watching[0]?.level === 'run', 'peer run level');
+
+  // Sara runs a turn on her own Codeshi server and Codex CLI in her own workspace copy.
+  await peerWatch({ action: 'run', id: joined, localProjectId: peerProjectId, text: 'Bump version to 2', provider: 'codex' });
+
+  // The host conversation now has Sara's prompt, her agent's reply, and a reviewed patch ready to apply.
+  const hostConv = hostApp.registry.broker(hostProjectId).get(hostApp.registry.mainConversationId(hostProjectId));
+  assert.ok(hostConv.messages.some(m => m.role === 'user' && m.text === 'Bump version to 2' && m.author?.ranOn === 'peer'));
+  assert.ok(hostConv.messages.some(m => m.role === 'assistant' && m.text.includes('Bumped version to 2') && m.author?.ranOn === 'peer'));
+
+  const hostState = await (await fetch(`${hostBase}/api/watch?projectId=${hostProjectId}`, { headers: hostHeaders })).json();
+  const [patch] = hostState.host.suggestions;
+  assert.equal(patch.kind, 'patch');
+  assert.equal(patch.files.length, 1);
+  assert.equal(patch.files[0].path, 'index.js');
+
+  const { patchPreview } = await hostWatch({ action: 'preview-patch', id: patch.id });
+  assert.equal(patchPreview.conflicts.length, 0);
+  await hostWatch({ action: 'apply-patch', id: patch.id, digest: patchPreview.digest });
+  assert.equal(fs.readFileSync(path.join(hostWorkspace, 'index.js'), 'utf8'), 'export const version = 2;\n');
+
+  await hostWatch({ action: 'undo-patch', id: patch.id });
+  assert.equal(fs.readFileSync(path.join(hostWorkspace, 'index.js'), 'utf8'), 'export const version = 1;\n');
 });

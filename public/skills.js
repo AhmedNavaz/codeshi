@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   // Skills (#86), under the Brief panel: procedures any agent can follow, used by typing /name in a prompt or when a task
-  // clearly matches. Claude loads them with its own skill system; Codex and Gemini get them as instructions. The panel lists what is enabled; Add skills opens everything found, which only reads descriptions.
+  // clearly matches. Each agent loads them with its own skill system. The panel lists what is enabled; Add skills opens everything found, which only reads descriptions.
   const $ = id => document.getElementById(id), api = window.relayUI, panel = $('brief-panel'), list = $('skills-list');
   if (!api || !list || !panel) return;
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };

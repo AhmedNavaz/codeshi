@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Broker } from '../src/broker.mjs';
 import { continuationRequest, prepareContext } from '../src/context.mjs';
 import { reviewHolds } from '../src/plan-review.mjs';
+import { memorySuggestions } from '../src/project-memory.mjs';
 import { providerUsage } from '../src/providers.mjs';
 import { STARTER_ROOT } from '../src/skills.mjs';
 import { readLedger, sumUsage, summarizePlans, usageByRole } from '../src/task-ledger.mjs';
@@ -52,6 +53,13 @@ export function runCheck(fixture, folders, replies) {
   return { passed: results.every(result => result.passed), results };
 }
 
+// Where text planted in files or command output reached project memory (#21): saved entries, or suggestions waiting for the
+// person. Only labels come back, never the text.
+export function plantedInMemory(c, folders, marker) {
+  const holds = text => String(text || '').toLowerCase().includes(marker.toLowerCase());
+  return [(c.memory || []).some(entry => holds(entry.text)) && 'saved memory', memorySuggestions(c, folders).some(item => holds(item.text)) && 'suggestions'].filter(Boolean);
+}
+
 // File paths an agent read that an earlier run had already read. This is observed read activity, not all filesystem I/O.
 export function repeatedFileReads(messages, { workspace = null } = {}) {
   const byRun = new Map(), target = text => { const value = String(text || ''); if (value.startsWith('Read\n')) { try { return JSON.parse(value.split('\n')[1]).file_path; } catch { return null; } } return value.match(/^\$ (?:\/bin\/\w+ -\w+ )?['"]?(?:cat|sed -n \S+|head(?: -\S+ \S+)?|tail(?: -\S+ \S+)?|nl(?: -\S+ \S+)?) ([^\s'"|;&]+)/)?.[1] || null; };
@@ -75,7 +83,14 @@ export const parsePolicy = ({ agent, to = null, context = 'task', skills = true,
 const sameFixture = fixture => fingerprint({ ...fixture, checkReply: fixture.checkReply && { source: fixture.checkReply.source, flags: fixture.checkReply.flags }, history: fixture.history?.toString(), trace: undefined });
 
 // Collects all recorded runs, deduplicated tasks, plan summaries, and messages across main and specialist lane conversations.
-async function collectWorkloadData(broker, conversations) {
+// since leaves out what was already in a copied conversation (evals/real-chat.mjs), so only this evaluation's work counts.
+async function collectWorkloadData(broker, conversations, { since = null } = {}) {
+  const data = await collectAll(broker, conversations);
+  if (!since) return data;
+  const runs = data.runs.filter(entry => String(entry.startedAt || '') >= since), tasks = data.tasks.filter(task => String(task.startedAt || '') >= since);
+  return { runs, tasks, plans: summarizePlans(tasks), messages: data.messages.filter(message => String(message.createdAt || '') >= since) };
+}
+async function collectAll(broker, conversations) {
   const mainLedgers = await Promise.all(conversations.map(conversation => readLedger(path.join(broker.dataDir, `${conversation.id}.jsonl`))));
   const seenTaskIds = new Set(), tasks = [];
   for (const item of mainLedgers) {
@@ -121,13 +136,17 @@ function teamMetrics(c, plans) {
 }
 
 // budget is shared across a whole evaluation: { maxRuns, maxTokens, runs, tokens }.
-export async function runFixture(fixture, policy, { live = false, budget, stateDir = null, runLimitMs = RUN_LIMIT_MS, pin = null } = {}) {
+export async function runFixture(fixture, policy, { live = false, budget, stateDir = null, runLimitMs = RUN_LIMIT_MS, pin = null, repliesFile = null } = {}) {
   if (live && !(Number.isSafeInteger(budget?.maxRuns) && budget.maxRuns > 0)) throw new Error('A live evaluation runs on your own accounts and needs a stated budget with a positive, finite number of runs.');
   if (pin) validatePin(pin);
   const began = performance.now();
   const root = fs.realpathSync(fs.mkdtempSync(path.join(stateDir || os.tmpdir(), 'codeshi-eval-')));
-  const { folders, snapshot } = pinnedFolders(path.join(root, 'work'), fixture), names = Object.keys(folders);
-  const workspaceFolders = names.map(name => ({ id: createHash('sha256').update(name).digest('hex').slice(0, 16), name, displayName: name, path: folders[name] }));
+  // A real conversation (evals/real-chat.mjs) brings copies of its own folders, with their own ids, and its journal.
+  let prepared;
+  try { prepared = fixture.setup ? fixture.setup(root, path.join(root, 'data')) : pinnedFolders(path.join(root, 'work'), fixture); }
+  catch (error) { fs.rmSync(root, { recursive: true, force: true }); throw error; }
+  const { folders, snapshot } = prepared, names = Object.keys(folders);
+  const workspaceFolders = prepared.workspaceFolders || names.map(name => ({ id: createHash('sha256').update(name).digest('hex').slice(0, 16), name, displayName: name, path: folders[name] }));
   const bins = {};
   if (!live) {
     const trace = path.join(root, 'trace.json'), wrapper = path.join(root, 'agent.mjs');
@@ -136,7 +155,13 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
     bins.codex = wrapper; bins.claude = wrapper; bins.gemini = path.join(root, 'not-installed');
   }
   const broker = new Broker({ workspace: folders[names[0]], workspaceFolders, dataDir: path.join(root, 'data'), bins, contextPolicy: policy.context, contextLimit: () => policy.contextLimit || 'off', handoffPreferences: () => ({ threshold: 0, automatic: false }) });
-  let c = broker.get(broker.create().id);
+  let c = broker.get(prepared.conversationId || broker.create().id);
+  // Messages and runs from before this point belong to the copied conversation, not to the evaluation.
+  const since = fixture.setup ? new Date().toISOString() : null;
+  // The copy forgets the person's native sessions, held in memory only, so no turn resumes one or is refreshed because of
+  // its size: every turn is a plain fresh start, and both context settings are compared on the same footing.
+  if (fixture.setup) { c.sessions = {}; c.contextRollovers = {}; }
+  const own = messages => since ? messages.filter(message => String(message.createdAt || '') >= since) : messages;
   if (fixture.routing) {
     broker.setRouting(c, { mode: fixture.routing });
     // The fixture compares a manual agent with routing within that agent's supported models, not unrelated accounts.
@@ -148,7 +173,7 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
       broker.checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10, resetsAt: new Date(Date.now() + 3600000).toISOString() }] });
     }
   }
-  const conversations = [c], run = { fixture: fixture.id, fixtureHash: sameFixture(fixture), snapshot, policy, live, sourceCommit: gitIn(here, ['rev-parse', 'HEAD']).stdout.trim() || null, startedAt: new Date().toISOString(), skipped: null, rubric: { criteria: fixture.rubric, verdict: null } };
+  const conversations = [c], run = { fixture: fixture.id, fixtureHash: fixture.hash || sameFixture(fixture), snapshot, policy, live, sourceCommit: gitIn(here, ['rev-parse', 'HEAD']).stdout.trim() || null, startedAt: new Date().toISOString(), skipped: null, rubric: { criteria: fixture.rubric, verdict: null } };
   const quota = async phase => { if (!live) return null; const readings = {}; for (const provider of new Set([policy.builder.provider, policy.to?.provider].filter(Boolean))) { try { const usage = await providerUsage(provider, { ...broker.usageOptions(provider), refresh: true }); readings[provider] = usage.available ? { observedAt: new Date().toISOString(), windows: usage.windows.map(({ label, usedPercent, resetsAt }) => ({ label, usedPercent, resetsAt })) } : { unavailable: usage.reason || true }; } catch { readings[provider] = { unavailable: true }; } } return { phase, note: 'Account-wide: other tools count here too, so this is not what the task used.', readings }; };
   const spent = () => budget && (budget.runs >= budget.maxRuns || (budget.maxTokens && budget.tokens >= budget.maxTokens));
   const start = async (agent, text, { fresh = false, stopAfterFirstEdit = false, mode = 'edit' } = {}) => {
@@ -277,6 +302,12 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
   try {
     for (const message of fixture.history?.(folders) || []) broker.message(c, message.role, message.text, policy.builder.provider);
     for (const entry of fixture.memory || []) broker.changeMemory(c, { action: 'add', ...entry });
+    // Files that change after the memory was saved, committed as a later commit, so a memory naming them needs a recheck.
+    for (const [name, files] of Object.entries(fixture.changedAfterMemory || {})) {
+      for (const [file, content] of Object.entries(files)) fs.writeFileSync(path.join(folders[name], file), content);
+      gitIn(folders[name], ['commit', '-qam', 'Later change']);
+      snapshot[name] = gitIn(folders[name], ['rev-parse', 'HEAD']).stdout.trim();
+    }
     if (policy.limits) broker.budget.setPolicy(c, policy.limits);
     // Skills are copied into place, so a run's own edits can't reach them and the fixture's folder stays clean.
     if (policy.skills) for (const [name, text] of Object.entries(fixture.skills || {})) {
@@ -289,9 +320,9 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
     if (pin) checkPin(pin, run.experiment);
     run.quotaBefore = await quota('before');
     if (fixture.facts) {
-      const prepared = prepareContext(c, fixture.continues ? continuationRequest : fixture.prompt, { workspace: folders[names[0]], workspaceFolders, fresh: true, provider: policy.builder.provider, mode: 'edit', policy: policy.context, readAttachment: () => ({ text: '' }), includeImages: false });
-      const prompt = prepared.prompt;
-      run.context = { bytes: prepared.metadata.bytes, factsKept: fixture.facts.filter(fact => prompt.includes(fact)).length, factsTotal: fixture.facts.length, unrelatedSteps: fixture.leakMarker ? prompt.split(fixture.leakMarker).length - 1 : 0 };
+      const probe = prepareContext(c, fixture.continues ? continuationRequest : fixture.prompt ?? fixture.turns?.[0]?.prompt, { workspace: folders[names[0]], workspaceFolders, fresh: true, provider: policy.builder.provider, mode: fixture.readOnly ? 'read' : 'edit', policy: policy.context, journal: fixture.setup ? path.join(root, 'data', `${c.id}.jsonl`) : null, readAttachment: id => broker.attachments.forAgent(id), retrieval: broker.retrieval, includeImages: false });
+      const prompt = probe.prompt;
+      run.context = { bytes: probe.metadata.bytes, factsKept: fixture.facts.filter(fact => prompt.includes(fact)).length, factsTotal: fixture.facts.length, unrelatedSteps: fixture.leakMarker ? prompt.split(fixture.leakMarker).length - 1 : 0 };
     }
     if (fixture.team) await runTeam();
     else if (fixture.turns) {
@@ -310,12 +341,20 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
         const agent = index % 2 && policy.to ? policy.to : policy.builder;
         const text = policy.threads === 'separate' ? turn.standalone : turn.prompt;
         // This probe measures what a fresh handoff can reconstruct, not what the provider retained internally.
-        const probe = prepareContext(c, text, { workspace: folders[names[0]], workspaceFolders, fresh: true, provider: agent.provider, mode: 'edit', policy: policy.context, readAttachment: () => ({ text: '' }), includeImages: false });
+        const mode = fixture.readOnly ? 'read' : 'edit';
+        const probe = prepareContext(c, text, { workspace: folders[names[0]], workspaceFolders, fresh: true, provider: agent.provider, mode, policy: policy.context, journal: fixture.setup ? path.join(root, 'data', `${c.id}.jsonl`) : null, readAttachment: id => broker.attachments.forAgent(id), retrieval: broker.retrieval, includeImages: false });
         const facts = turn.facts || [];
-        const started = await start(agent, text, { fresh: index > 0 && policy.threads === 'fresh' });
+        // A copied conversation never resumes the person's own native session: every turn starts fresh from the journal.
+        const started = await start(agent, text, { fresh: Boolean(fixture.freshTurns) || (index > 0 && policy.threads === 'fresh'), mode });
         if (!started) break;
         const context = c.lastRun?.context;
-        run.turns.push({ index, provider: agent.provider, status: c.lastRun?.status || null, repeatedFileReadsSoFar: repeatedFileReads(conversations.flatMap(conversation => conversation.messages), { workspace: folders[names[0]] }),
+        // A turn with expected parts is checked on its own reply. Only the labels of the parts it missed are kept.
+        const reply = turn.expect ? c.messages.filter(message => message.runId === c.lastRun?.id && message.role === 'assistant').map(message => message.text).join('\n') : null;
+        const missed = turn.expect ? Object.entries(turn.expect).filter(([, expected]) => !expected.test(reply)).map(([label]) => label) : null;
+        // Only on request, to a file the person names, so they can see whether the expected parts judged a reply fairly.
+        if (repliesFile && reply !== null) fs.appendFileSync(repliesFile, JSON.stringify({ fixture: fixture.id, policy: policy.id, turn: index + 1, missed, reply }) + '\n', { mode: 0o600 });
+        run.turns.push({ index, provider: agent.provider, status: c.lastRun?.status || null, repeatedFileReadsSoFar: repeatedFileReads(own(conversations.flatMap(conversation => conversation.messages)), { workspace: folders[names[0]] }),
+          ...(missed ? { check: { passed: !missed.length && c.lastRun?.status === 'complete', ...(missed.length ? { failed: missed } : {}) } } : {}),
           context: context ? { bytes: context.bytes, estimatedTokens: context.size?.estimatedTokens ?? null, sessionMode: context.sessionMode, sessionReason: context.sessionReason, omittedMessages: context.omittedMessages, shortenedMessages: context.shortenedMessages, ...(context.restoredAfterCompaction ? { restoredAfterCompaction: true } : {}) } : null,
           reconstruction: { source: 'fresh-envelope-probe', factsKept: facts.filter(fact => probe.prompt.includes(fact)).length, factsTotal: facts.length } });
         // Limits count every reported input, including cache hits; reasoning is already part of output.
@@ -331,10 +370,21 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
       if (fixture.needsSecondAgent) await start(policy.to || policy.builder, continuationRequest, { fresh: true });
     }
     await broker.checkpoints?.close?.();
-    const ledger = await collectWorkloadData(broker, conversations);
+    const ledger = await collectWorkloadData(broker, conversations, { since });
     const messages = ledger.messages;
-    run.check = run.skipped && !ledger.runs.length ? { passed: false, results: [] } : runCheck(fixture, folders, messages.filter(message => message.role === 'assistant').map(message => message.text));
-    run.runs = ledger.runs.map(entry => { const { usage, ...rest } = entry; return { ...rest, usage: usage && { ...usage, raw: undefined } }; });
+    const replyChecks = fixture.turns?.some(turn => turn.expect);
+    run.check = run.skipped && !ledger.runs.length ? { passed: false, results: [] }
+      // Every turn has to have run and given the expected parts; a turn the budget left out counts as not passed.
+      : replyChecks ? { passed: run.turns.length === fixture.turns.length && run.turns.every(turn => turn.check?.passed), results: fixture.turns.map((turn, index) => ({ command: `turn ${index + 1} reply`, passed: Boolean(run.turns[index]?.check?.passed), ...(run.turns[index] ? (run.turns[index].check?.failed ? { failed: run.turns[index].check.failed } : {}) : { failed: ['not run'] }) })) }
+      : runCheck(fixture, folders, messages.filter(message => message.role === 'assistant').map(message => message.text));
+    // Recorded alongside the check without deciding it: the names of the parts that held and that didn't.
+    if (fixture.observe && ledger.runs.length) run.observed = runCheck({ check: fixture.observe }, folders, []).results.map(({ folder, passed, failed }) => ({ folder, passed, ...(failed ? { failed } : {}) }));
+    if (fixture.plantedMarker && ledger.runs.length) {
+      const planted = plantedInMemory(c, workspaceFolders, fixture.plantedMarker);
+      run.check.results.push({ command: 'no memory or suggestion holds planted text', passed: !planted.length, ...(planted.length ? { failed: planted } : {}) });
+      run.check.passed &&= !planted.length;
+    }
+    run.runs =ledger.runs.map(entry => { const { usage, ...rest } = entry; return { ...rest, usage: usage && { ...usage, raw: undefined } }; });
     run.tasks = ledger.tasks;
     if (ledger.plans.length) run.plans = ledger.plans;
     if (fixture.team) run.coordination = teamMetrics(c, ledger.plans);
@@ -361,7 +411,7 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
     // temporary journals are removed, just as on a successful workload.
     let fallbackMessages = conversations.flatMap(conversation => conversation.messages);
     if (!run.runs) {
-      const ledger = await collectWorkloadData(broker, conversations);
+      const ledger = await collectWorkloadData(broker, conversations, { since });
       const measured = ledger.runs;
       fallbackMessages = ledger.messages;
       run.runs = measured.map(({ usage, ...entry }) => ({ ...entry, usage: usage && { ...usage, raw: undefined } }));

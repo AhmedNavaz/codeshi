@@ -76,7 +76,7 @@
   ];
   const AGENTS = [['codex', 'Codex'], ['claude', 'Claude'], ['gemini', 'Gemini']], AGENT = Object.fromEntries(AGENTS);
   const ROLES = [['builder', 'Builder'], ['frontend', 'Frontend'], ['backend', 'Backend'], ['database', 'Database'], ['design', 'Design'], ['qa', 'QA'], ['reviewer', 'Reviewer']], ROLE = Object.fromEntries(ROLES);
-  const PRODUCES = [['', 'Nothing in particular'], ['contract', 'A contract'], ['schema', 'A schema'], ['diff', 'Changes'], ['test_evidence', 'Test evidence'], ['findings', 'Findings']];
+  const PRODUCES = [['', 'Nothing in particular'], ['contract', 'A contract'], ['schema', 'A schema'], ['diff', 'Changes'], ['test_evidence', 'Test evidence'], ['findings', 'Findings'], ['design', 'Design notes']];
   const SIZES = [['light', 'Light'], ['standard', 'Standard'], ['deep', 'Deep']];
   // A card's own tests (#162), as its result and its task report them.
   const TESTS = { running: 'Testing…', passed: 'Tests passed', failed: 'Tests failed', interrupted: 'Tests interrupted', 'no-change': 'No changes to test', unverified: 'Not tested' };
@@ -250,7 +250,7 @@
   }
   // Small stroke icons for the card's footer, drawn like the rest of the app's icons.
   const glyph = d => { const icon = svg('svg'); icon.setAttribute('class', 'icon'); icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('aria-hidden', 'true'); for (const part of d.split('|')) { const path = svg('path'); path.setAttribute('d', part); icon.append(path); } return icon; };
-  const ICONS = { retry: 'M20 12a8 8 0 1 1-2.6-5.9|M20 4v5h-5', handoff: 'M16 4l4 4-4 4|M20 8H5|M8 20l-4-4 4-4|M4 16h15', checks: 'M4 12.5l3 3 6-7|M14 9h6M14 15h6', waits: 'M4 6h7a4 4 0 0 1 4 4v8|M11 14l4 4 4-4', smart: 'M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z', subtasks: 'M5 6h4M5 12h4M5 18h4|M13 6h6M13 12h6M13 18h6', files: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z|M14 3v5h5' };
+  const ICONS = { retry: 'M20 12a8 8 0 1 1-2.6-5.9|M20 4v5h-5', handoff: 'M16 4l4 4-4 4|M20 8H5|M8 20l-4-4 4-4|M4 16h15', checks: 'M4 12.5l3 3 6-7|M14 9h6M14 15h6', waits: 'M4 6h7a4 4 0 0 1 4 4v8|M11 14l4 4 4-4', smart: 'M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z', subtasks: 'M5 6h4M5 12h4M5 18h4|M13 6h6M13 12h6M13 18h6', files: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z|M14 3v5h5', attach: 'm8 13 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9' };
   // Who does a card, in a few words: its task's agent while it runs, otherwise Smart routing or the agent chosen.
   function whoOf(card) {
     const provider = card.taskState?.provider || card.agent?.provider || null;
@@ -416,6 +416,7 @@
     // Before a card runs, including a draft, it says when its agent bills by use (#108).
     const charged = (card.draft || ['backlog', 'ready'].includes(card.column)) && card.agent && bills(card.agent.provider) ? billsLabel(card.agent.provider) : '';
     if (charged) fact('board-card-billing', '', charged, `${billsSentence(card.agent.provider)} You’re asked before it runs.`);
+    if (card.attachments?.length) fact('board-card-attached', ICONS.attach, String(card.attachments.length), `${plural(card.attachments.length, 'file')} attached, given to its agent: ${card.attachments.map(file => file.name).join(', ')}`);
     if (card.checks?.length && !['doing', 'done'].includes(card.column)) fact('board-card-checks', ICONS.checks, `${card.checks.filter(check => check.done).length}/${card.checks.length}`, `Done means: ${plural(card.checks.length, 'check')}`);
     if (card.result && ['review', 'done'].includes(card.column)) {
       const copyCount = card.taskState?.hasWorktree && Number.isInteger(card.taskState.copyFiles) ? card.taskState.copyFiles : null;
@@ -501,10 +502,10 @@
   }
 
   // ---- The drawer
-  const blank = (column, at = null, prefill = {}) => ({ title: '', notes: '', labels: filter ? [allLabels().find(item => item.name.toLowerCase() === filter)?.name].filter(Boolean) : [], agent: null, auto: false, routingMode: null, folderId: null, dependsOn: [], checks: [], group: '', role: 'builder', artifact: null, check: '', files: '', tier: null, closed: false, split: false, column, revision: null, at, ...prefill });
-  const editable = card => ({ title: card.title, notes: card.notes || '', labels: [...(card.labels || [])], agent: card.agent ? { ...card.agent } : null, auto: card.auto === true, routingMode: card.routingMode || null, folderId: card.folderId || null, dependsOn: [...(card.dependsOn || [])], checks: (card.checks || []).map(item => ({ ...item })), group: card.group || '', role: card.role || 'builder', artifact: card.artifact || null, check: card.check || '', files: (card.files || []).join(', '), tier: card.tier || null, closed: card.closed === true, split: card.split === true, column: card.column, revision: card.revision });
+  const blank = (column, at = null, prefill = {}) => ({ title: '', notes: '', labels: filter ? [allLabels().find(item => item.name.toLowerCase() === filter)?.name].filter(Boolean) : [], agent: null, auto: false, routingMode: null, folderId: null, dependsOn: [], checks: [], group: '', role: 'builder', artifact: null, check: '', files: '', tier: null, closed: false, split: false, attachments: [], column, revision: null, at, ...prefill });
+  const editable = card => ({ title: card.title, notes: card.notes || '', labels: [...(card.labels || [])], agent: card.agent ? { ...card.agent } : null, auto: card.auto === true, routingMode: card.routingMode || null, folderId: card.folderId || null, dependsOn: [...(card.dependsOn || [])], checks: (card.checks || []).map(item => ({ ...item })), group: card.group || '', role: card.role || 'builder', artifact: card.artifact || null, check: card.check || '', files: (card.files || []).join(', '), tier: card.tier || null, closed: card.closed === true, split: card.split === true, column: card.column, revision: card.revision, attachments: (card.attachments || []).map(file => ({ ...file })) });
   const fileList = text => [...new Set(String(text || '').split(',').map(item => item.trim()).filter(Boolean))];
-  const fields = value => JSON.stringify([value.title.trim(), value.notes.trim(), value.labels, value.agent?.provider || null, value.auto, value.routingMode || null, value.folderId, [...value.dependsOn].sort(), value.checks.map(item => [item.text.trim(), item.done]), value.group.trim(), value.role, value.artifact, value.check.trim(), fileList(value.files), value.tier, value.closed === true, value.split === true]);
+  const fields = value => JSON.stringify([value.title.trim(), value.notes.trim(), value.labels, value.agent?.provider || null, value.auto, value.routingMode || null, value.folderId, [...value.dependsOn].sort(), value.checks.map(item => [item.text.trim(), item.done]), value.group.trim(), value.role, value.artifact, value.check.trim(), fileList(value.files), value.tier, value.closed === true, value.split === true, (value.attachments || []).map(file => file.id)]);
   // Every group on the Plan, in the order first used.
   const allGroups = () => [...new Set(cards().map(card => card.group).filter(Boolean))];
   const dirty = () => { if (!draft) return false; if (selected === 'new') return Boolean(draft.title.trim() || draft.notes.trim()); const card = cardBy(selected); return card ? fields(draft) !== fields(editable(card)) : false; };
@@ -583,6 +584,53 @@
   // The card opens as a dialog over the Plan: what the card says, its subtasks and what done means in the wide column,
   // and who does it, what it waits for and how it's sorted in the narrow one. Each part says which column it goes in.
   const slot = (element, name) => { element.dataset.slot = name; return element; };
+  // Attached (#125): files that go to the card's agent with it, such as Design notes' screenshots or a sketch. Images show
+  // as thumbnails, which open larger in place; each file is saved once and only its id is on the card.
+  const thumbs = new Map(), MAX_ATTACHED = 6;
+  function attachedField(draft, locked) {
+    const box = node('div', 'board-attached'), list = node('ul', 'board-attached-list');
+    const input = node('input'); input.type = 'file'; input.multiple = true; input.hidden = true; input.accept = 'image/png,image/jpeg,image/gif,image/webp,.txt,.md,.json,.csv,.html,.css,.js,.ts,.tsx,.jsx';
+    const add = button('Attach files…', () => input.click(), 'text-link board-attach-add');
+    const draw = () => {
+      list.replaceChildren(...draft.attachments.map(file => {
+        const row = node('li', `board-attached-item${file.kind === 'image' ? ' image' : ''}`);
+        const open = node('button', 'board-attached-open'); open.type = 'button'; open.title = file.kind === 'image' ? `${file.name}: select to see it larger` : file.name;
+        if (file.kind === 'image') {
+          const img = node('img'); img.alt = file.name; open.append(img);
+          const show = data => { img.src = data; };
+          if (thumbs.has(file.id)) show(thumbs.get(file.id));
+          else api.api(`/api/attachments/preview?id=${encodeURIComponent(file.id)}`).then(saved => { const data = `data:${saved.mime};base64,${saved.data}`; thumbs.set(file.id, data); show(data); }).catch(() => { open.replaceChildren(node('span', 'board-attached-name', `${file.name} · no longer saved`)); });
+          open.addEventListener('click', () => row.classList.toggle('large'));
+        } else open.append(glyph(ICONS.files));
+        open.append(node('span', 'board-attached-name', file.name));
+        const remove = button('×', () => { draft.attachments = draft.attachments.filter(item => item.id !== file.id); draw(); changed(); }, 'icon-button board-check-remove');
+        remove.setAttribute('aria-label', `Remove ${file.name}`); remove.disabled = locked;
+        row.append(open, remove); return row;
+      }));
+      list.hidden = !draft.attachments.length;
+      add.disabled = locked || draft.attachments.length >= MAX_ATTACHED;
+    };
+    input.addEventListener('change', async () => {
+      const chosen = [...input.files]; input.value = '';
+      for (const file of chosen) {
+        if (draft.attachments.length >= MAX_ATTACHED) { refuse(`A card holds up to ${MAX_ATTACHED} files.`); break; }
+        try {
+          if (file.size > 5 * 1024 * 1024) throw Error(`${file.name}: files must be 5 MB or smaller.`);
+          const data = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(Error(`Could not read ${file.name}.`)); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.readAsDataURL(file); });
+          const meta = await api.post('/api/attachments', { name: file.name, data });
+          if (!draft.attachments.some(item => item.id === meta.id)) draft.attachments.push({ id: meta.id, name: meta.name, kind: meta.kind, mime: meta.mime, bytes: meta.bytes });
+          if (meta.kind === 'image') thumbs.set(meta.id, `data:${meta.mime};base64,${data}`);
+        } catch (error) { refuse(error.message); break; }
+      }
+      draw(); changed();
+    });
+    draw();
+    const field = labelled('Attached', list, 'Given to its agent with the card, like files attached to a message.');
+    field.classList.add('board-attached-field');
+    field.insertBefore(add, field.querySelector('.board-field-note')); box.append(input);
+    field.append(box);
+    return field;
+  }
   function editor(card) {
     const locked = card?.column === 'doing', parts = [];
     const title = node('input', 'board-input board-field-title'); title.value = draft.title; title.maxLength = board?.limits?.title || 200; title.placeholder = 'What needs doing'; title.setAttribute('aria-label', 'Card title'); title.disabled = locked;
@@ -590,6 +638,7 @@
     const notes = node('textarea', 'board-input board-field-notes'); notes.value = draft.notes; notes.rows = 5; notes.maxLength = board?.limits?.notes || 20000; notes.placeholder = 'Details the agent needs: where, what, and anything to avoid'; notes.setAttribute('aria-label', 'Card description'); notes.disabled = locked;
     notes.addEventListener('input', () => { draft.notes = notes.value; changed(); });
     parts.push(slot(title, 'main'), slot(notes, 'main'));
+    parts.push(slot(attachedField(draft, locked), 'main'));
     if (locked) parts.push(slot(node('p', 'board-note', 'An agent is working from this card. Stop it to change what it says.'), 'main'));
     // Labels are yours to sort by: the agent isn't told them, so they can change while it works.
     const tags = node('div', 'board-labels-edit'), entry$ = node('input', 'board-label-input'), options = node('datalist');
@@ -751,7 +800,8 @@
       row.append(switchRole);
       roleWarn.replaceChildren(note, row);
     };
-    const rolePick = choose('Role', ROLES, draft.role, value => { draft.role = value; rolePick.dataset.role = value; drawRoleWarn(); });
+    // A Design card produces design notes unless you chose otherwise (#125), as the Plan saves it.
+    const rolePick = choose('Role', ROLES, draft.role, value => { draft.role = value; rolePick.dataset.role = value; if (value === 'design' && !draft.artifact) { draft.artifact = 'design'; if (producesPick) producesPick.value = 'design'; } drawRoleWarn(); });
     rolePick.className = 'orchestration-step-role board-role-pick'; rolePick.dataset.role = draft.role;
     rolePick.title = 'Role: told to the agent, so it works as that specialist. QA and Reviewer cards check the work before them.';
     const roleRow = slot(node('div', 'board-role-row'), 'lead'); roleRow.append(rolePick);
@@ -785,6 +835,9 @@
   function save$() {
     if (!draft?.title.trim()) return;
     const input = { title: draft.title, notes: draft.notes, labels: draft.labels, agent: draft.auto ? null : draft.agent, auto: draft.auto, routingMode: draft.auto ? draft.routingMode || null : null, folderId: draft.folderId, dependsOn: draft.dependsOn, checks: draft.checks.filter(item => item.text.trim()), group: draft.group.trim() || null, role: draft.role, artifact: draft.artifact, check: draft.check.trim() || null, files: fileList(draft.files), tier: draft.tier, closed: draft.closed === true, split: draft.split === true };
+    // Attachments go only when they changed, so a saved file that's gone doesn't stop other edits to the card.
+    const ids = draft.attachments.map(file => file.id), had = (cardBy(selected)?.attachments || []).map(file => file.id);
+    if (selected === 'new' ? ids.length : JSON.stringify(ids) !== JSON.stringify(had)) input.attachments = ids;
     if (selected === 'new') act('/api/board/cards', { ...input, column: draft.column, ...(draft.at ? { at: draft.at } : {}) }, result => { selected = result.card.id; draft = editable(result.card); drawn = null; api.announce(`Added “${result.card.title}” to ${COLUMNS.find(([id]) => id === result.card.column)[1]}.`); });
     else act(`/api/board/cards/${selected}/edit`, { ...input, revision: draft.revision }, result => { draft = editable(result.card); drawn = null; api.announce('Card saved.'); });
   }
@@ -1058,7 +1111,7 @@
       const whyNot = () => shut(card) ? 'Closed to agents. Open it to agents to run it.' : !runnable(card) ? notRunnable(card) : pick?.error ? pick.error : dirty() ? 'Save your changes first.' : '';
       const run = button('Run', () => { const why = whyNot(); if (why) { refuse(`“${card.title}” can’t run yet. ${why}`); return; } const chosen = assignments([card]); if (chosen.error) { refuse(chosen.error); return; } const billing = billingFor([card], chosen.assignments); if (!billing) return; act('/api/board/run', { ids: [card.id], assignments: chosen.assignments, ...billing }, () => api.announce(`“${card.title}” is running as a task.`)); }, 'primary-button');
       blockedLook(run, whyNot(), pick ? `Run this card as its own task. ${pick.text}.` : 'Run this card as its own task.');
-      row.append(run, ...(card.agent ? [scheduleButton(card)] : []));
+      row.append(run, ...(card.agent || inFlow() ? [scheduleButton(card)] : []));
       quiet.append(link(move('Move to Backlog', 'backlog')));
     }
     if (card.column === 'doing') row.append(button('Open its task', () => openTask(card), 'primary-button'), button(card.taskState?.status === 'running' ? 'Stop' : 'Cancel', () => act(`/api/board/cards/${card.id}/stop`)));
@@ -1077,7 +1130,7 @@
       else if (card.taskState) quiet.append(link(button('Show the conversation', () => openTask(card))));
     }
     if (card.column === 'done' && card.taskState) quiet.append(link(button('Show the conversation', () => openTask(card))));
-    if (card.column === 'done') { row.append(move('Reopen', 'ready'), ...(card.agent ? [scheduleButton(card)] : [])); }
+    if (card.column === 'done') { row.append(move('Reopen', 'ready'), ...(card.agent || inFlow() ? [scheduleButton(card)] : [])); }
     next.append(suggestNextButton(card), addNextButton(card));
     quiet.append(link(attachButton(card)));
     if (['backlog', 'ready', 'done'].includes(card.column)) quiet.append(remove);
@@ -1741,17 +1794,29 @@
     // The button follows the limit as you type, without drawing the panel again.
     const paintRun = () => { run.disabled = busy; blockedLook(run, problemNow()); };
     paintRun();
-    const row = node('div', 'board-save-row'); row.append(run); parts.push(row);
+    const row = node('div', 'board-save-row');
+    // In Flow the same ticked cards and limit can run later, or on repeat, as a Flow schedule (#132).
+    if (flow) {
+      const later = button('Schedule…', () => {
+        const problem = !chosen.length ? 'Tick the cards to schedule first.' : chosen.map(card => runnable(card) ? '' : `“${card.title}” can’t be scheduled yet. ${notRunnable(card)}`).find(Boolean);
+        if (problem) { refuse(problem); return; }
+        newSchedule({ type: 'cards', cardIds: chosen.map(card => card.id) }, 'run', { shared: { ...shared } });
+      }, 'secondary-button');
+      later.disabled = busy; later.title = 'Run these cards at a set time, once or on repeat, with Flow picking agents then.';
+      row.append(later);
+    }
+    row.append(run); parts.push(row);
     return parts;
   }
 
   // The limit Flow's run shares: minutes, tokens and API spend for every card together. An empty box is no limit.
   const SHARED = [['maxWorkingMinutes', 'Minutes', 'working minutes', 1], ['maxTokens', 'New tokens', 'new tokens', 1000], ['maxSpendUSD', 'API spend, $', 'API spend in US dollars', 0.5]];
   // The limit as typed, read into numbers, with what is wrong with it, if anything.
-  function readShared() {
+  // values is Run Ready's limit unless given, as the Flow schedule form gives its own (#132).
+  function readShared(values = shared) {
     const limit = {}; let wrong = '';
     for (const [key, label] of SHARED) {
-      const typed = String(shared?.[key] ?? '').trim(), value = typed === '' ? null : Number(typed);
+      const typed = String(values?.[key] ?? '').trim(), value = typed === '' ? null : Number(typed);
       if (value !== null && !(Number.isFinite(value) && value > 0)) wrong ||= `${label} must be a positive number, or empty for no limit.`;
       limit[key] = value !== null && Number.isFinite(value) && value > 0 ? value : null;
     }
@@ -1761,19 +1826,20 @@
     ? 'No limit: the cards run until each is done. Fill in a box to cap the run.'
     : 'Counted across every card in the run, in place of each card’s own task limits. When it runs out, working cards stop and the rest don’t start.');
   // Typing changes only the note and the Run button, so the drawer isn't drawn again under your cursor.
-  function sharedPanel(changed) {
+  // get and set are Run Ready's limit unless given; says words the note, as a schedule's limit is needed, not optional.
+  function sharedPanel(changed, { get = () => shared, set = value => { shared = value; }, says = sharedSays, title = 'One limit for the whole run' } = {}) {
     const box = node('fieldset', 'board-run-limit'), grid = node('div', 'board-run-limit-fields');
     const note = node('p', 'board-run-limit-note'); note.id = 'board-run-limit-note';
     for (const [key, label, unit, step] of SHARED) {
       const field = node('label', 'board-run-limit-field'), input = node('input', 'board-run-limit-input');
-      input.type = 'number'; input.min = String(step); input.step = 'any'; input.inputMode = key === 'maxSpendUSD' ? 'decimal' : 'numeric'; input.placeholder = 'No limit'; input.value = shared?.[key] ?? '';
+      input.type = 'number'; input.min = String(step); input.step = 'any'; input.inputMode = key === 'maxSpendUSD' ? 'decimal' : 'numeric'; input.placeholder = 'No limit'; input.value = get()?.[key] ?? '';
       input.disabled = busy; input.setAttribute('aria-describedby', note.id); input.setAttribute('aria-label', `${unit[0].toUpperCase()}${unit.slice(1)} for the whole run`);
-      input.addEventListener('input', () => { shared = { ...shared, [key]: input.value }; const read = readShared(); note.textContent = sharedSays(read); note.dataset.wrong = read.wrong ? 'true' : ''; changed(); });
+      input.addEventListener('input', () => { set({ ...get(), [key]: input.value }); const read = readShared(get()); note.textContent = says(read); note.dataset.wrong = read.wrong ? 'true' : ''; changed(); });
       field.append(node('span', 'board-run-limit-label', label), input);
       grid.append(field);
     }
-    const read = readShared(); note.textContent = sharedSays(read); note.dataset.wrong = read.wrong ? 'true' : '';
-    box.append(node('legend', 'board-run-limit-title', 'One limit for the whole run'), grid, note);
+    const read = readShared(get()); note.textContent = says(read); note.dataset.wrong = read.wrong ? 'true' : '';
+    box.append(node('legend', 'board-run-limit-title', title), grid, note);
     return box;
   }
   // The Flow runs still going, each with what its cards have used of their shared limit, and Stop for all of them.
@@ -1793,7 +1859,8 @@
       const meter = node('span', 'board-run-strip-bar'), worst = Math.max(...[[used.workingMs / 60000, limits.maxWorkingMinutes], [used.tokens, limits.maxTokens], [used.spendUSD, limits.maxSpendUSD]].filter(([, cap]) => cap).map(([value, cap]) => value / cap), 0);
       const fill = node('span', 'board-run-strip-fill'); fill.style.width = `${Math.min(100, Math.round(worst * 100))}%`; meter.append(fill); meter.setAttribute('aria-hidden', 'true'); meter.hidden = !Object.values(limits).some(value => value !== null);
       row.dataset.state = worst >= 0.9 ? 'near' : '';
-      const title = node('span', 'board-run-strip-title', `Run of ${plural(item.cards.length, 'card')}`);
+      // A Flow schedule's prompt is a run with no cards, named by the schedule (#132).
+      const title = node('span', 'board-run-strip-title', item.title && !item.cards.length ? `Scheduled: ${item.title}` : `Run of ${plural(item.cards.length, 'card')}`);
       const live = item.cards.map(cardBy).filter(card => card && card.column === 'doing');
       const stop = button('Stop run', () => { if (window.confirm(`Stop the ${plural(live.length, 'card')} still in this run?`)) act('/api/board/stop', { ids: live.map(card => card.id) }, () => api.announce('Stopped the run.')); }, 'text-link board-run-strip-stop');
       stop.disabled = busy || !live.length;
@@ -1809,7 +1876,7 @@
   const REPEAT = [['once', 'Once'], ['daily', 'Every day'], ['weekdays', 'Weekdays'], ['weekly', 'Every week']];
   const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const schedules = () => board?.schedules || [];
-  const schedulesOf = card => schedules().filter(item => item.target.type === 'card' && item.target.cardId === card.id);
+  const schedulesOf = card => schedules().filter(item => item.target.type === 'card' ? item.target.cardId === card.id : item.target.type === 'cards' && item.target.cards.some(one => one.cardId === card.id));
   const pad = value => String(value).padStart(2, '0');
   const localDate = date => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
   const clock = time => { const [hour, minute] = time.split(':').map(Number); return new Date(2000, 0, 1, hour, minute).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); };
@@ -1824,8 +1891,9 @@
   const how = access => access.mode === 'read' ? 'read only' : access.approvalPolicy === 'auto' ? 'can edit files, and approves its own requests' : 'can edit files, and asks before anything that needs approval';
   const LAST = { running: 'Working', waiting: 'Waiting to start' };
   function scheduleButton(card) {
+    // In Flow a card with no agent can be scheduled too: Flow picks one at its time (#132).
     const value = button('Schedule…', () => newSchedule({ type: 'card', cardId: card.id }, card.id));
-    value.disabled = shut(card) || !card.agent || dirty(); value.title = shut(card) ? 'Closed to agents. Open it to agents to schedule it.' : !card.agent ? 'Choose an agent first.' : dirty() ? 'Save your changes first.' : 'Run this card at a set time, once or on repeat.';
+    value.disabled = shut(card) || !(card.agent || inFlow()) || dirty(); value.title = shut(card) ? 'Closed to agents. Open it to agents to schedule it.' : !(card.agent || inFlow()) ? 'Choose an agent first.' : dirty() ? 'Save your changes first.' : 'Run this card at a set time, once or on repeat.';
     return value;
   }
   // ---- Attaching (#97)
@@ -1858,34 +1926,57 @@
     if (closed && !window.confirm('Close this Plan to agents?\n\nIts cards then can’t run, be scheduled or attached, and Export leaves them out unless you choose everything. A Plan attachment you already sent is left out of later prompts and handoffs.\n\nAn agent allowed to read anywhere on this computer could still find Codeshi’s own files.')) return;
     act('/api/board/access', { closed }, () => api.announce(closed ? 'The Plan is closed to agents.' : 'The Plan is open to agents.'));
   }
-  function newSchedule(target, back) {
+  // A schedule made in Flow is a Flow schedule (#132): Flow picks the agents at its time, within the limit saved with it.
+  // Its limit starts from what Run Ready had, or the workspace's task limits.
+  function newSchedule(target, back, { shared: limit = null } = {}) {
     if (selected && dirty() && !window.confirm('Leave this card without saving your changes?')) return;
     const soon = new Date(Date.now() + 3600000); soon.setMinutes(0, 0, 0);
-    sdraft = { id: null, back, target, title: '', text: '', agent: null, folderId: null, when: { repeat: 'once', time: `${pad(soon.getHours())}:00`, date: localDate(soon), weekday: soon.getDay() }, runLate: false };
+    const policy = board?.taskLimits || {}, typed = value => value === null || value === undefined ? '' : String(value);
+    const flow = inFlow(), startLimit = limit || { maxWorkingMinutes: typed(policy.maxWorkingMinutes), maxTokens: typed(policy.maxTokens), maxSpendUSD: typed(policy.maxSpendUSD) };
+    sdraft = { id: null, back, target, flow, shared: flow ? startLimit : null, title: '', text: '', agent: null, folderId: null, when: { repeat: 'once', time: `${pad(soon.getHours())}:00`, date: localDate(soon), weekday: soon.getDay() }, runLate: false };
     selected = 'schedule'; draft = null; failure = ''; drawn = null; render();
     $('board-drawer-body').querySelector('input, textarea, button')?.focus();
   }
   function editSchedule(item, back) {
     const today = new Date(), prompt = item.target.type === 'prompt';
-    sdraft = { id: item.id, back, target: prompt ? { type: 'prompt' } : { type: 'card', cardId: item.target.cardId }, title: prompt ? item.title || '' : '', text: item.target.text || '', agent: item.target.agent ? { ...item.target.agent } : null, folderId: item.target.folderId || null, when: { date: localDate(today), weekday: today.getDay(), ...item.when }, runLate: item.runLate === true };
+    const typed = value => value === null || value === undefined ? '' : String(value), limit = item.flow?.shared || {};
+    const target = prompt ? { type: 'prompt' } : item.target.type === 'cards' ? { type: 'cards', cardIds: item.target.cards.map(one => one.cardId).filter(cardBy) } : { type: 'card', cardId: item.target.cardId };
+    sdraft = { id: item.id, back, target, flow: Boolean(item.flow), shared: item.flow ? { maxWorkingMinutes: typed(limit.maxWorkingMinutes), maxTokens: typed(limit.maxTokens), maxSpendUSD: typed(limit.maxSpendUSD) } : null, title: prompt || item.target.type === 'cards' ? item.title || '' : '', text: item.target.text || '', agent: item.target.agent ? { ...item.target.agent } : null, folderId: item.target.folderId || null, when: { date: localDate(today), weekday: today.getDay(), ...item.when }, runLate: item.runLate === true };
     selected = 'schedule'; draft = null; failure = ''; drawn = null; render();
     $('board-drawer-body').querySelector('input, textarea, button')?.focus();
   }
-  function leaveSchedule() { const back = sdraft?.back; sdraft = null; selected = back && (back === 'schedules' || cardBy(back)) ? back : 'schedules'; draft = cardBy(selected) ? editable(cardBy(selected)) : null; failure = ''; drawn = null; render(); }
+  function leaveSchedule() { const back = sdraft?.back; sdraft = null; selected = back && (back === 'schedules' || back === 'run' || cardBy(back)) ? back : 'schedules'; draft = cardBy(selected) ? editable(cardBy(selected)) : null; failure = ''; drawn = null; render(); }
   function scheduleRow(item, back) {
     const row = node('li', 'board-schedule'); row.dataset.state = item.missed ? 'missed' : item.paused ? 'paused' : item.waiting ? 'reset' : 'waiting';
     const head = node('div', 'board-schedule-head'), icon = node('i', `agent-icon ${item.agent?.provider || 'auto'}`); icon.setAttribute('aria-hidden', 'true');
-    head.append(icon, node('span', 'board-schedule-title', item.title), node('span', 'board-schedule-kind', item.target.type === 'card' ? 'Card' : 'Prompt'));
+    const flow = Boolean(item.flow), several = item.target.type === 'cards' && item.target.cards.length > 1;
+    const kind = flow ? (item.target.type === 'prompt' ? 'Flow · prompt' : `Flow · ${plural(item.target.cards.length, 'card')}`) : item.target.type === 'card' ? 'Card' : 'Prompt';
+    head.append(icon, node('span', 'board-schedule-title', item.title), node('span', 'board-schedule-kind', kind));
     row.append(head, node('p', 'board-schedule-when', `${describe(item.when)} · ${item.paused ? 'Paused' : item.nextAt ? `next ${when(item.nextAt)}` : 'nothing left to run'}`));
+    // A Flow schedule names the cards it runs, and the limit each run shares.
+    if (flow) {
+      const limits = item.flow.shared, said = [limits.maxWorkingMinutes !== null ? `${limits.maxWorkingMinutes} min` : '', limits.maxTokens !== null ? `${limits.maxTokens.toLocaleString()} tokens` : '', limits.maxSpendUSD !== null ? `$${limits.maxSpendUSD} API spend` : ''].filter(Boolean).join(', ');
+      if (several) row.append(node('p', 'board-schedule-cards', item.cards.map(one => one.gone ? 'a card no longer on the Plan' : `“${one.title}”${one.changed ? ' (changed)' : ''}`).join(', ')));
+      const mode = MODE[item.flow.routingMode] || 'Smart', prompt = item.target.type === 'prompt';
+      const who = prompt ? (item.target.agent ? `Runs with ${AGENT[item.target.agent.provider]}` : `${mode} picks its agent`) : several ? `${mode} picks agents for cards with none` : `${mode} picks its agent if it has none`;
+      row.append(node('p', 'board-schedule-last', `${who} · each run up to ${said}`));
+    }
     if (item.missed) row.append(node('p', 'board-status trouble', `The run for ${when(item.missed.dueAt)} didn’t start. ${item.missed.reason}`));
-    else if (item.waiting) { const agent = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' }[item.waiting.provider] || 'Its agent'; row.append(node('p', 'board-status', `The run for ${when(item.waiting.dueAt)} is waiting: ${agent} is at its usage limit${item.waiting.resetsAt ? ` until ${when(item.waiting.resetsAt)}` : ''}. It starts on ${agent} once there’s room${item.runLate ? '' : ', if that’s within ten minutes of its time'}.`)); }
-    else if (item.changed) row.append(node('p', 'board-status', 'The card changed after it was scheduled, so it won’t run on its own. Run it now, or save the schedule again.'));
+    else if (item.waiting) {
+      if (item.waiting.provider) { const agent = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' }[item.waiting.provider] || 'Its agent'; row.append(node('p', 'board-status', `The run for ${when(item.waiting.dueAt)} is waiting: ${agent} is at its usage limit${item.waiting.resetsAt ? ` until ${when(item.waiting.resetsAt)}` : ''}. It starts on ${agent} once there’s room${item.runLate ? '' : ', if that’s within ten minutes of its time'}.`)); }
+      else row.append(node('p', 'board-status', `The run for ${when(item.waiting.dueAt)} is waiting: ${item.waiting.reason ? `Flow found no agent for it yet. ${item.waiting.reason}` : `every agent Flow may use is at its usage limit${item.waiting.resetsAt ? ` until ${when(item.waiting.resetsAt)}` : ''}`}. It starts once one has room${item.runLate ? '' : ', if that’s within ten minutes of its time'}.`));
+    }
+    else if (item.pausedBy === 'flow') row.append(node('p', 'board-status', 'Paused when you left Flow. Resume it in Flow to run it again.'));
+    else if (item.changed) row.append(node('p', 'board-status', several ? 'A card it runs changed or left the Plan, so it won’t run on its own. Run it now, or save the schedule again.' : 'The card changed after it was scheduled, so it won’t run on its own. Run it now, or save the schedule again.'));
     if (item.last) row.append(node('p', 'board-schedule-last', `Last run ${when(item.last.at)}${item.last.manual ? ', started by you' : ''}${item.last.status ? ` · ${LAST[item.last.status] || OUTCOME[item.last.status] || item.last.status}` : ''}`));
     const actions = node('div', 'board-schedule-actions');
-    actions.append(button('Run now', () => act(`/api/board/schedules/${item.id}/run`, {}, () => api.announce(`“${item.title}” is running as a task.`)), item.missed ? 'primary-button' : 'secondary-button'));
+    // A Flow schedule is run, changed and resumed by you only in Flow; outside it those say why instead.
+    const outside = flow && !inFlow() ? 'Turn Flow on to do this. A Flow schedule runs only with Flow’s say-so.' : '';
+    const guarded = (label, action, kind) => { const value = button(label, () => { if (outside) { refuse(outside); return; } action(); }, kind); blockedLook(value, outside); return value; };
+    actions.append(guarded('Run now', () => act(`/api/board/schedules/${item.id}/run`, {}, () => api.announce(`“${item.title}” is running as ${several ? 'tasks' : 'a task'}.`)), item.missed ? 'primary-button' : 'secondary-button'));
     if (item.missed) actions.append(button('Dismiss', () => act(`/api/board/schedules/${item.id}/dismiss`)));
-    actions.append(button('Edit', () => editSchedule(item, back)));
-    if (item.nextAt || item.waiting || item.paused) actions.append(button(item.paused ? 'Resume' : 'Pause', () => act(`/api/board/schedules/${item.id}/${item.paused ? 'resume' : 'pause'}`, {}, () => api.announce(item.paused ? 'Schedule resumed.' : 'Schedule paused.'))));
+    actions.append(guarded('Edit', () => editSchedule(item, back)));
+    if (item.nextAt || item.waiting || item.paused) actions.append(item.paused ? guarded('Resume', () => act(`/api/board/schedules/${item.id}/resume`, {}, () => api.announce('Schedule resumed.'))) : button('Pause', () => act(`/api/board/schedules/${item.id}/pause`, {}, () => api.announce('Schedule paused.'))));
     actions.append(button('Remove', () => { if (window.confirm(`Remove the schedule for “${item.title}”?`)) act(`/api/board/schedules/${item.id}/remove`, {}, () => api.announce('Schedule removed.')); }, 'text-link board-remove'));
     row.append(actions);
     return row;
@@ -1897,26 +1988,41 @@
     return [list];
   }
   function schedulesPanel() {
-    const parts = [node('p', 'board-note', 'Run a card or a prompt at a set time, once or on repeat, with its agent and this workspace’s access saved with it. Schedules run while Codeshi is open and the computer is awake; while one is waiting, closing the window leaves Codeshi in the menu bar.')];
+    const parts = [node('p', 'board-note', inFlow()
+      ? 'Run cards or a prompt at a set time, once or on repeat. Made in Flow, a schedule lets Flow pick agents at its time, within a limit saved with it. Schedules run while Codeshi is open and the computer is awake; while one is waiting, closing the window leaves Codeshi in the menu bar.'
+      : 'Run a card or a prompt at a set time, once or on repeat, with its agent and this workspace’s access saved with it. Schedules run while Codeshi is open and the computer is awake; while one is waiting, closing the window leaves Codeshi in the menu bar.')];
     if (schedules().length) { const list = node('ul', 'board-schedules'); list.append(...schedules().map(item => scheduleRow(item, 'schedules'))); parts.push(list); }
-    else parts.push(node('p', 'board-note', 'Nothing is scheduled. Open a Ready card and choose Schedule…, or schedule a prompt.'));
+    else parts.push(node('p', 'board-note', inFlow() ? 'Nothing is scheduled. Tick cards in Run Ready and choose Schedule…, or schedule a prompt.' : 'Nothing is scheduled. Open a Ready card and choose Schedule…, or schedule a prompt.'));
     const row = node('div', 'board-save-row'); row.append(button('Schedule a prompt…', () => newSchedule({ type: 'prompt' }, 'schedules'), 'primary-button')); parts.push(row);
     return parts;
   }
   function scheduleForm() {
-    const plan = sdraft, parts = [], card = plan.target.type === 'card' ? cardBy(plan.target.cardId) : null;
-    if (plan.target.type === 'card' && !card) { parts.push(node('p', 'board-note', 'That card is no longer on the board.')); return parts; }
+    const plan = sdraft, parts = [], flow = plan.flow === true;
+    // In Flow one card is scheduled the way several are: the exact cards, with Flow picking for those with no agent.
+    const list = plan.target.type === 'cards' ? plan.target.cardIds.map(cardBy).filter(Boolean) : plan.target.type === 'card' ? [cardBy(plan.target.cardId)].filter(Boolean) : null;
+    const card = list?.length === 1 ? list[0] : null;
+    if (list && !list.length) { parts.push(node('p', 'board-note', plan.target.type === 'cards' ? 'None of those cards is on the board any more.' : 'That card is no longer on the board.')); return parts; }
     // A schedule runs with no one there to ask about charges (#108), so an agent that bills by use won't start from one.
     const unasked = provider => bills(provider) ? `${billsSentence(provider)} A schedule can’t ask you before it runs, so its runs won’t start with ${AGENT[provider]}. Choose an agent on a subscription.` : '';
-    if (card) { parts.push(node('p', 'board-status', `Runs “${card.title}” with ${card.agent ? AGENT[card.agent.provider] : 'its agent'}, as the card says when you save. A card that repeats runs again from Ready or Done; if it’s still in Doing or Review, that time is skipped and shown here.`)); const warn = unasked(card.agent?.provider); if (warn) parts.push(node('p', 'board-note board-billing-note', warn)); }
+    if (list && flow) {
+      const auto = list.filter(item => !item.agent).length;
+      const picks = auto ? `${MODE[smartMode()] || 'Smart'} picks ${auto === list.length ? (list.length === 1 ? 'its agent' : 'their agents') : `agents for the ${auto} with none`} at its time, from fresh usage.` : `${list.length === 1 ? 'It keeps its agent' : 'Each keeps its agent'}.`;
+      parts.push(node('p', 'board-status', `${list.length === 1 ? `Runs “${list[0].title}”` : `Runs these ${list.length} cards and no others`}, as ${list.length === 1 ? 'it is' : 'they are'} when you save. ${picks} A card still in Doing or Review skips that time.`));
+      if (list.length > 1) parts.push(node('p', 'board-schedule-cards', list.map(item => `“${item.title}”`).join(', ')));
+      if (list.length > 1) { const title = node('input', 'board-input'); title.value = plan.title; title.maxLength = 200; title.placeholder = 'Name (optional)'; title.setAttribute('aria-label', 'Schedule name'); title.addEventListener('input', () => { plan.title = title.value; }); parts.push(title); }
+      const warn = [...new Set(list.map(item => item.agent?.provider).filter(bills))].map(unasked).join(' ');
+      if (warn) parts.push(node('p', 'board-note board-billing-note', warn));
+    } else if (card) { parts.push(node('p', 'board-status', `Runs “${card.title}” with ${card.agent ? AGENT[card.agent.provider] : 'its agent'}, as the card says when you save. A card that repeats runs again from Ready or Done; if it’s still in Doing or Review, that time is skipped and shown here.`)); const warn = unasked(card.agent?.provider); if (warn) parts.push(node('p', 'board-note board-billing-note', warn)); }
     else {
       const title = node('input', 'board-input'); title.value = plan.title; title.maxLength = 200; title.placeholder = 'Name (optional)'; title.setAttribute('aria-label', 'Schedule name');
       title.addEventListener('input', () => { plan.title = title.value; });
       const text = node('textarea', 'board-input board-field-notes'); text.value = plan.text; text.rows = 5; text.maxLength = 20000; text.placeholder = 'What the agent should do each time'; text.setAttribute('aria-label', 'Prompt');
       text.addEventListener('input', () => { plan.text = text.value; });
       parts.push(title, text);
-      const agentNote = () => ['Runs with this agent’s default model and effort.', unasked(plan.agent?.provider)].filter(Boolean).join(' ');
-      const agentField = labelled('Agent', segment('Agent', AGENTS.map(([value, name]) => [value, name, `agent-icon ${value}`]), plan.agent?.provider || null, value => { plan.agent = { provider: value, model: null, effort: null }; agentField.querySelector('.board-field-note').textContent = agentNote(); }, false), agentNote());
+      // In Flow the prompt can be left to Flow, which picks its agent at its time.
+      const agentNote = () => flow && !plan.agent ? `${MODE[smartMode()] || 'Smart'} picks the agent at its time, from fresh usage, and never one that bills by use.` : ['Runs with this agent’s default model and effort.', unasked(plan.agent?.provider)].filter(Boolean).join(' ');
+      const choices = [...(flow ? [['auto', 'Auto', 'agent-icon auto']] : []), ...AGENTS.map(([value, name]) => [value, name, `agent-icon ${value}`])];
+      const agentField = labelled('Agent', segment('Agent', choices, plan.agent?.provider || (flow ? 'auto' : null), value => { plan.agent = value === 'auto' ? null : { provider: value, model: null, effort: null }; agentField.querySelector('.board-field-note').textContent = agentNote(); }, false), agentNote());
       parts.push(agentField);
       if ((board?.folders || []).length > 1) {
         const folder = node('select', 'board-input'); folder.setAttribute('aria-label', 'Folder it works in');
@@ -1939,16 +2045,27 @@
     box.addEventListener('change', () => { plan.runLate = box.checked; });
     late.append(box, node('span', '', 'Run late if Codeshi was closed, the computer was asleep or the agent was at its usage limit at that time. Otherwise a missed time waits for you.'));
     parts.push(late);
-    parts.push(node('p', 'board-note', `It runs as its own task with this workspace’s access as it is now: ${how(board.access)}. Changing the workspace later doesn’t change it; saving the schedule again does.${card ? ' If the card is edited, it waits for you instead of running.' : ''} The agent is told not to push, deploy or publish anything.`));
-    const save = button(plan.id ? 'Save schedule' : 'Schedule', saveSchedule, 'primary-button board-schedule-save'); save.disabled = busy;
+    // A Flow schedule's runs need a limit: no one may be watching them.
+    const flowSays = ({ wrong, none }) => wrong || (none ? 'Fill in at least one box. No one may be watching, so each run needs a limit.' : 'Counted across everything in each run. When it runs out, working cards stop and the rest don’t start.');
+    if (flow) parts.push(sharedPanel(() => paintSave(), { get: () => plan.shared, set: value => { plan.shared = value; }, says: flowSays, title: 'A limit for each run' }));
+    parts.push(node('p', 'board-note', flow
+      ? `Each run is Flow’s, with this workspace’s access as it is now: ${how(board.access)}. ${list ? `If a card is edited or leaves the Plan, that time waits for you instead of running.` : ''} Leaving Flow pauses it until you resume it in Flow. Agents are told not to push, deploy or publish anything.`
+      : `It runs as its own task with this workspace’s access as it is now: ${how(board.access)}. Changing the workspace later doesn’t change it; saving the schedule again does.${card ? ' If the card is edited, it waits for you instead of running.' : ''} The agent is told not to push, deploy or publish anything.`));
+    const save = button(plan.id ? 'Save schedule' : 'Schedule', saveSchedule, 'primary-button board-schedule-save');
+    const problem = () => { if (!flow) return ''; const read = readShared(plan.shared); return read.wrong || (read.none ? 'Give each run a limit first.' : ''); };
+    const paintSave = () => { save.disabled = busy; blockedLook(save, problem()); };
+    paintSave();
     const row = node('div', 'board-save-row'); row.append(button('Cancel', leaveSchedule, 'text-link'), save); parts.push(row);
     return parts;
   }
   function saveSchedule() {
     const plan = sdraft; if (!plan) return;
+    let flow = null;
+    if (plan.flow) { const read = readShared(plan.shared); if (read.wrong || read.none) { refuse(read.wrong || 'Give each run a limit first. No one may be watching it.'); return; } flow = { shared: read.limit }; }
     const time = { repeat: plan.when.repeat, time: plan.when.time, ...(plan.when.repeat === 'once' ? { date: plan.when.date } : {}), ...(plan.when.repeat === 'weekly' ? { weekday: Number(plan.when.weekday) } : {}) };
-    const target = plan.target.type === 'card' ? plan.target : { type: 'prompt', text: plan.text, agent: plan.agent, folderId: plan.folderId };
-    act(plan.id ? `/api/board/schedules/${plan.id}/edit` : '/api/board/schedules', { target, when: time, runLate: plan.runLate, ...(target.type === 'prompt' ? { title: plan.title } : {}) }, result => { api.announce(`Scheduled: ${describe(result.schedule.when)}.`); leaveSchedule(); });
+    const target = plan.target.type === 'prompt' ? { type: 'prompt', text: plan.text, agent: plan.agent, folderId: plan.folderId } : plan.target;
+    const named = target.type === 'prompt' || target.type === 'cards';
+    act(plan.id ? `/api/board/schedules/${plan.id}/edit` : '/api/board/schedules', { target, when: time, runLate: plan.runLate, ...(named ? { title: plan.title } : {}), ...(flow ? { flow } : {}) }, result => { api.announce(`Scheduled: ${describe(result.schedule.when)}.`); leaveSchedule(); });
   }
 
   // ---- The Plan's chats (#162)

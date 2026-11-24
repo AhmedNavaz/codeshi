@@ -1214,8 +1214,10 @@
       row.dataset.messageId = message.id;
     }
     if (message.runId) row.dataset.runId = message.runId;
-    const teammate = user && typeof message.author?.name === "string" ? message.author.name : "";
-    row.setAttribute("aria-label", user ? (message.steer ? "Your note, added while the agent worked" : teammate ? `${teammate}’s message, sent through Share live` : "Your message") : flowAnswer ? "Flow’s combined answer" : `${label(provider)} response`);
+    const peerName = typeof message.author?.name === "string" ? message.author.name : "";
+    const teammate = user ? peerName : "";
+    const ranOnPeer = message.author?.ranOn === "peer";
+    row.setAttribute("aria-label", user ? (message.steer ? "Your note, added while the agent worked" : teammate ? (ranOnPeer ? `${teammate}’s message, ran on their account through Share live` : `${teammate}’s message, sent through Share live`) : "Your message") : flowAnswer ? "Flow’s combined answer" : ranOnPeer && peerName ? `${label(provider)} response from ${peerName}’s account` : `${label(provider)} response`);
     if (teammate) row.classList.add("message-teammate");
     // A reply opens with one line naming the agent. Time and copy sit in a row beneath every message and appear on hover.
     const heading = element("div", "message-heading");
@@ -1226,6 +1228,7 @@
       if (flowAnswer) heading.append(element("span", "message-model", `${message.splitResult.parts} parts side by side`));
       const details = [message.model && message.model !== "unknown" ? message.model : "", message.effort ? message.effort + " effort" : ""].filter(Boolean).join(" · ");
       if (details) heading.append(element("span", "message-model", details));
+      if (ranOnPeer && peerName) { const onPeer = element("span", "message-teammate-label", `${peerName}’s account`); onPeer.title = "Ran on a teammate’s computer and account through Share live."; heading.append(onPeer); }
       if (message.imported) heading.append(element("span", "message-label", "Imported"));
     }
     const actions = element("div", "message-actions");
@@ -1234,8 +1237,8 @@
     // An answer's Copy comes first, so its icon lines up with the text above it; the time follows the buttons.
     if (user) actions.append(time);
     if (user && message.steer) heading.append(element("span", "message-steer-label", "Added while working"));
-    // A teammate's message from Share live (#24) says whose it is; it ran on your account.
-    if (teammate) { const from = element("span", "message-teammate-label", `From ${teammate}`); from.title = "Sent by a teammate through Share live. It ran on your computer and account."; heading.append(from); }
+    // A teammate's message from Share live (#24) says whose it is and whose account ran it.
+    if (teammate) { const from = element("span", "message-teammate-label", ranOnPeer ? `From ${teammate} · ran on their account` : `From ${teammate}`); from.title = ranOnPeer ? "Ran by a teammate on their own computer and account through Share live." : "Sent by a teammate through Share live. It ran on your computer and account."; heading.append(from); }
     // Each message opens with a heading, so a screen reader can move from message to message (#26).
     heading.setAttribute("role", "heading"); heading.setAttribute("aria-level", "3");
     if (user && message.runId && !message.steer) {
@@ -3029,6 +3032,7 @@
     { label: "Run: your dev servers, tests and scripts", workbench: true, run: () => window.relayPanel?.show("run") },
     ...(window.relayExperimental?.enabled("review") === false ? [] : [{ label: "Review your app: launch map and live services", run: () => window.relayProjectReview?.open() }]),
     ...(window.relayDesktop?.openPreview && window.relayExperimental?.enabled("review") !== false ? [{ label: "Preview your app and point at what to change", run: () => { if (window.relayFlow?.isOn()) { window.relayProjectReview?.open(); return; } const url = window.relayCommands?.localURL?.(); if (url) window.relayPreview?.open(url); else { window.relayPanel?.show("run"); showNotice("Start your dev server in Run first; its local address opens in the preview."); } } }] : []),
+    { label: "Sketch a page: lay out a page that doesn’t exist yet, with a note on each part", run: () => window.relaySketch?.open() },
     { label: "While you were away", run: () => window.relayRecap?.open() },
     { label: "Activity: working time, breaks and badges", run: () => window.relayActivity?.open() },
     { label: "New workspace…", id: "create-workspace" }, { label: "Settings", id: "relay-settings" },

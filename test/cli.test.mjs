@@ -9,7 +9,7 @@ import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { scriptCLIs } from './platform.mjs';
 import { createRelayServer } from '../src/server.mjs';
-import { EXIT, chooseWorkspace, connectionCandidates, consoleInput, describePending, main, parseArgs, readConnection } from '../src/cli.mjs';
+import { EXIT, agentCheck, chooseWorkspace, connectionCandidates, consoleInput, describePending, engineCheck, main, parseArgs, readConnection, readyAgents, skillsReport } from '../src/cli.mjs';
 import { commandState, installCommand, removeConnection, uninstallCommand, windowsCommandLink, writeConnection } from '../desktop/cli.mjs';
 import { menuTemplate } from '../desktop/menu.mjs';
 
@@ -98,6 +98,83 @@ test('approvals and questions are described in general words', () => {
   assert.deepEqual(describePending({ provider: 'codex', kind: 'item/commandExecution/requestApproval', command: 'npm install left-pad' }), { kind: 'approval', summary: 'Codex wants to run a command', detail: 'npm install left-pad' });
   assert.deepEqual(describePending({ provider: 'claude', kind: 'Edit', input: { file_path: 'src/app.js' } }), { kind: 'approval', summary: 'Claude wants to change files', detail: 'src/app.js' });
   assert.equal(describePending({ provider: 'claude', kind: 'question', questions: [{ question: 'Which database?' }] }).summary, 'Claude has a question: Which database?');
+});
+
+test('codeshi skills lists the workspace’s skills and what each agent can use of them (#90, #86)', { skip: scriptCLIs }, async t => {
+  const env = await engine(t);
+  const write = (name, frontmatter, body) => { const folder = path.join(env.workspace, '.agents', 'skills', name); fs.mkdirSync(folder, { recursive: true }); fs.writeFileSync(path.join(folder, 'SKILL.md'), `---\nname: ${name}\ndescription: ${frontmatter}\n---\n\n${body}\n`); return folder; };
+  const plain = write('release-notes', 'Write release notes from the changelog.', 'Read CHANGELOG.md and summarise it.');
+  const filled = write('fix-issue', 'Fix the issue named in $ARGUMENTS.', 'Fix issue $ARGUMENTS and run the tests.');
+  write('spare', 'Not enabled yet.', 'Nothing.');
+  for (const directory of [plain, filled]) env.broker.skills.change(env.c, { action: 'enable', path: directory, acceptPartial: true });
+
+  const text = await env.cli(['skills']);
+  assert.equal(text.code, EXIT.ok, text.err);
+  assert.match(text.out, /^release-notes {2}\(/m);
+  assert.match(text.out, /Codex, Claude, Gemini: its own skills/);
+  assert.match(text.out, /! Codex, Gemini: Claude fills in its placeholders/, 'A blocking item names only the agents it affects.');
+  assert.match(text.out, /\d+ more skills are available to enable under Skills/, 'The repository’s spare skill and the starter set.');
+
+  const json = (await env.cli(['skills', '--json'])).json();
+  assert.equal(json.result, 'skills'); assert(json.available >= 1);
+  const fix = json.skills.find(skill => skill.name === 'fix-issue');
+  assert.deepEqual(Object.fromEntries(Object.entries(fix.agents).map(([agent, value]) => [agent, value.ready])), { codex: false, claude: true, gemini: false });
+  assert.equal(json.skills.find(skill => skill.name === 'release-notes').agents.codex.ready, true);
+});
+
+test('codeshi doctor checks Codeshi, the workspace’s folders and each agent, and says what to fix (#90)', async t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-doctor-'))), folder = path.join(root, 'app'), file = path.join(root, 'cli.json');
+  fs.mkdirSync(folder);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  writeConnection(file, { url: 'http://127.0.0.1:4999', token: 'never-printed', version: '0.61.0' });
+  // A stand-in engine: the agent checks start each agent's real command, so they're answered here.
+  const doctor = async (accounts, { args = [], projects = [{ id: 'p1', name: 'app', folders: [{ path: folder, name: 'app' }], pendingApprovals: 1 }] } = {}) => {
+    const asked = [];
+    const fetchImpl = async url => {
+      const route = new URL(url).pathname; asked.push(route);
+      const body = route === '/api/projects' ? projects : accounts[route.split('/')[3]] || {};
+      return { ok: true, status: 200, json: async () => body };
+    };
+    const stdout = new PassThrough(), stderr = new PassThrough(); let out = '';
+    stdout.on('data', chunk => { out += chunk; });
+    const code = await main(['doctor', ...args], { stdin: new PassThrough(), stdout, stderr, cwd: folder, env: { CODESHI_CONNECTION: file }, version: '0.61.0', fetchImpl });
+    return { code, out, asked };
+  };
+  const ready = { installed: true, available: true, authenticated: true, billingSource: 'subscription', version: '1.2.3' };
+
+  const good = await doctor({ codex: ready, claude: { ...ready, authenticated: false }, gemini: { installed: false, message: 'Install Antigravity.' } });
+  assert.equal(good.code, EXIT.ok, good.out);
+  assert.match(good.out, /✓ Codeshi 0\.61\.0 is open/); assert.match(good.out, /✓ Folder app/); assert.match(good.out, /✓ Codex is ready: 1\.2\.3 · signed in/);
+  assert.match(good.out, /! Claude isn't signed in/); assert.match(good.out, /· Gemini isn't installed/); assert.match(good.out, /· 1 approval or question waits for you/);
+  assert.match(good.out, /Ready, with 1 thing to look at\./);
+  assert(!good.out.includes('never-printed'), 'The token is never shown.');
+  assert(good.asked.every(route => route === '/api/projects' || /^\/api\/providers\/\w+\/account$/.test(route)), 'Doctor only reads.');
+
+  fs.rmSync(folder, { recursive: true });
+  const broken = await doctor({ codex: { ...ready, authenticated: false }, claude: { installed: true, errorCategory: 'timeout' }, gemini: { installed: false } }, { args: ['--json', '-w', 'app'] });
+  assert.equal(broken.code, EXIT.failed);
+  const result = JSON.parse(broken.out);
+  assert.equal(result.result, 'doctor'); assert.equal(result.ok, false);
+  assert.deepEqual(result.checks.filter(item => item.status === 'fail').map(item => item.id), ['folder:app', 'agents']);
+
+  // Another copy's command, and no Codeshi at all.
+  assert.equal(engineCheck({ url: 'http://127.0.0.1:1', appVersion: '0.62.0' }, '0.58.0')[1].status, 'warn');
+  assert.equal(engineCheck({ url: 'http://127.0.0.1:1', appVersion: '0.62.0' }, '0.62.0').length, 1);
+  writeConnection(file, { url: 'http://127.0.0.1:4999', token: 'x', pid: 2 ** 22 + 7 });
+  const closed = await doctor({}, { args: ['--json'] });
+  assert.equal(closed.code, EXIT.unavailable);
+  assert.deepEqual(JSON.parse(closed.out).checks.map(item => [item.id, item.status]), [['engine', 'fail']]);
+});
+
+test('an agent’s account reads as the window reads it, and skills name the agents a problem affects', () => {
+  assert.equal(agentCheck('codex', { installed: true, available: true, authenticated: true, billingSource: 'api' }).status, 'info');
+  assert.equal(agentCheck('gemini', { installed: true, available: false, message: 'Use Antigravity.' }).status, 'warn');
+  assert.equal(agentCheck('claude', null, new Error('boom')).status, 'warn');
+  assert.deepEqual(readyAgents({ codex: { installed: true, available: true, authenticated: 'unknown' }, claude: { installed: true, available: true, authenticated: false } }), ['codex']);
+  const report = skillsReport({ enabled: [{ name: 'x', version: 'abcdef0123456789', compatibility: { adapters: { claude: 'native' }, personOnly: true, unavailable: [{ detail: 'Hooks.', blocking: true }, { detail: 'Scripts.', blocking: false }] } }], available: [{ name: 'y', problems: [] }, { name: 'bad', problems: ['no description'] }] });
+  assert.equal(report.available, 1, 'A skill with problems can’t be enabled, so it isn’t counted.');
+  assert.deepEqual(report.skills[0].agents.claude, { route: 'native', ready: false, problems: ['Hooks.'] });
+  assert.deepEqual([report.skills[0].version, report.skills[0].onlyWhenAsked, report.skills[0].notes], ['abcdef012345', true, ['Scripts.']]);
 });
 
 test('a run started from the terminal is the workspace chat’s run: the app sees it, and its reply is printed', { skip: scriptCLIs }, async t => {

@@ -68,15 +68,49 @@
     loading = api.api(`/api/github/repos${host ? `?host=${encodeURIComponent(host)}` : ''}`).then(data => {
       if (run !== generation) return;
       loaded = data; loadedAt = Date.now(); host = data.host || 'github.com';
+      signinShow(data.via === 'github' ? { state: 'signed-in', login: data.account?.login || null } : null);
       hosts(data.hosts || []);
       if (!folder.value.trim()) folder.value = data.cloneFolder || data.suggestedFolder || '';
       search.disabled = false; render();
     }).catch(failure => {
       if (run !== generation) return;
       loaded = null; list.replaceChildren(); status.textContent = ''; showError(failure.message);
+      // Without gh, the panel offers Sign in with GitHub (#159).
+      api.api('/api/github/signin').then(signinShow).catch(() => signinShow(null));
     }).finally(() => { loading = null; list.setAttribute('aria-busy', 'false'); hostSelect.disabled = false; });
     return loading;
   }
+  // Sign in with GitHub (#159) for people without gh. The code is shown until GitHub confirms it; the window checks in
+  // at GitHub's interval and reads the list once you're in.
+  const signin = $('github-signin'), signinText = $('github-signin-text'), signinStart = $('github-signin-start'), signinOut = $('github-signout');
+  let polling = null;
+  function signinShow(state) {
+    clearTimeout(polling); polling = null;
+    signinStart.hidden = true; signinOut.hidden = true;
+    signin.hidden = !state || state.state === 'unavailable';
+    if (signin.hidden) return;
+    if (state.state === 'signed-in') { signinText.textContent = state.login ? `Signed in to GitHub as ${state.login}.` : 'Signed in to GitHub.'; signinOut.hidden = false; return; }
+    if (state.state === 'pending') { signinText.textContent = `Enter the code ${state.userCode} at ${state.verificationUri} to finish signing in. Codeshi checks until you do.`; polling = setTimeout(signinCheck, 5000); return; }
+    signinText.textContent = { denied: 'GitHub sign-in was cancelled.', expired: 'The GitHub sign-in code expired. Start again.' }[state.state] || 'Sign in with GitHub to list your repositories without gh.';
+    signinStart.hidden = false;
+  }
+  async function signinCheck() {
+    try { const state = await api.api('/api/github/signin'); signinShow(state); if (state.state === 'signed-in') load(true); }
+    catch (failure) { signinText.textContent = failure.message; signinStart.hidden = false; }
+  }
+  signinStart.addEventListener('click', async () => {
+    signinStart.disabled = true;
+    try { signinShow(await api.post('/api/github/signin', {}, null)); }
+    catch (failure) { showError(failure.message); }
+    finally { signinStart.disabled = false; }
+  });
+  signinOut.addEventListener('click', async () => {
+    signinOut.disabled = true;
+    try { signinShow(await api.post('/api/github/signout', {}, null)); loaded = null; load(true); }
+    catch (failure) { showError(failure.message); }
+    finally { signinOut.disabled = false; }
+  });
+
   // The picker shows only when gh is signed in to more than one host; github.com is listed first.
   function hosts(rows) {
     hostSelect.replaceChildren(...rows.map(row => { const option = el('option', row.login ? `${row.host} · ${row.login}` : row.host); option.value = row.host; return option; }));

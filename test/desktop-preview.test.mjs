@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import { DESIGN_LIMIT, INSPECTOR_WIDTH, apiInterceptorScript, captureRect, cleanElement, cleanOffset, createPreview, designText, interfaceName, isPreviewURL, pickText, previewEndpoint, previewURL, sectionName, sourceLocation, sourceScript } from '../desktop/preview.mjs';
+import { DESIGN_LIMIT, INSPECTOR_WIDTH, apiInterceptorScript, captureRect, cleanElement, cleanOffset, createPreview, designCard, designText, interfaceName, isPreviewURL, pickText, previewEndpoint, previewURL, sectionName, sourceLocation, sourceScript } from '../desktop/preview.mjs';
 
 test('the preview opens only local addresses, without credentials', () => {
   assert.equal(previewURL(' http://localhost:5173/checkout '), 'http://localhost:5173/checkout');
@@ -492,7 +492,7 @@ test('design notes: the page draws numbered boxes from selectors only, the notes
   assert.equal(pick.text, 'Design notes for the preview of localhost:5173, 2 sections. The numbers match the boxes in the screenshots.\n1. The “Pricing” section (section.pricing; src/Pricing.tsx:12 in Pricing): Three plans side by side.\n2. An area of 300×90 in the “Plans” list (ul.plans): Less space between rows.\nWhole page: Calmer.');
   assert.deepEqual(pick.images.map(image => image.name), ['design-page.png', 'design-section-2.png']);
   assert.deepEqual(captures, ['page']);
-  assert.deepEqual([last(toolbar, 'preview:design-added'), last(toolbar, 'preview:design').sections, last(page, 'preview:design').sections], [{ count: 2 }, [], []], 'The notes leave Design notes once they are in the message.');
+  assert.deepEqual([last(toolbar, 'preview:design-added'), last(toolbar, 'preview:design').sections, last(page, 'preview:design').sections], [{ count: 2, to: 'message' }, [], []], 'The notes leave Design notes once they are in the message.');
 
   // At most DESIGN_LIMIT sections.
   act('design', { open: true, marking: true });
@@ -509,7 +509,29 @@ test('design notes: the page draws numbered boxes from selectors only, the notes
   act('design', { open: false });
   assert.deepEqual(last(page, 'preview:design'), { marking: false, sections: [] });
   assert.equal(last(toolbar, 'preview:design').sections.length, 1, 'Closing keeps the sections for when it opens again.');
+  // Onto the Plan (#125): the same text and screenshots, with a card's title and files, and the toolbar says where they went.
+  act('design', { open: true, marking: false });
+  picks.length = 0;
+  act('design-send', { notes: {}, overall: 'Tighter list.', to: 'plan' });
+  await settle();
+  assert.equal(picks.length, 1);
+  assert.match(picks[0].text, /^Design notes for the preview of localhost:5173, 1 section\./);
+  assert.deepEqual(picks[0].card, { title: 'Design notes: localhost:5173', files: [] });
+  assert.deepEqual(last(toolbar, 'preview:design-added'), { count: 1, to: 'plan' });
+  // Sketching a page that doesn't exist yet brings Codeshi's window forward, in this window's workspace.
+  picks.length = 0; act('sketch');
+  assert.deepEqual(picks.map(({ focus, sketch }) => ({ focus, sketch })), [{ focus: true, sketch: true }]);
   preview.dispose();
+});
+
+test('design notes on the Plan are titled by interface and page, and expect the files their code is in (#125)', () => {
+  const section = file => ({ source: file ? { file, line: 3 } : null });
+  assert.deepEqual(designCard({ sections: [section('src/Pricing.tsx'), section('src/Plans.tsx'), section('src/Pricing.tsx'), section(null)], url: 'http://localhost:5173/pricing?x=1', label: 'Website' }), { title: 'Design notes: Website /pricing', files: ['src/Pricing.tsx', 'src/Plans.tsx'] });
+  assert.deepEqual(designCard({ sections: [], url: 'http://localhost:3000/' }), { title: 'Design notes: localhost:3000', files: [] });
+  assert.equal(designCard({ sections: Array.from({ length: 14 }, (_, index) => section(`src/${index}.tsx`)), url: 'http://localhost:3000/' }).files.length, 12, 'At most the files a card holds.');
+  const html = fs.readFileSync(new URL('../desktop/preview-toolbar.html', import.meta.url), 'utf8');
+  assert.match(html, /id="design-plan"[^>]*>Add to Plan</);
+  assert.match(html, /id="design-sketch"/);
 });
 
 test('the toolbar keeps each note as it is typed, sends them with the sections, and the page preload gives the page nothing (#125)', () => {

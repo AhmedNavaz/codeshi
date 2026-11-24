@@ -123,6 +123,12 @@ export function estimateContext(c, record, previousBytes = 0) {
 }
 
 const short = (text, length = 500) => String(text || '').slice(0, length);
+// An answered question too long to keep whole loses part of its question, never its answer.
+const answerLine = (line, length = 1000) => {
+  if (line.length <= length) return line;
+  const at = line.lastIndexOf(' → '), answer = short(line.slice(at + 3), 400);
+  return `${line.slice(0, Math.max(0, length - answer.length - 5)).replace(/[\uD800-\uDBFF]$/, '')}… → ${answer}`;
+};
 const identity = text => createHash('sha256').update(text).digest('hex').slice(0, 16);
 
 // Local observations describe recorded outcomes; they are not model-written summaries or new instructions. In
@@ -134,7 +140,7 @@ export function observationsFor(c, record) {
   if (!message?.text || message.contextMilestone) return [];
   const base = { messageId: message.id, runId: message.runId || null, provider: message.provider || null };
   if (['user', 'activity'].includes(message.role) && !message.imported && !message.reviewId && !message.retry && message.text.startsWith('Answered:\n')) return message.text.split('\n').slice(1).filter(line => line.includes(' → ') && !line.endsWith(' → (hidden)')).slice(0, 8).map((line, index) => ({
-    ...base, id: `${message.id}:answer:${index}`, type: 'decision', text: short(line, 1000), source: 'user-answer' }));
+    ...base, id: `${message.id}:answer:${index}`, type: 'decision', text: answerLine(line), source: 'user-answer' }));
   if (message.role === 'user' && !message.imported && !message.reviewId && !message.retry) return [...message.text.replace(/```[\s\S]*?```/g, '').matchAll(/^\s*(decision|blocker|acceptance(?: criteria)?)\s*:\s*([^\n]{1,1000})/gim)].slice(0, 8).map((match, index) => ({
     ...base, id: `${message.id}:intent:${index}`, type: match[1].toLowerCase() === 'blocker' ? 'blocker_discovery' : 'decision', text: short(match[0]), source: 'user-quote' }));
   if (message.role !== 'activity') return [];

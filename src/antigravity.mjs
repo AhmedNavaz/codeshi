@@ -43,16 +43,56 @@ export function antigravitySessionParams(initialized, { workspace, workspaces = 
   return { cwd, mcpServers: [], ...(additionalDirectories.length ? { additionalDirectories } : {}) };
 }
 export const defaultGoogleRoot = () => path.join(os.homedir(), '.local/share/throughline/google');
+// Gemini's own skill system (#86). Antigravity finds skills in its home's `config/skills` (and a project's `.agents/skills`
+// and `.gemini/skills`), and there is no way to give one session a folder of its own. So a run with enabled skills uses a
+// Gemini home for that set of skills: `config/skills` holds their copy, and everything else in it links to the profile, so
+// the sign-in, saved conversations and trusted folders are the profile's own. Homes are keyed by the copy, so runs with
+// different skills never see each other's.
+export const skillHome = (googleRoot, folder) => path.join(googleRoot || defaultGoogleRoot(), 'homes', path.basename(folder));
+export const homeSkillsFolder = home => path.join(home, 'config', 'skills');
+// Symbolic links need extra rights on Windows, so there Gemini gets skills as instructions.
+export const skillHomesSupported = (platform = process.platform) => platform !== 'win32';
+// Something the runtime replaced in a home, instead of writing through the link, goes back to the profile. Two runs may
+// link the same home at once, so a link that is already there is fine.
+const link = (target, at) => { try { fs.symlinkSync(target, at); } catch (error) { if (error.code !== 'EEXIST') throw error; } };
+function linkProfile(home, profile) {
+  for (const name of fs.readdirSync(profile)) {
+    if (name === 'config') continue;
+    const at = path.join(home, name), target = path.join(profile, name), stat = fs.lstatSync(at, { throwIfNoEntry: false });
+    if (stat?.isSymbolicLink()) continue;
+    if (stat) { if (stat.isFile() && stat.mtimeMs > fs.statSync(target).mtimeMs) fs.renameSync(at, target); else fs.rmSync(at, { recursive: true, force: true }); }
+    link(target, at);
+  }
+  for (const name of fs.readdirSync(home)) {
+    const at = path.join(home, name);
+    if (name === 'config' || fs.existsSync(path.join(profile, name)) || fs.lstatSync(at).isSymbolicLink()) continue;
+    fs.renameSync(at, path.join(profile, name)); link(path.join(profile, name), at);
+  }
+}
+export function prepareSkillHome(googleRoot, profile, folder) {
+  const home = skillHome(googleRoot, folder), skills = homeSkillsFolder(home);
+  if (!fs.existsSync(path.join(skills, '.complete'))) {
+    const building = `${skills}.${process.pid}.${Date.now()}`;
+    try {
+      fs.mkdirSync(path.dirname(skills), { recursive: true, mode: 0o700 });
+      fs.cpSync(folder, building, { recursive: true });
+      try { fs.renameSync(building, skills); } catch (error) { if (!fs.existsSync(path.join(skills, '.complete'))) throw error; }
+    } finally { fs.rmSync(building, { recursive: true, force: true }); }
+  }
+  linkProfile(home, profile);
+  return home;
+}
 export function antigravityInvocation(config) {
   if (config.mode === 'read') throw new Error(antigravityReadOnly);
-  const profile = path.join(config.googleRoot || defaultGoogleRoot(), 'profile');
+  const root = config.googleRoot || defaultGoogleRoot(), profile = path.join(root, 'profile');
   fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
+  const home = config.skills?.folder ? prepareSkillHome(root, profile, config.skills.folder) : profile;
   // The runtime starts the agent's commands without a login shell, so they see only this PATH. An app opened from Finder
   // has a minimal one, without node, gh or anything else the person installed.
-  const env = { ...withBinaryPath(config.bin, commandEnvironment()), GEMINI_HOME: profile, ANTIGRAVITY_HARNESS_PATH: path.join(path.dirname(config.bin), process.platform === 'win32' ? 'localharness_external.exe' : 'localharness_external') };
+  const env = { ...withBinaryPath(config.bin, commandEnvironment()), GEMINI_HOME: home, ANTIGRAVITY_HARNESS_PATH: path.join(path.dirname(config.bin), process.platform === 'win32' ? 'localharness_external.exe' : 'localharness_external') };
   // This connection uses personal Google OAuth. Never fall back to ambient API billing.
   for (const key of Object.keys(env)) if (/^(?:GEMINI_API_KEY|GOOGLE_API_KEY|GOOGLE_APPLICATION_CREDENTIALS|GOOGLE_GENAI_USE_VERTEXAI|AGY_|ANTIGRAVITY_API)/.test(key)) delete env[key];
-  return { args: process.platform === 'linux' ? ['--uid='] : [], env: relayEnvironment(env, config.relay), cleanup() {} };
+  return { args: process.platform === 'linux' ? ['--uid='] : [], env: relayEnvironment(env, config.relay), cleanup() { if (home !== profile) try { linkProfile(home, profile); } catch { /* Fixed on the next run. */ } } };
 }
 // The runtime copies one of its own skills into the folder it runs in, where it shows as an untracked folder and a commit
 // can pick it up. Returns what removes that copy after a run: only if this run added it, only that file, and a folder only

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { ARTIFACT_KINDS, SPECIALIST_ROLES, folderRule, invalidatedDownstream, parsePlan, parseSuggest, planLimits, planningMethod, planningRequest, planQuestions, reviewDraft, upstreamLines } from './orchestration.mjs';
+import { ARTIFACT_KINDS, DESIGN_ROLE_NOTE, SPECIALIST_ROLES, folderRule, invalidatedDownstream, parsePlan, parseSuggest, planLimits, planningMethod, planningRequest, planQuestions, reviewDraft, upstreamLines } from './orchestration.mjs';
 import { attachmentLimits } from './attachments.mjs';
 import { runSteps } from './recap.mjs';
 import { Subtasks, splitCardsRequest, parseSplitCards } from './subtasks.mjs';
@@ -25,7 +25,7 @@ const fail = (message, status = 409) => Object.assign(new Error(message), { stat
 export const COLUMNS = ['backlog', 'ready', 'doing', 'review', 'done'];
 const PROVIDERS = ['codex', 'claude', 'gemini'], TIERS = ['light', 'standard', 'deep'], ROUTING_MODES = ['saver', 'smart', 'ultra'];
 export const LIMITS = { cards: 300, title: 200, notes: 20000, checks: 20, check: 300, dependsOn: 20, reason: 500, summary: 600, labels: 8, label: 32, comments: 100, comment: 4000, promptComments: 8000, group: 60, files: 12, path: 300, goal: 4000 };
-const ARTIFACT_NAME = { contract: 'Contract', schema: 'Schema', diff: 'Changes', test_evidence: 'Test evidence', findings: 'Findings' };
+const ARTIFACT_NAME = { contract: 'Contract', schema: 'Schema', diff: 'Changes', test_evidence: 'Test evidence', findings: 'Findings', design: 'Design notes' };
 // Tasks that can't change any more, and the ones whose changes are already in the folder.
 const ENDED = new Set(['integrated', 'kept', 'discarded', 'cancelled']);
 const LIVE = new Set(['waiting', 'running']);
@@ -34,7 +34,7 @@ export const ASK_NOTE = 'Sent from the Plan’s Ask mode, which answers question
 // One limit for Flow's Run Ready (#132): working minutes, new tokens and API spend for the whole run, each a positive
 // number or null for none. All three empty is allowed and said plainly on the Plan: the run is then bounded by its cards.
 const SHARED = ['maxWorkingMinutes', 'maxTokens', 'maxSpendUSD'];
-function sharedLimits(input) {
+export function sharedLimits(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('Give the run’s limit as minutes, tokens and spend.', 400);
   const out = {};
   for (const key of SHARED) {
@@ -289,8 +289,18 @@ export class Board {
     }
     if (!card || 'artifact' in input) {
       const artifact = input.artifact ?? null;
-      if (artifact !== null && !ARTIFACT_KINDS.includes(artifact)) throw fail('Choose a contract, schema, changes, test evidence or findings as what the card produces.', 400);
+      if (artifact !== null && !ARTIFACT_KINDS.includes(artifact)) throw fail('Choose a contract, schema, changes, test evidence, findings or design notes as what the card produces.', 400);
       changes.artifact = artifact;
+    }
+    // A Design card (#125) produces design notes unless you chose what it produces: they're what the frontend cards after
+    // it are told.
+    if (changes.role === 'design' && changes.role !== card?.role && !(changes.artifact ?? card?.artifact)) changes.artifact = 'design';
+    // Files that go with the card's task, such as Design notes' screenshots (#125): ids of saved attachments, under the
+    // same limits as a message's. Each must still be saved, so a missing one is refused here rather than when it runs.
+    if (!card || 'attachments' in input) {
+      const ids = input.attachments ?? [];
+      if (!Array.isArray(ids) || ids.length > attachmentLimits.count || ids.some(id => typeof id !== 'string')) throw fail(`Attach up to ${attachmentLimits.count} files to a card.`, 400);
+      changes.attachments = ids.length ? this.main.attachments.select(ids).map(({ id, name, kind, mime, bytes }) => ({ id, name, kind, mime, bytes })) : [];
     }
     if (!card || 'check' in input) changes.check = text(input.check ?? '', LIMITS.check, 'acceptance check') || null;
     if (!card || 'files' in input) {
@@ -351,7 +361,7 @@ export class Board {
   edit(c, id, input = {}) {
     const card = this.find(c, id);
     if (input.revision !== undefined && input.revision !== card.revision) throw fail('This card changed since you opened it. Look at it again before saving.');
-    const changes = this.clean(c, input, card), material = ['title', 'notes', 'agent', 'auto', 'routingMode', 'folderId', 'dependsOn', 'role', 'artifact', 'check', 'files', 'tier', 'split'].some(key => key in changes && JSON.stringify(changes[key] ?? null) !== JSON.stringify(card[key] ?? null))
+    const changes = this.clean(c, input, card), material = ['title', 'notes', 'agent', 'auto', 'routingMode', 'folderId', 'dependsOn', 'role', 'artifact', 'check', 'files', 'tier', 'split', 'attachments'].some(key => key in changes && JSON.stringify(changes[key] ?? null) !== JSON.stringify(card[key] ?? null))
       || 'checks' in changes && JSON.stringify(changes.checks.map(item => item.text)) !== JSON.stringify((card.checks || []).map(item => item.text));
     // What an agent is working from stays as it started. Ticking checks can change at any time.
     if (material && card.column === 'doing') throw fail('An agent is working on this card. Stop it first, or wait until it’s in Review.');
@@ -555,6 +565,7 @@ export class Board {
       if (card.labels?.length) facts.push(`Labels: ${card.labels.join(', ')}`);
       if (card.artifact) facts.push(`Produces: ${ARTIFACT_NAME[card.artifact]}`);
       if (card.files?.length) facts.push(`Files: ${card.files.join(', ')}`);
+      if (card.attachments?.length) facts.push(`Attached: ${card.attachments.map(file => file.name).join(', ')}`);
       if (card.check) facts.push(`Acceptance check: ${card.check}`);
       const after = (card.dependsOn || []).filter(id => open.has(id)).map(name).filter(Boolean);
       if (after.length) facts.push(`Waits for: ${after.map(title => `“${title}”`).join(', ')}`);
@@ -1007,7 +1018,7 @@ export class Board {
       parts.push('# Other open cards in this Plan', '', ...otherOpen.map(item => `- “${item.title.replace(/\s+/g, ' ')}” (${item.draft ? 'Draft' : COLUMN_NAME[item.column]}${item.group ? `, group: ${item.group}` : ''})`), '');
     }
     parts.push(
-      'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 questions you need the person to answer before you can suggest, usually empty; each an object with question, the short question, and options, 2 to 4 short answers the person can choose from, the one you recommend first) and steps (an array of 1 to 3 follow-up cards, in order, to come after the target card). When questions has any, return steps [] and say in summary what you’ll suggest once they answer: you suggest after their answers, so no cards are drafted and thrown away. Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (at most 12 folders or files it expects to change, as paths relative to the project; name a folder rather than many files inside it), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards within this steps array that it needs, starting at 1; leave [] if it directly follows the target card), phase (a short group/phase name, or leave null to keep the target card’s group), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one; it runs from the root of the folder the card works in, so never cd to another folder, and give a card in another folder its own check there). Do not choose agents or models.',
+      'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 questions you need the person to answer before you can suggest, usually empty; each an object with question, the short question, and options, 2 to 4 short answers the person can choose from, the one you recommend first) and steps (an array of 1 to 3 follow-up cards, in order, to come after the target card). When questions has any, return steps [] and say in summary what you’ll suggest once they answer: you suggest after their answers, so no cards are drafted and thrown away. Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (at most 12 folders or files it expects to change, as paths relative to the project; name a folder rather than many files inside it), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards within this steps array that it needs, starting at 1; leave [] if it directly follows the target card), phase (a short group/phase name, or leave null to keep the target card’s group), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings", "design") and optional check (a command that tests the card, only when the project has one; it runs from the root of the folder the card works in, so never cd to another folder, and give a card in another folder its own check there). Do not choose agents or models.',
       ...(folderRule(this.folders()) ? [folderRule(this.folders(), { otherwise: 'without one it works in the target card’s folder' })] : []),
       ...(answers ? ['', '# The person’s answers to your questions', '', 'You asked the person these questions before suggesting. Here are their answers. Suggest the follow-up cards now with them, and don’t ask again what they answered. Where they left a question unanswered, go with the option you recommended and say which in the summary. Ask again only when their answers raise a new decision that would change the cards.', '', answers] : []),
     );
@@ -1043,7 +1054,7 @@ export class Board {
       }
       if (SPECIALIST_BUILDS.includes(step.role) && !CONTRACTS.includes(step.artifact)) {
         const group = step.phase ? step.phase.slice(0, LIMITS.group) : (card.group || null);
-        const missing = openCards.filter(other => other.id !== card.id && !other.draft && other.column !== 'done' && !seen.has(other.id) && (other.group || null) === (group || null) && (other.artifact === 'contract' || (other.artifact === 'schema' && ['database', 'backend'].includes(step.role))));
+        const missing = openCards.filter(other => other.id !== card.id && !other.draft && other.column !== 'done' && !seen.has(other.id) && (other.group || null) === (group || null) && (other.artifact === 'contract' || (other.artifact === 'schema' && ['database', 'backend'].includes(step.role)) || (other.artifact === 'design' && step.role === 'frontend')));
         if (missing.length) {
           list.push(`It doesn’t wait for ${missing.map(other => `“${other.title}”`).join(' and ')}, which defines the ${missing[0].artifact}. Have it depend on that card so the ${missing[0].artifact} runs first.`);
         }
@@ -1405,6 +1416,7 @@ export class Board {
         facts.push(`Agent: ${card.agent ? `${card.agent.provider[0].toUpperCase()}${card.agent.provider.slice(1)}${card.agent.model ? ` (${card.agent.model}${card.agent.effort ? `, ${card.agent.effort}` : ''})` : ''}` : card.auto ? `Auto (${card.routingMode ? `${card.routingMode}, ` : ''}${card.tier || 'standard'})` : 'not chosen'}`);
         if (card.artifact) facts.push(`Produces: ${ARTIFACT_NAME[card.artifact]}`);
         if (card.files?.length) facts.push(`Files: ${card.files.join(', ')}`);
+      if (card.attachments?.length) facts.push(`Attached: ${card.attachments.map(file => file.name).join(', ')}`);
         if (card.check) facts.push(`Acceptance check: \`${card.check.replace(/`/g, "'")}\``);
         if (this.folders().length > 1 && folderName(this.folderOf(card) || this.folders()[0].id)) facts.push(`Works in: ${folderName(this.folderOf(card) || this.folders()[0].id)}`);
         const after = (card.dependsOn || []).map(id => all.find(item => item.id === id)?.title).filter(Boolean);
@@ -1441,14 +1453,19 @@ export class Board {
   // shared, when given, is one limit on working minutes, new tokens and API spend for every card in the run together,
   // in place of the workspace's per-task ones: a card's task stops when the run has used it up, and a card that hasn't
   // started by then doesn't start. Only Flow takes it, and never with a parent, whose limits a split's parts already share.
-  run(c, { ids, executionRevision, assignments = null, billingConfirmed = false, shared = undefined } = {}, { access = null, requestId = null, from = ['ready'], note = '', source = 'board', parent = null } = {}) {
+  // flow, from a Flow schedule (src/schedules.mjs), is the Flow you agreed to when you saved it: its mode for the cards with
+  // no agent, under a Flow policy of their own, whatever the workspace is set to when the time comes. The schedule sends the
+  // agents routing picks for them now, and each is chosen again when it starts, as on the Plan.
+  run(c, { ids, executionRevision, assignments = null, billingConfirmed = false, shared = undefined } = {}, { access = null, requestId = null, from = ['ready'], note = '', source = 'board', parent = null, flow = null } = {}) {
     if (!Array.isArray(ids) || !ids.length) throw fail('Choose the cards to run.', 400);
     if (typeof billingConfirmed !== 'boolean') throw fail('Confirm billing explicitly.', 400);
     // In the order they sit in Ready, which is their priority, then cards they wait for first.
     const chosen = [...new Set(ids)].map(id => this.find(c, id)).sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column) || a.order - b.order), picked = new Set(chosen.map(card => card.id));
     const folders = this.folders(), mode = access?.mode || c.mode, approvalPolicy = access?.approvalPolicy || c.approvalPolicy || 'ask';
-    const defaults = this.main.execution.defaults(c), routed = Boolean(c.routing) && defaults.automation?.routing === true, who = new Map();
-    const flowRun = routed && source === 'board' && !parent, limits = shared === undefined ? null : sharedLimits(shared);
+    const scheduled = Boolean(flow) && source === 'schedule' && !parent;
+    const defaults = scheduled ? { ...this.main.execution.defaults(c), routingMode: flow.routingMode } : this.main.execution.defaults(c), who = new Map();
+    const routed = scheduled || (Boolean(c.routing) && defaults.automation?.routing === true);
+    const flowRun = scheduled || (routed && source === 'board' && !parent), limits = shared === undefined ? null : sharedLimits(shared);
     if (limits && !flowRun) throw fail('One limit for the whole run is for Flow’s Run Ready. Turn Flow on to use it.', 400);
     for (const card of chosen) {
       const name = `“${card.title}”`;
@@ -1461,7 +1478,8 @@ export class Board {
       // Smart routing (#162) is chosen on the card, or on one of its subtasks, so it routes as Flow does even in Normal.
       const smart = auto || (card.subtasks || []).some(item => item.auto === true && item.status !== 'done');
       // Its mode is the card's own when you chose one there, otherwise the workspace's.
-      const routing = smart ? { mode: card.routingMode || defaults.routingMode || 'smart', planned: card.tier || null, ...(c.routing?.allowApi === true ? { allowApi: true } : {}) } : null;
+      // A schedule has no one to ask about charges, so its Auto picks stay on subscriptions.
+      const routing = smart ? { mode: card.routingMode || defaults.routingMode || 'smart', planned: card.tier || null, ...(!scheduled && c.routing?.allowApi === true ? { allowApi: true } : {}) } : null;
       let pick = card.agent ? { provider: card.agent.provider, model: card.agent.model, effort: card.agent.effort, routing } : null;
       if (!pick && auto) {
         const given = assignments && typeof assignments === 'object' ? assignments[card.id] : null;
@@ -1516,6 +1534,11 @@ export class Board {
           if (other.artifact === 'schema' && ['database', 'backend'].includes(role) && !ancestors.has(other.id)) {
             throw fail(`“${card.title}” (${role}) must depend on schema card “${other.title}”. Schema changes must run before dependent database and backend implementation.`);
           }
+          // A design card (#125) settles the look before the frontend builds it. One that comes after this card, such as
+          // a design review of it, doesn't hold it.
+          if (other.artifact === 'design' && role === 'frontend' && !ancestors.has(other.id) && !ancestorsOf(other.id).has(card.id)) {
+            throw fail(`“${card.title}” (frontend) must depend on design card “${other.title}”. A design is settled before the frontend builds it.`);
+          }
         }
       }
     }
@@ -1526,7 +1549,8 @@ export class Board {
     const batch = limits ? { id: `run-${attempt}`, limits, cards: order.length, startedAt: new Date().toISOString() } : null;
     try {
       for (const card of order) {
-        const folderId = this.folderOf(card) || folders[0].id, policyId = randomUUID(), id = requestId && chosen.length === 1 ? requestId : `board-${card.id}-${attempt}`, pick = who.get(card.id);
+        const folderId = this.folderOf(card) || folders[0].id, policyId = randomUUID(), pick = who.get(card.id);
+        const id = requestId ? (chosen.length === 1 ? requestId : `${requestId}-${card.id.slice(0, 8)}`) : `board-${card.id}-${attempt}`;
         // Files it saves that Git ignores, such as notes or screenshots under output/, would be lost with a copy, so a card
         // that names some waits for its folder rather than work in one (task-isolation.mjs).
         const ignoredFiles = card.files?.length ? ignoredPaths(folders.find(folder => folder.id === folderId).path, this.filesIn(card)) : [];
@@ -1534,11 +1558,12 @@ export class Board {
         // runs under the workspace's own policy, which is what lets it be chosen again when it starts.
         // Smart cards run under a Flow policy of their own when the workspace isn't in Flow, as you chose Smart for them.
         // A card whose own mode differs from the workspace's gets a Flow policy in its mode, even in Flow.
-        const own = pick.routing && !(routed && pick.routing.mode === (defaults.routingMode || 'smart'));
+        // A Flow schedule's cards always get one, in the mode saved with the schedule.
+        const own = pick.routing && (scheduled || !(routed && pick.routing.mode === (defaults.routingMode || 'smart')));
         this.main.execution.ensure(c, policyId, pick.routing ? (own ? { config: { mode: 'flow', routingMode: pick.routing.mode }, source, requestId: id } : { source, requestId: id }) : { config: { mode: 'normal' }, source, requestId: id });
         // The text here is the card as it is now; the task is briefed again when it starts, with what earlier cards did.
         const role = card.role || 'builder', files = card.files?.length ? this.filesIn(card) : [];
-        const task = this.main.tasks.start(c, { text: this.prompt(c, card) + (note ? `\n\n${note}` : ''), title: card.title, role, provider: pick.provider, model: pick.model, effort: pick.effort, ...(pick.routing ? { routing: pick.routing } : {}), mode, approvalPolicy, folderId, billingConfirmed, requestId: id, dependsOn: (card.dependsOn || []).filter(id => picked.has(id)).map(id => tasks[id]), executionRevision, ...(parent ? { parent } : {}), ...(ignoredFiles.length ? { ignoredFiles } : {}) }, { held: true, batch, queueExecution: this.main.execution.token(c, policyId), board:{ cardId: card.id, revision: card.revision, run: attempt, role, ...(flowRun ? { flow: true } : {}), ...(card.group ? { group: card.group } : {}), ...(files.length ? { files } : {}), ...(note ? { note } : {}) } });
+        const task = this.main.tasks.start(c, { text: this.prompt(c, card) + (note ? `\n\n${note}` : ''), title: card.title, role, provider: pick.provider, model: pick.model, effort: pick.effort, ...(pick.routing ? { routing: pick.routing } : {}), mode, approvalPolicy, folderId, billingConfirmed, requestId: id, dependsOn: (card.dependsOn || []).filter(id => picked.has(id)).map(id => tasks[id]), executionRevision, ...(parent ? { parent } : {}), ...(ignoredFiles.length ? { ignoredFiles } : {}), ...(card.attachments?.length ? { attachments: card.attachments.map(file => file.id) } : {}) }, { held: true, batch, queueExecution: this.main.execution.token(c, policyId), board:{ cardId: card.id, revision: card.revision, run: attempt, role, ...(flowRun ? { flow: true } : {}), ...(card.group ? { group: card.group } : {}), ...(files.length ? { files } : {}), ...(note ? { note } : {}) } });
         tasks[card.id] = task.id; made.push(task.id);
       }
     } catch (error) {
@@ -1564,7 +1589,9 @@ export class Board {
     if (card.files?.length) parts.push('', `Files or folders it expects to change: ${this.filesIn(card).join(', ')}`);
     if (card.checks?.length) parts.push('', 'Done means:', ...card.checks.map(item => `- ${item.text}`));
     if (card.check) parts.push('', `Acceptance check: ${ownCheck(card.check, this.folderPath(card))}`);
+    if (card.attachments?.length) parts.push('', `Attached to this card, and given with this message: ${card.attachments.map(file => file.name).join(', ')}.`);
     if (card.artifact) parts.push('', `When you finish, your report is this card’s ${ARTIFACT_NAME[card.artifact].toLowerCase()}: the cards after it are told it.`);
+    if (card.role === 'design') parts.push('', DESIGN_ROLE_NOTE);
     // A card closed to agents (#97) isn't named, and its result isn't passed on.
     const before = (card.dependsOn || []).map(id => this.cards(c).find(item => item.id === id)).filter(other => other && !this.closed(c, other));
     if (before.length) {
@@ -1681,9 +1708,12 @@ export class Board {
   // agent, waits for a reset or chooses the agent for its next subtask. A split Flow made by itself goes to the Plan at
   // once, for you to finish there, so Flow merges nothing more (src/split-finish.mjs). Cards you ran outside Flow, and
   // splits you chose to run as tasks, are yours, so they carry on.
+  // A Flow schedule's runs end the same way, its prompt's too, and every Flow schedule is paused, so none starts again
+  // until you resume it in Flow (src/schedules.mjs).
   flowEnded(c) {
     const automatic = new Set((c.splitRuns || []).filter(run => run.automatic).map(run => run.id));
-    const flows = (c.parallelTasks || []).filter(task => task.board?.flow || (task.splitId && automatic.has(task.splitId)));
+    const flows = (c.parallelTasks || []).filter(task => task.board?.flow || task.batch?.flow || (task.splitId && automatic.has(task.splitId)));
+    this.main.schedules?.flowEnded?.(c);
     const waiting = flows.filter(task => task.status === 'waiting');
     for (const task of waiting) this.main.tasks.finish(c, task, { status: 'cancelled', tookOver: true, reason: TOOK_OVER });
     for (const task of flows.filter(task => !waiting.includes(task))) {

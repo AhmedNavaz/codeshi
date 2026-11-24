@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { command } from './routing-references.mjs';
 import { gitExecutable } from './resolve-binary.mjs';
 import { friendlyError } from './github-context.mjs';
+import { API_URL, createGitHubSignIn } from './github-signin.mjs';
 
 // Open a GitHub repository as a workspace (#159). The list comes from the person's own gh login, so Codeshi asks for no
 // sign-in and stores no token. Cloning runs gh repo clone, which uses the person's git with that same login. Nothing is
@@ -94,7 +95,35 @@ export function localClones({ folders = [], cloneFolder = null, origin = originR
   return found;
 }
 
-export function createGitHubRepos({ run = command, origin = originRepository, originFor = originOn } = {}) {
+// A small avatar as a data: image, so the window's policy needn't allow images from other sites. Only GitHub's own
+// avatar host is contacted, and anything large or not an image is dropped.
+const AVATAR_HOST = /^https:\/\/avatars\.githubusercontent\.com\/[\w\/.%-]+(?:\?[\w=&%-]*)?$/;
+export async function fetchAvatar(url, fetchImpl = globalThis.fetch) {
+  if (typeof url !== 'string' || !AVATAR_HOST.test(url) || typeof fetchImpl !== 'function') return null;
+  try {
+    const response = await fetchImpl(`${url}${url.includes('?') ? '&' : '?'}s=64`, { redirect: 'error', signal: AbortSignal.timeout(5000) });
+    const type = String(response.headers.get('content-type') || '').split(';')[0].trim();
+    if (!response.ok || !/^image\/(png|jpeg|gif|webp)$/.test(type)) return null;
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return bytes.length && bytes.length <= 60 * 1024 ? `data:${type};base64,${bytes.toString('base64')}` : null;
+  } catch { return null; }
+}
+
+// Clones over HTTPS with a Sign in with GitHub token (#159). The token goes in one command's header through git's
+// environment, so it isn't written to the clone's config or to the command line.
+export function cloneWithToken(url, target, token, { timeout = CLONE_TIMEOUT } = {}) {
+  const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+  return new Promise((resolve, reject) => {
+    execFile(gitExecutable(), ['clone', '--quiet', url, target], {
+      timeout, maxBuffer: 8 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}` },
+    }, (error, stdout, stderr) => error ? reject(Object.assign(error, { stderr: String(stderr || '') })) : resolve());
+  });
+}
+// The same fields as gh's jq output, from the REST API.
+const fromRest = repo => ({ fullName: repo.full_name, description: repo.description, private: repo.private, fork: repo.fork, archived: repo.archived, pushedAt: repo.pushed_at, url: repo.html_url });
+
+export function createGitHubRepos({ run = command, origin = originRepository, originFor = originOn, avatar = fetchAvatar, signin = null, fetchImpl = globalThis.fetch, gitClone = cloneWithToken } = {}) {
   const cloning = new Set();
   const gh = (args, options = {}) => run('gh', args, { timeout: 20000, maxBuffer: 4 * 1024 * 1024, ...options });
   // The origin matcher for a host: the injected one for github.com, the host's own for an Enterprise server.
@@ -126,19 +155,49 @@ export function createGitHubRepos({ run = command, origin = originRepository, or
     return { host, hosts: known };
   }
 
-  async function account(host) {
-    try { return JSON.parse(await api(host, ['user', '--jq', '{login: .login, name: .name}'])); }
+  // The Sign in with GitHub token, used for github.com only when gh isn't signed in there. Null otherwise.
+  async function tokenFor(host) {
+    if (host !== DEFAULT_HOST || !signin) return null;
+    const known = await hosts();
+    if (known.some(item => item.host === DEFAULT_HOST && item.login)) return null;
+    try { return await signin.token(); }
+    catch (error) {
+      if (error?.status) throw error;
+      throw Object.assign(new Error('Couldn\'t reach GitHub to check your sign-in. Check your connection and try again.'), { status: 502 });
+    }
+  }
+  // One REST read with the sign-in token. A 401 means the sign-in no longer works.
+  async function rest(token, pathname) {
+    let response;
+    try {
+      response = await fetchImpl(`${API_URL}/${pathname}`, { headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'User-Agent': 'Codeshi', 'X-GitHub-Api-Version': '2022-11-28' }, redirect: 'error', signal: AbortSignal.timeout(20000) });
+    } catch { throw Object.assign(new Error('Couldn\'t reach GitHub. Check your connection and try again.'), { status: 502 }); }
+    if (response.status === 401) throw Object.assign(new Error('Your GitHub sign-in has ended. Sign in with GitHub again.'), { status: 401, signinEnded: true });
+    if (!response.ok) throw Object.assign(new Error(`GitHub answered HTTP ${response.status}. Try again in a moment.`), { status: 502 });
+    return response.json();
+  }
+
+  async function account(host, token = null) {
+    if (token) {
+      const who = await rest(token, 'user');
+      return { login: who.login, name: who.name, avatarUrl: who.avatar_url };
+    }
+    try { return JSON.parse(await api(host, ['user', '--jq', '{login: .login, name: .name, avatarUrl: .avatar_url}'])); }
     catch (error) { throw ghError(error, 'your account'); }
   }
 
   // Your repositories, your organizations' and those you collaborate on, most recently pushed first.
   async function list({ folders = [], cloneFolder = null, host = DEFAULT_HOST } = {}) {
-    const fetchPage = page => api(host, [`user/repos?per_page=${PAGE}&page=${page}&sort=pushed&affiliation=owner,collaborator,organization_member`, '--jq', FIELDS]).catch(error => { throw ghError(error, 'your repositories'); });
-    const [who, first] = await Promise.all([account(host), fetchPage(1)]), repos = [];
+    const token = await tokenFor(host);
+    const fetchPage = async page => {
+      if (token) return (await rest(token, `user/repos?per_page=${PAGE}&page=${page}&sort=pushed&affiliation=owner,collaborator,organization_member`)).map(fromRest);
+      const output = await api(host, [`user/repos?per_page=${PAGE}&page=${page}&sort=pushed&affiliation=owner,collaborator,organization_member`, '--jq', FIELDS]).catch(error => { throw ghError(error, 'your repositories'); });
+      return String(output || '').split('\n').filter(Boolean).map(line => JSON.parse(line));
+    };
+    const [who, first] = await Promise.all([account(host, token), fetchPage(1)]), repos = [];
     let more = false;
     for (let page = 1; page <= PAGES; page++) {
-      const output = page === 1 ? first : await fetchPage(page);
-      const rows = String(output || '').split('\n').filter(Boolean).map(line => JSON.parse(line));
+      const rows = page === 1 ? first : await fetchPage(page);
       repos.push(...rows);
       if (rows.length < PAGE) break;
       if (page === PAGES) more = true;
@@ -147,6 +206,7 @@ export function createGitHubRepos({ run = command, origin = originRepository, or
     return {
       account: who,
       host,
+      via: token ? 'github' : 'gh',
       more,
       repos: repos.filter(repo => typeof repo.fullName === 'string' && NAME.test(repo.fullName)).map(repo => ({
         fullName: repo.fullName, description: typeof repo.description === 'string' ? repo.description.slice(0, 300) : '',
@@ -172,7 +232,9 @@ export function createGitHubRepos({ run = command, origin = originRepository, or
     cloning.add(target);
     try {
       // gh takes HOST/OWNER/REPO for a repository on an Enterprise server.
-      await gh(['repo', 'clone', host === DEFAULT_HOST ? name : `${host}/${name}`, target], { timeout: CLONE_TIMEOUT, maxBuffer: 8 * 1024 * 1024 });
+      const token = await tokenFor(host);
+      if (token) await gitClone(`https://github.com/${name}.git`, target, token, { timeout: CLONE_TIMEOUT });
+      else await gh(['repo', 'clone', host === DEFAULT_HOST ? name : `${host}/${name}`, target], { timeout: CLONE_TIMEOUT, maxBuffer: 8 * 1024 * 1024 });
     } catch (error) {
       // gh and git remove a failed clone themselves; a clone stopped by the time limit can leave its folder behind.
       if (isDirectory(target) && origin(target) === null) try { fs.rmSync(target, { recursive: true, force: true }); } catch { /* Left for the person. */ }
@@ -186,12 +248,43 @@ export function createGitHubRepos({ run = command, origin = originRepository, or
     return { path: target, cloned: true };
   }
 
-  return { hosts, signedIn, list, clone };
+  // Who the gh login on github.com is, for pre-filling a name (#24). Nothing is stored; no login gives null.
+  async function identity() {
+    const token = await tokenFor(DEFAULT_HOST);
+    let who = null;
+    if (token) who = await account(DEFAULT_HOST, token).catch(() => null);
+    else {
+      const known = await hosts();
+      if (!known.some(item => item.host === DEFAULT_HOST && item.login)) return null;
+      who = await account(DEFAULT_HOST);
+    }
+    const text = value => typeof value === 'string' ? value.trim().slice(0, 100) : '';
+    const login = text(who?.login);
+    if (!login) return null;
+    return { login, name: text(who.name) || login, avatar: await avatar(who.avatarUrl) };
+  }
+
+  return { hosts, signedIn, list, clone, identity, tokenFor };
 }
 
-export function createGitHubRepoRoutes({ registry, body, json, settings, saveSettings, repos = createGitHubRepos() }) {
+export function createGitHubRepoRoutes({ registry, body, json, settings, saveSettings, signin = createGitHubSignIn(), repos = createGitHubRepos({ signin }) }) {
   const workspaceFolders = () => registry.list().flatMap(project => (project.folders || []).map(folder => folder.path));
   return async ({ req, res, url }) => {
+    if (url.pathname === '/api/github/identity') {
+      if (req.phoneClient) fail('Open GitHub on the computer.', 403);
+      if (req.method !== 'GET') fail('Use GET to read your GitHub name.', 405);
+      let identity = null;
+      try { identity = await repos.identity(); } catch { identity = null; }
+      json(res, 200, { identity }); return true;
+    }
+    if (url.pathname === '/api/github/signin' || url.pathname === '/api/github/signout') {
+      // Sign in with GitHub (#159) is for this computer's window only: the phone never starts it or sees the code.
+      if (req.phoneClient) fail('Open GitHub on the computer.', 403);
+      if (url.pathname === '/api/github/signin' && req.method === 'GET') { json(res, 200, await signin.status()); return true; }
+      if (url.pathname === '/api/github/signin' && req.method === 'POST') { json(res, 201, await signin.start()); return true; }
+      if (url.pathname === '/api/github/signout' && req.method === 'POST') { json(res, 200, await signin.signOut()); return true; }
+      fail('Use GET to check sign-in, POST to start it, or POST to sign out.', 405);
+    }
     if (url.pathname !== '/api/github/repos' && url.pathname !== '/api/github/clone') return false;
     if (req.phoneClient) fail('Open GitHub repositories on the computer.', 403);
     const cloneFolder = settings().githubCloneFolder || null;

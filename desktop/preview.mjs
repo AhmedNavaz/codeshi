@@ -143,6 +143,14 @@ export function designText({ sections = [], notes = {}, overall = '', url = '', 
   return [lead, ...list, ...(whole ? [`Whole page: ${whole}`] : [])].join('\n');
 }
 
+// Design notes added to the Plan (#125): the card's title, from the interface and the page, and the files the sections'
+// code is in, at most a card's 12, each once.
+export function designCard({ sections = [], url = '', label = '' }) {
+  const page = pathOf(url).split('?')[0], where = clip(label, 60) || (() => { try { return new URL(url).host; } catch { return 'the preview'; } })();
+  const files = [...new Set(sections.map(section => section.source?.file).filter(file => typeof file === 'string' && file))].slice(0, 12);
+  return { title: clip(`Design notes: ${where}${page && page !== '/' ? ` ${page}` : ''}`, 200), files };
+}
+
 // The area to capture: the element and a little around it, kept inside the visible page.
 export function captureRect(rect, viewport, padding = 8) {
   const numbers = [rect?.x, rect?.y, rect?.width, rect?.height, viewport?.width, viewport?.height];
@@ -525,11 +533,14 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
       if (!alive(preview.page)) return null;
       const notes = value?.notes && typeof value.notes === 'object' ? value.notes : {}, url = contents.getURL(), name = label(preview);
       const text = designText({ sections: design.sections, notes: Object.fromEntries(design.sections.map(section => [section.id, typeof notes[section.id] === 'string' ? notes[section.id] : ''])), overall: typeof value?.overall === 'string' ? value.overall : '', url, label: name, shots: images.length });
-      const count = design.sections.length;
+      const count = design.sections.length, to = value?.to === 'plan' ? 'plan' : 'message';
+      // On the Plan, the notes are a card's description, its screenshots are attached, and the files the sections' code is
+      // in are the files it expects to change.
+      const card = to === 'plan' ? designCard({ sections: design.sections, url, label: name }) : null;
       Object.assign(design, { sections: [], missing: [], offscreen: [], notes: {}, overall: '' });
-      const result = { projectId, url, label: name, design: true, image: null, images, text };
+      const result = { projectId, url, label: name, design: true, image: null, images, text, ...(card ? { card } : {}) };
       onPick(result);
-      toToolbar(preview, 'preview:design-added', { count });
+      toToolbar(preview, 'preview:design-added', { count, to });
       return result;
     } finally { design.busy = false; syncDesign(preview); }
   }
@@ -575,6 +586,8 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     else if (action === 'open-external' && isPreviewURL(contents.getURL())) shell.openExternal(contents.getURL());
     else if (action === 'navigate') { try { contents.loadURL(previewURL(value)).catch(() => {}); } catch (error) { toToolbar(preview, 'preview:error', error.message); } }
     else if (action === 'focus-app') onPick({ projectId: preview.projectId, focus: true });
+    // Sketching a page that doesn't exist yet happens in Codeshi's window, in this window's workspace (#125).
+    else if (action === 'sketch') onPick({ projectId: preview.projectId, focus: true, sketch: true });
     else if (action === 'show-inspector' || action === 'hide-inspector') { preview.inspector = action === 'show-inspector'; layout(preview); }
     // Another of the review's interfaces opens in a window of its own, or brings its window forward; this page stays.
     else if (action === 'open-interface') open({ projectId: preview.projectId, url: value, workspace: preview.workspace }).catch(error => toToolbar(preview, 'preview:error', error.message));

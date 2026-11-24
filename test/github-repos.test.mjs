@@ -190,3 +190,13 @@ test('the routes list and clone only on a host gh is signed in to', async () => 
   assert.equal(cloned.status, 201);
   assert.deepEqual(gh.calls.at(-1), ['repo', 'clone', 'ghe.corp.example/team/x', path.join(root, 'x')]);
 });
+
+test('fetchAvatar only reads GitHub avatars and returns a small data image', async () => {
+  const { fetchAvatar } = await import('../src/github-repos.mjs');
+  const image = Buffer.from('png-bytes');
+  const ok = async () => ({ ok: true, headers: { get: () => 'image/png' }, arrayBuffer: async () => image });
+  assert.equal(await fetchAvatar('https://avatars.githubusercontent.com/u/1?v=4', ok), `data:image/png;base64,${image.toString('base64')}`);
+  assert.equal(await fetchAvatar('https://evil.example/u/1', ok), null);
+  assert.equal(await fetchAvatar('https://avatars.githubusercontent.com/u/1', async () => ({ ok: true, headers: { get: () => 'text/html' }, arrayBuffer: async () => image })), null);
+  assert.equal(await fetchAvatar('https://avatars.githubusercontent.com/u/1', async () => { throw new Error('offline'); }), null);
+});

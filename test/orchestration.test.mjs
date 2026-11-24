@@ -9,7 +9,7 @@ import { scriptCLIs } from './platform.mjs';
 import { gitExecutable } from '../src/resolve-binary.mjs';
 import { createRelayServer } from '../src/server.mjs';
 import { Broker } from '../src/broker.mjs';
-import { openPlan, parsePlan, parseSuggest, reviewDraft, planningRequest, validateSteps, SPECIALIST_ROLES, ARTIFACT_KINDS, INTEGRATION_OUTCOMES, validateWorkflowOrder, invalidatedDownstream, stepBrief, recordArtifact, evaluateIntegration } from '../src/orchestration.mjs';
+import { openPlan, parsePlan, parseSuggest, reviewDraft, planningRequest, validateSteps, SPECIALIST_ROLES, ARTIFACT_KINDS, INTEGRATION_OUTCOMES, validateWorkflowOrder, invalidatedDownstream, stepBrief, recordArtifact, evaluateIntegration, DESIGN_ROLE_NOTE, designSection, stepPrompt, upstreamLines, planningMethod } from '../src/orchestration.mjs';
 import { ledgerFromRecords, usageByRole } from '../src/task-ledger.mjs';
 
 // A planner's reply in the agreed shape: steps refer to earlier steps by number, and never choose an agent.
@@ -580,7 +580,7 @@ test('plans are edited with a revision check, superseded by a newer plan, discar
 
 test('specialist team workflows coordinate roles, validate workflow order, and attach task-specific briefs (#89)', () => {
   assert.deepEqual(SPECIALIST_ROLES, ['builder', 'reviewer', 'frontend', 'backend', 'database', 'design', 'qa']);
-  assert.deepEqual(ARTIFACT_KINDS, ['contract', 'schema', 'diff', 'test_evidence', 'findings']);
+  assert.deepEqual(ARTIFACT_KINDS, ['contract', 'schema', 'diff', 'test_evidence', 'findings', 'design']);
   assert.deepEqual(INTEGRATION_OUTCOMES, ['passed', 'failed', 'blocked', 'skipped', 'unverified', 'no_change']);
 
   // Full checkout promo code specialist team plan
@@ -809,4 +809,27 @@ test('Suggest next holds all cards while its questions await an answer (#162)', 
   assert.equal(parseSuggest(JSON.stringify({ summary: 'Ready.', steps: [step] })).status, 'draft');
   assert.equal(parseSuggest(JSON.stringify({ summary: 'Nothing.', questions: [], steps: [] })).status, 'unstructured');
   assert.equal(parseSuggest(JSON.stringify({ summary: 'Too many.', steps: Array(4).fill(step) })).status, 'unstructured');
+});
+
+test('a design card settles the look before the frontend builds it, and hands on its design notes (#125)', () => {
+  assert.match(planningMethod, /role "design" and artifact "design"/, 'The planner is told when a plan gets a design card.');
+  // A frontend step in the design's group waits for it; a design that comes after the frontend step, such as a review, doesn't hold it.
+  assert.throws(() => validateWorkflowOrder([step('d', { role: 'design', artifact: 'design' }), step('f', { role: 'frontend' })]), /must depend on design step d/);
+  assert.doesNotThrow(() => validateWorkflowOrder([step('d', { role: 'design', artifact: 'design' }), step('f', { role: 'frontend', dependsOn: ['d'] })]));
+  assert.doesNotThrow(() => validateWorkflowOrder([step('f', { role: 'frontend' }), step('d', { role: 'design', artifact: 'design', dependsOn: ['f'] })]));
+  assert.doesNotThrow(() => validateWorkflowOrder([step('d', { role: 'design', artifact: 'design', phase: 'Web' }), step('f', { role: 'frontend', phase: 'Admin' })]), 'Another group’s design doesn’t hold it.');
+  assert.doesNotThrow(() => validateWorkflowOrder([step('d', { role: 'design', artifact: 'design' }), step('b', { role: 'backend' })]), 'Only frontend work waits for a design.');
+  // A drafted plan isn't refused for it: the plan checks say it on the card.
+  const notes = reviewDraft([step('d', { role: 'design', artifact: 'design', done: ['x'] }), step('f', { role: 'frontend', done: ['x'] })]);
+  assert.match(notes.f.join('\n'), /doesn’t wait for card 1, which defines the design/);
+  // The design step is told what to produce; the frontend step gets the design notes as the design step's output.
+  const plan = { goal: 'A pricing page', steps: [step('d', { role: 'design', artifact: 'design' }), step('f', { role: 'frontend', dependsOn: ['d'] })] };
+  assert.ok(stepPrompt(plan, plan.steps[0], 1).includes(DESIGN_ROLE_NOTE));
+  assert.ok(!stepPrompt(plan, plan.steps[1], 2).includes(DESIGN_ROLE_NOTE));
+  assert.match(upstreamLines(plan.steps[0], { status: 'integrated', summary: 'Design notes\n1. Header: logo left.' }).join('\n'), /Its design notes, in its own words:\n {4}Design notes\n {4}1\. Header/);
+  // What a design card passes on is its design notes, even when a long report comes first.
+  const reply = `${'I read the pages. '.repeat(300)}\n\n## Design notes\n1. Hero: one line.\n2. Plans: three cards.`;
+  assert.equal(designSection(reply), '## Design notes\n1. Hero: one line.\n2. Plans: three cards.');
+  assert.equal(designSection('**Design notes:**\n1. A'), '**Design notes:**\n1. A');
+  assert.equal(designSection('No notes here.'), '');
 });

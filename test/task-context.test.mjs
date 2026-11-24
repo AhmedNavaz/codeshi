@@ -279,6 +279,28 @@ test('a fold is bounded by size, so a chat of short exchanges reaches further ba
   assert.equal(numbers.at(-1), 198, 'The newest folded request is kept.');
 });
 
+test('a fold brings back older decisions the request comes back to, beyond the latest twelve, and no others', t => {
+  const { folders } = workspace(t);
+  const messages = [{ role: 'user', runId: 'a', text: 'Rate the new models' }, { role: 'activity', runId: 'a', text: `Answered:\nGoogle added gemini-4-argon and gemini-4-hydrogen. ${'Some background on the ratings. '.repeat(30)}How should they be rated? → Argon deep, Hydrogen standard` }, { role: 'assistant', runId: 'a', text: 'Rated.' }];
+  messages.push({ role: 'user', runId: 'b', text: 'Review the client' }, { role: 'activity', runId: 'b', text: 'Answered:\nShould the client retry? → Retry twice' }, { role: 'assistant', runId: 'b', text: 'Done.' });
+  for (let turn = 1; turn <= 20; turn++) messages.push({ role: 'user', runId: `d${turn}`, text: `Chore ${turn}` }, { role: 'activity', runId: `d${turn}`, text: `Answered:\nWhich colour for chore ${turn}? → Colour ${turn}` }, { role: 'assistant', runId: `d${turn}`, text: `Done ${turn}.\n\n` + 'detail '.repeat(500) });
+  const earlier = text => envelope(build(conversation(messages), text, folders)).brief.earlier;
+  const back = earlier('How did I want Argon and Hydrogen rated?');
+  const kept = back.decisions.find(item => item.matched);
+  assert.ok(kept, 'The old decision about Argon comes back.');
+  assert.match(kept.text, /→ Argon deep, Hydrogen standard$/, 'A long one keeps its answer at the end.');
+  assert.ok(kept.text.length < 700, 'and is shortened from the middle.');
+  assert.deepEqual(kept.matched.sort(), ['argon', 'hydrogen', 'rat']);
+  assert.ok(back.matchedNote);
+  assert.equal(back.decisions.filter(item => !item.matched).length, 12, 'The latest twelve still go.');
+  assert.equal(back.decisions.findIndex(item => item.matched), 0, 'Decisions stay in the order they were made.');
+  assert.match(back.decisions.at(-1).text, /Colour 18$/);
+  const plain = earlier('Tidy the README');
+  assert.equal(plain.decisions.some(item => item.matched), false, 'A request about something else brings none back.');
+  assert.equal(plain.matchedNote, undefined);
+  assert.equal(earlier('Make the client faster').decisions.some(item => item.matched), false, 'One ordinary word is not enough.');
+});
+
 test('a request sent again is kept once, and a fold does not repeat what context carries', t => {
   const { folders, desktop } = workspace(t);
   const c = longConversation(desktop);

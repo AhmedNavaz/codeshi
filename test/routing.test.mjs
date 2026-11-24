@@ -63,6 +63,21 @@ const catalogs = {
 const fresh = () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10 }] });
 const one = (provider, models = catalogs[provider]) => ({ provider, eligible: true, billingSource: 'subscription', models, usage: fresh() });
 
+test('Gemini 4 Carbon and Neon, and the older Flash models, are rated from Google\'s model page (#12)', () => {
+  const rated = id => globalThis.relayRouting.modelRating({ id });
+  assert.deepEqual(['gemini-4-carbon', 'gemini-4-neon', 'gemini-4-argon', 'gemini-4-hydrogen', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite-medium'].map(id => modelTier({ id })), ['deep', 'deep', 'deep', 'standard', 'light', 'light', 'light']);
+  assert.equal(rated('gemini-4-carbon').ultra, true, 'Carbon, Google\'s strongest, is chosen on its own only for deep work in Ultra.');
+  assert.equal(rated('gemini-4-neon').ultra, undefined);
+  assert.equal(globalThis.relayRouting.contextWindowOf({ id: 'gemini-4-neon' }), 1000000);
+  for (const id of ['gemini-3.8-live', 'gemini-3.8-flash-tts', 'gemini-nano-banana-2.1', 'gemini-embedding-2', 'gemini-2.5-flash', 'gemini-4']) assert.equal(modelTier({ id }), null, `${id} isn't a coding model Flow may choose.`);
+
+  const catalog = ['gemini-4-neon', 'gemini-4-carbon', 'gemini-4-hydrogen', 'gemini-3.6-flash'].map(id => ({ id, supportedReasoningEfforts: levels('low', 'medium', 'high') }));
+  const pick = (mode, tier) => route({ text: 'x', assessment: { tier, effort: 'medium', reason: 'rated' }, mode, current: 'gemini', candidates: [one('gemini', catalog)] }).model;
+  assert.equal(pick('ultra', 'deep'), 'gemini-4-carbon', 'Ultra sends deep work to Carbon.');
+  assert.equal(pick('smart', 'deep'), 'gemini-4-neon', 'Smart never chooses Carbon.');
+  assert.equal(pick('saver', 'light'), 'gemini-3.6-flash');
+});
+
 test('routing picks only models on the rated list, by exact id: nothing is worked out from a name (#12)', () => {
   assert.deepEqual(catalogs.codex.map(modelTier), ['standard', 'deep', 'standard', 'light']);
   assert.deepEqual(catalogs.claude.map(modelTier), [null, 'deep', 'deep', 'standard', 'light', 'deep']);

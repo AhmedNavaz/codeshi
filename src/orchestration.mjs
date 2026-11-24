@@ -9,7 +9,16 @@ export const planLimits = { steps: 5, drafted: 300, title: 120, instructions: 40
 const PROVIDERS = ['codex', 'claude', 'gemini'], TIERS = ['light', 'standard', 'deep'];
 const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 export const SPECIALIST_ROLES = ['builder', 'reviewer', 'frontend', 'backend', 'database', 'design', 'qa'];
-export const ARTIFACT_KINDS = ['contract', 'schema', 'diff', 'test_evidence', 'findings'];
+export const ARTIFACT_KINDS = ['contract', 'schema', 'diff', 'test_evidence', 'findings', 'design'];
+// A design card (#125) decides how an interface looks and behaves before the frontend cards build it. Its report is its
+// design notes, numbered by section as the preview's Design notes are, and the frontend cards in its group wait for it.
+export const DESIGN_ROLE_NOTE = 'You are the designer for this card: decide how the interface looks and behaves, so the frontend cards after it can build it. Read the project’s existing pages, components, styles and design tokens first, and design within them unless this card asks for something new. Change only what this card names, such as shared styles or tokens; leave building the screens to the cards after it. End your report with a heading “Design notes”: a numbered list of the sections in order from the top, each with where it sits, what it shows, how it behaves (states such as hover, loading, empty and error) and how it changes on a narrow screen, naming the components and tokens to use. Keep the notes under 2,500 characters: the cards after this one are given them.';
+// The design notes in a design card's report: from its “Design notes” heading on, or '' when it has none.
+export function designSection(reply) {
+  const lines = String(reply || '').split('\n');
+  const start = lines.findLastIndex(line => /^\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*design notes\s*(?:\*\*|__)?\s*:?\s*(?:\*\*|__)?\s*$/i.test(line));
+  return start < 0 ? '' : lines.slice(start).join('\n').trim();
+}
 export const INTEGRATION_OUTCOMES = ['passed', 'failed', 'blocked', 'skipped', 'unverified', 'no_change'];
 
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
@@ -22,6 +31,7 @@ export const planningMethod = [
   '- Read the project first: its structure, stack, conventions and instruction files (AGENTS.md, CLAUDE.md). Extend the existing architecture rather than replacing it, unless the request asks for that.',
   '- Size the plan to the work. A small change is 1 to 3 cards with no phases. A larger project gets phases, such as Foundations, Contracts, Build, Integrate and Verify, and as many cards as it needs.',
   '- Contracts first. Where parts share an interface (an API, a schema, a component\'s props), one card defines it, with artifact "contract" or "schema", before the cards that use it, so those cards can run side by side against it.',
+  '- Design before screens. Where the plan builds a new page or screen whose look the request doesn\'t settle, one card with role "design" and artifact "design" first decides its sections and how each looks and behaves, and the "frontend" cards that build it depend on that card. Leave it out for small interface changes, or when the request, its attachments or design notes already describe the design.',
   '- Working slices. Prefer cards that each leave the project working and testable end to end, starting with a thin version that runs, over cards that only make sense once every layer is done.',
   '- Unknowns early. A risky or unfamiliar part gets an early card that tries it out, before work that depends on it.',
   '- One outcome per card, with what done means, small enough to review in one sitting.',
@@ -67,7 +77,7 @@ export function planningRequest(goal, { documents = [], revising = false, conver
     ] : []),
     ...(revising ? [revisionMethod, ''] : []),
     ...(conversational ? ['This is the Plan’s conversation. Decide from the person’s message whether to answer a question, ask for a decision, or draft changes. For questions, explanations, discussion or acknowledgments that do not request card changes, return only {"answer":"your full response in Markdown","steps":[]}. Do not invent card changes for a question. For requests to add, change or remove cards, use the draft format below. No mode switch is needed. Drafts still require the person to accept them.', ''] : []),
-    'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 questions you need the person to answer before you can draft, usually empty; each an object with question, the short question, and options, 2 to 4 short answers the person can choose from, the one you recommend first) and steps (an array of cards, in order). When questions has any, return steps [] (and no remove) and say in summary what you’ll draft once they answer: you draft after their answers, so no cards are drafted and thrown away. Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (at most 12 folders or files it expects to change, as paths relative to the project; name a folder rather than many files inside it), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards it needs, starting at 1), phase (a short phase name, only when the plan has phases), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one; it runs from the root of the folder the card works in, so never cd to another folder, and give a card in another folder its own check there). Do not choose agents or models.',
+    'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 questions you need the person to answer before you can draft, usually empty; each an object with question, the short question, and options, 2 to 4 short answers the person can choose from, the one you recommend first) and steps (an array of cards, in order). When questions has any, return steps [] (and no remove) and say in summary what you’ll draft once they answer: you draft after their answers, so no cards are drafted and thrown away. Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (at most 12 folders or files it expects to change, as paths relative to the project; name a folder rather than many files inside it), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards it needs, starting at 1), phase (a short phase name, only when the plan has phases), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings", "design") and optional check (a command that tests the card, only when the project has one; it runs from the root of the folder the card works in, so never cd to another folder, and give a card in another folder its own check there). Do not choose agents or models.',
     ...(folders$ ? [folders$] : []),
     ...(revising ? ['When changing the attached Plan, a step may also have card (the Id of the card it changes; then only the fields that change are needed) and merges (Ids of cards folded into it), dependsOn may include Ids, and the object may have remove (Ids of cards to remove). steps may be empty when the request only removes cards.'] : []),
     '',
@@ -139,7 +149,7 @@ function checkRevision(raw, index, earlier, options) {
   if (given('role')) { out.role = raw.role ? String(raw.role).trim().toLowerCase() : 'builder'; if (!SPECIALIST_ROLES.includes(out.role)) fail(`Choose builder, reviewer, frontend, backend, database, design or qa as step ${number}'s role.`); }
   if (given('artifact')) {
     out.artifact = raw.artifact === null || raw.artifact === '' ? null : String(raw.artifact).trim().toLowerCase();
-    if (out.artifact !== null && !ARTIFACT_KINDS.includes(out.artifact)) fail(`Choose contract, schema, diff, test_evidence or findings as step ${number}'s artifact.`);
+    if (out.artifact !== null && !ARTIFACT_KINDS.includes(out.artifact)) fail(`Choose contract, schema, diff, test_evidence, findings or design as step ${number}'s artifact.`);
   }
   if (given('check')) {
     out.check = raw.check === null || raw.check === '' ? null : text(raw.check, 300);
@@ -182,7 +192,7 @@ function checkStep(raw, index, earlier, options) {
   let artifact = null;
   if (raw.artifact !== null && raw.artifact !== undefined && raw.artifact !== '') {
     const art = String(raw.artifact).trim().toLowerCase();
-    if (!ARTIFACT_KINDS.includes(art)) fail(`Choose contract, schema, diff, test_evidence or findings as step ${index + 1}'s artifact.`);
+    if (!ARTIFACT_KINDS.includes(art)) fail(`Choose contract, schema, diff, test_evidence, findings or design as step ${index + 1}'s artifact.`);
     artifact = art;
   }
   let check = null;
@@ -239,6 +249,10 @@ export function validateWorkflowOrder(steps) {
         if (other.artifact === 'schema' && ['database', 'backend'].includes(step.role) && !ancestors.has(other.id)) {
           fail(`Step ${step.id} (${step.role}) must depend on schema step ${other.id}. Schema changes must run before dependent database and backend implementation.`);
         }
+        // A design that comes after the frontend step, such as a design review of it, doesn't hold it.
+        if (other.artifact === 'design' && step.role === 'frontend' && !ancestors.has(other.id) && !ancestorsOf(other.id).has(step.id)) {
+          fail(`Step ${step.id} (frontend) must depend on design step ${other.id}. A design is settled before the frontend builds it.`);
+        }
       }
     }
   }
@@ -278,7 +292,7 @@ export function reviewDraft(steps) {
       if (built.length) note(step.id, `This ${step.artifact} comes after building work (${built.map(other => `card ${number.get(other.id)}`).join(', ')}). Contracts should come before the cards that use them.`);
     }
     if (SPECIALIST_BUILDS.includes(step.role) && !CONTRACTS.includes(step.artifact)) {
-      const missing = steps.filter(other => other.id !== step.id && (other.phase || null) === (step.phase || null) && !ancestors.has(other.id) && !before(other.id).has(step.id) && (other.artifact === 'contract' || (other.artifact === 'schema' && ['database', 'backend'].includes(step.role))));
+      const missing = steps.filter(other => other.id !== step.id && (other.phase || null) === (step.phase || null) && !ancestors.has(other.id) && !before(other.id).has(step.id) && (other.artifact === 'contract' || (other.artifact === 'schema' && ['database', 'backend'].includes(step.role)) || (other.artifact === 'design' && step.role === 'frontend')));
       if (missing.length) note(step.id, `It doesn’t wait for ${missing.map(other => `card ${number.get(other.id)}`).join(' and ')}, which defines the ${missing[0].artifact}. Have it depend on that card so the ${missing[0].artifact} runs first.`);
     }
     if (step.moreFiles) note(step.id, `The planner listed ${step.moreFiles} more ${step.moreFiles === 1 ? 'file' : 'files'} than a card holds, so only the first ${planLimits.files} are kept. Add any it needs to its instructions.`);
@@ -341,7 +355,7 @@ export function stepBrief(plan, step, { artifacts = {}, sourceRevision = null } 
   };
 }
 
-const ARTIFACT_NAMES = { contract: 'contract', schema: 'schema or migration plan', diff: 'changes', test_evidence: 'test evidence', findings: 'findings' };
+const ARTIFACT_NAMES = { contract: 'contract', schema: 'schema or migration plan', diff: 'changes', test_evidence: 'test evidence', findings: 'findings', design: 'design notes' };
 const clipped = (value, limit) => { const flat = String(value || '').trim(); return flat.length > limit ? `${flat.slice(0, limit - 1).trimEnd()}…` : flat; };
 // What Codeshi recorded about an earlier step, for the step that builds on it: where its work is, its tests and its report.
 export function upstreamLines(step, result) {
@@ -375,6 +389,7 @@ export function stepPrompt(plan, step, number, results = {}) {
     '', `Step ${number}: ${step.title}${brief.role !== 'builder' ? ` (${brief.role})` : ''}`, step.instructions,
     ...(step.files.length ? ['', `Files or folders it expects to change: ${step.files.join(', ')}`] : []),
     ...(step.check ? ['', `Acceptance check: ${step.check}`] : []),
+    ...(brief.role === 'design' ? ['', DESIGN_ROLE_NOTE] : []),
     ...(brief.upstreamArtifacts.filter(item => !results[item.stepId]?.summary).length ? ['', 'From the steps before it:', ...brief.upstreamArtifacts.filter(item => !results[item.stepId]?.summary).map(item => `- Step ${position.get(item.stepId)} (${item.kind}): ${String(item.content).slice(0, 2000)}`)] : []),
   ].join('\n');
 }
@@ -384,7 +399,7 @@ export function recordArtifact(plan, { stepId, kind, content, revision, role = n
   if (!plan) fail('No plan provided.', 400);
   const step = (plan.steps || []).find(s => s.id === stepId);
   if (!step) fail(`Step ${stepId} is not in this plan.`, 404);
-  if (!ARTIFACT_KINDS.includes(kind)) fail('Choose contract, schema, diff, test_evidence or findings as artifact kind.', 400);
+  if (!ARTIFACT_KINDS.includes(kind)) fail('Choose contract, schema, diff, test_evidence, findings or design as artifact kind.', 400);
   if (revision === null || revision === undefined) fail('A source revision is required for structured artifacts.', 400);
 
   plan.artifacts ||= {};
@@ -665,7 +680,7 @@ export function orchestrationAction(broker, c, input = {}) {
   if (input.action === 'artifact') {
     const step = (plan.steps || []).find(s => s.id === input.stepId);
     if (!step) fail('Choose a step from this plan.', 400);
-    if (!ARTIFACT_KINDS.includes(input.kind)) fail('Choose contract, schema, diff, test_evidence or findings as artifact kind.', 400);
+    if (!ARTIFACT_KINDS.includes(input.kind)) fail('Choose contract, schema, diff, test_evidence, findings or design as artifact kind.', 400);
     broker.record(c, { type: 'orchestration_artifact', id: plan.id, stepId: input.stepId, kind: input.kind, content: input.content || '', revision: input.revision ?? plan.revision, role: input.role || step.role || null });
     return broker.view(c);
   }

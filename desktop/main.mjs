@@ -1,4 +1,5 @@
-import {app,BaseWindow,BrowserWindow,Menu,Notification,Tray,WebContentsView,contentTracing,dialog,ipcMain,nativeImage,nativeTheme,powerMonitor,screen,session,shell,powerSaveBlocker} from 'electron';
+import {app,BaseWindow,BrowserWindow,Menu,Notification,Tray,WebContentsView,contentTracing,dialog,ipcMain,nativeImage,nativeTheme,powerMonitor,safeStorage,screen,session,shell,powerSaveBlocker} from 'electron';
+import {encryptedVault} from '../src/github-signin.mjs';
 import path from 'node:path';
 import fs from 'node:fs';
 import {fileURLToPath} from 'node:url';
@@ -173,7 +174,9 @@ else {
         systemLanguages:()=>app.getPreferredSystemLanguages?.()||[app.getLocale()],onLanguage:()=>{text=relay.getText();updateMenu();scheduleStatus();},
         onOpenWindow:target=>openTarget(target?.projectId?target:null),
         // The codeshi tab in the window (#90) runs the command inside this app against this engine.
-        cliConnection:smoke?null:connectionFile(app.getPath('userData'))});
+        cliConnection:smoke?null:connectionFile(app.getPath('userData')),
+        // Sign in with GitHub (#159) keeps its token encrypted by the system keychain, never in the data folder as plain text.
+        githubVault:encryptedVault({file:path.join(data,'github-sign-in.bin'),safeStorage}), });
       text=relay.getText();
       appearance.set(relay.getAppearancePreference());
       keepAwake=createKeepAwake({registry:relay.registry,blocker:powerSaveBlocker,enabled:relay.getKeepAwakePreference(),save:relay.setKeepAwakePreference,onChange:state=>{awake=state.enabled;safeSend(win,'relay:keep-awake-changed',state);updateMenu();scheduleStatus();}});
@@ -310,7 +313,7 @@ else {
     const previewPicks=[];
     preview=createPreview({BaseWindow,WebContentsView,session,ipcMain,shell,screen,root,background:()=>appearance.background(),
       folders:id=>{try{return id?relay.registry.get(id).folders.map(folder=>({name:folder.displayName||folder.name,path:folder.path})):[];}catch{return [];}},
-      onPick:pick=>{for(const resolve of previewPicks.splice(0))resolve(pick);if(!win||win.isDestroyed())return;if(pick.focus){if(win.isMinimized())win.restore();win.show();win.focus();win.webContents.send('relay:menu-command','focus-message');return;}win.webContents.send('relay:preview-pick',{projectId:pick.projectId,text:pick.text,image:pick.image,...(pick.design?{design:true,images:pick.images}:{})});}});
+      onPick:pick=>{for(const resolve of previewPicks.splice(0))resolve(pick);if(!win||win.isDestroyed())return;if(pick.focus){if(win.isMinimized())win.restore();win.show();win.focus();if(pick.sketch)win.webContents.send('relay:preview-pick',{projectId:pick.projectId,sketch:true});else win.webContents.send('relay:menu-command','focus-message');return;}win.webContents.send('relay:preview-pick',{projectId:pick.projectId,text:pick.text,image:pick.image,...(pick.design?{design:true,images:pick.images,...(pick.card?{card:pick.card}:{})}:{})});}});
     const previewStack=id=>{
       try{
         const review=relay.projectReview?.state(id);

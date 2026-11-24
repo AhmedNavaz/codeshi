@@ -5,9 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { fixtures, fixtureById } from './fixtures.mjs';
 import { compareResults, parsePolicy, reportMarkdown, runFixture } from './harness.mjs';
 import { validatePin } from './experiment.mjs';
+import { readRealChat } from './real-chat.mjs';
 import { COMPARISON_PRESETS, measuredComparisons, measuredMarkdown } from './compare.mjs';
 
 // npm run eval -- run --agent claude:haiku --context task,recency --live --max-runs 12
+// npm run eval -- run --real output/evals/real-chat.json --agent claude:haiku --context task,recency --live --max-runs 8 [--replies output/evals/replies.jsonl]
 // npm run eval -- report | compare [--preset routing|team] | list | delete <file or all>
 const resultsDir = process.env.CODESHI_EVAL_RESULTS || path.join(path.dirname(fileURLToPath(import.meta.url)), 'results');
 const [command = 'run', ...rest] = process.argv.slice(2), options = { _: [] };
@@ -28,7 +30,11 @@ if (command === 'run') {
       if (!fixtureById(pin.fixture)) throw new Error(`No fixture named ${pin.fixture}. Restore the fixture version used by this result.`);
     } catch (error) { console.error(error.message); process.exit(2); }
   }
-  const live = options.live === true, chosen = pin ? [fixtureById(pin.fixture)] : options.fixture ? String(options.fixture).split(',').map(id => fixtureById(id) || (() => { throw new Error(`No fixture named ${id}. There are: ${fixtures.map(item => item.id).join(', ')}`); })()) : fixtures;
+  // --real continues a person's own conversation from a private setup file (evals/real-chat.mjs) instead of a fixture.
+  if (options.real !== undefined && (typeof options.real !== 'string' || pin || options.fixture)) { console.error(pin ? 'A real conversation cannot be repeated from a pin: give --real its setup file again.' : 'Give --real the setup file of a real conversation, without --fixture.'); process.exit(2); }
+  let real = null;
+  if (options.real) { try { real = readRealChat(options.real); } catch (error) { console.error(error.message); process.exit(2); } }
+  const live = options.live === true, chosen = real ? [real] : pin ? [fixtureById(pin.fixture)] : options.fixture ?String(options.fixture).split(',').map(id => fixtureById(id) || (() => { throw new Error(`No fixture named ${id}. There are: ${fixtures.map(item => item.id).join(', ')}`); })()) : fixtures;
   if (live && !(typeof options['max-runs'] === 'string' && Number.isSafeInteger(Number(options['max-runs'])) && Number(options['max-runs']) > 0)) { console.error('A live evaluation runs on your own accounts. State a budget with --max-runs as a positive, finite integer, and optionally --max-tokens.'); process.exit(2); }
   if (options['max-tokens'] !== undefined && !(typeof options['max-tokens'] === 'string' && Number.isSafeInteger(Number(options['max-tokens'])) && Number(options['max-tokens']) > 0)) { console.error('--max-tokens must be a positive, finite integer.'); process.exit(2); }
   if (options.repeat !== undefined && !(typeof options.repeat === 'string' && Number.isSafeInteger(Number(options.repeat)) && Number(options.repeat) > 0)) { console.error('--repeat must be a positive, finite integer.'); process.exit(2); }
@@ -36,7 +42,7 @@ if (command === 'run') {
   fs.mkdirSync(resultsDir, { recursive: true, mode: 0o700 });
   for (const context of String(pin?.policy.context || options.context || 'task').split(',')) for (const threads of String(pin?.policy.threads || options.threads || 'continuous').split(',')) for (const fixture of chosen) for (let index = 0; index < repeat; index++) {
     const policy = pin?.policy || parsePolicy({ agent: options.agent || 'codex', to: options.to || null, context, threads, contextLimit: options['context-limit'] === undefined ? 'off' : ['off', 'auto'].includes(options['context-limit']) ? options['context-limit'] : Number(options['context-limit']), skills: options['no-skills'] !== true, skill: options.skill || null, limits: options.limits ? JSON.parse(options.limits) : null });
-    const result = await runFixture(fixture, policy, { live, budget, pin, ...(pin ? { runLimitMs: pin.experiment.inputs.runLimitMs } : {}) });
+    const result = await runFixture(fixture, policy, { live, budget, pin, ...(typeof options.replies === 'string' ? { repliesFile: path.resolve(options.replies) } : {}), ...(pin ? { runLimitMs: pin.experiment.inputs.runLimitMs } : {}) });
     const name = `${new Date().toISOString().replace(/[:.]/g, '-')}-${fixture.id}-${context}-${index}.json`;
     fs.writeFileSync(path.join(resultsDir, name), JSON.stringify(result, null, 2), { mode: 0o600 });
     results.push(result);

@@ -15,9 +15,10 @@ import { createVoiceRoutes } from './voice.mjs';
 import { buildRecap } from './recap.mjs';
 import { createWorkspaceRoutes } from './workspace-routes.mjs';
 import { createGitHubRepoRoutes } from './github-repos.mjs';
+import { createGitHubSignIn } from './github-signin.mjs';
 import { createBackupRoutes } from './backup.mjs';
 import { createMoveRoutes } from './move.mjs';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { createConversationRoutes } from './conversation-routes.mjs';
 import { createReviewRoutes } from './agent-review-routes.mjs';
 import { createCheckpointRoutes } from './checkpoint-routes.mjs';
@@ -26,6 +27,7 @@ import { createLocalRoutes } from './local-models.mjs';
 import { createTaskRoutes } from './task-routes.mjs';
 import { createBoardRoutes } from './board-routes.mjs';
 import { createWatchAlong, watchView } from './watch-along.mjs';
+import { currentWorkspace } from './workspace-layout.mjs';
 import { atomicJSON } from './patches.mjs';
 import { appearance, appearances, preferencePatch, publicPreferences } from './preferences.mjs';
 import { verificationCadence } from './verification.mjs';
@@ -42,7 +44,7 @@ import { activityPatch, createActivity, noteActivity } from './activity.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const assets = { '/project-commands.js': ['project-commands.js', 'text/javascript; charset=utf-8'], '/project-commands.css': ['project-commands.css', 'text/css; charset=utf-8'], '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/desktop-controls.js': ['desktop-controls.js', 'text/javascript; charset=utf-8'], '/setup.js': ['setup.js', 'text/javascript; charset=utf-8'], '/polish.css': ['polish.css', 'text/css; charset=utf-8'], '/files.js': ['files.js', 'text/javascript; charset=utf-8'], '/files.css': ['files.css', 'text/css; charset=utf-8'], '/onboarding.css': ['onboarding.css', 'text/css; charset=utf-8'],
   '/brief-panel.js': ['brief-panel.js', 'text/javascript; charset=utf-8'], '/tasks-panel.js': ['tasks-panel.js', 'text/javascript; charset=utf-8'], '/smart-results.js': ['smart-results.js', 'text/javascript; charset=utf-8'], '/skills.js': ['skills.js', 'text/javascript; charset=utf-8'], '/memory.js': ['memory.js', 'text/javascript; charset=utf-8'], '/model-picker.js': ['model-picker.js', 'text/javascript; charset=utf-8'], '/routing.js': ['routing.js', 'text/javascript; charset=utf-8'], '/layout.js': ['layout.js', 'text/javascript; charset=utf-8'], '/agents-panel.js': ['agents-panel.js', 'text/javascript; charset=utf-8'], '/model-picker.css': ['model-picker.css', 'text/css; charset=utf-8'],
-  '/bottom-panel.js': ['bottom-panel.js', 'text/javascript; charset=utf-8'], '/preview.js': ['preview.js', 'text/javascript; charset=utf-8'], '/terminal.js': ['terminal.js', 'text/javascript; charset=utf-8'], '/terminal.css': ['terminal.css', 'text/css; charset=utf-8'], '/cli-tab.js': ['cli-tab.js', 'text/javascript; charset=utf-8'], '/cli-tab.css': ['cli-tab.css', 'text/css; charset=utf-8'],
+  '/bottom-panel.js': ['bottom-panel.js', 'text/javascript; charset=utf-8'], '/preview.js': ['preview.js', 'text/javascript; charset=utf-8'], '/sketch-logic.js': ['sketch-logic.js', 'text/javascript; charset=utf-8'], '/sketch.js': ['sketch.js', 'text/javascript; charset=utf-8'], '/sketch.css': ['sketch.css', 'text/css; charset=utf-8'], '/terminal.js': ['terminal.js', 'text/javascript; charset=utf-8'], '/terminal.css': ['terminal.css', 'text/css; charset=utf-8'], '/cli-tab.js': ['cli-tab.js', 'text/javascript; charset=utf-8'], '/cli-tab.css': ['cli-tab.css', 'text/css; charset=utf-8'],
   '/suggestions.js': ['suggestions.js', 'text/javascript; charset=utf-8'], '/keyboard.js': ['keyboard.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/voice.js': ['voice.js', 'text/javascript; charset=utf-8'], '/voice.css': ['voice.css', 'text/css; charset=utf-8'],
   '/parallel-tasks.js': ['parallel-tasks.js', 'text/javascript; charset=utf-8'], '/parallel-tasks.css': ['parallel-tasks.css', 'text/css; charset=utf-8'], '/recap.js': ['recap.js', 'text/javascript; charset=utf-8'], '/recap.css': ['recap.css', 'text/css; charset=utf-8'],
   // The terminal renderer, served from the installed package so packaged builds work offline.
@@ -88,7 +90,7 @@ async function body(req, limit = 3 * 1024 * 1024) {
   } catch { throw Object.assign(new Error('Invalid JSON request.'), { status: 400 }); }
 }
 
-export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDir, bins, lock = true, sharingURL = process.env.AI_RELAY_SHARING_URL, accessToken, importer, onAppearance = () => {}, onNotify = () => {}, onHandoff = () => {}, onNotifications = () => {}, onLanguage = () => {}, onOpenWindow = null, cliConnection = null, systemLanguages = null, localesDir = defaultLocales, voice, phoneOptions } = {}) {
+export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDir, bins, lock = true, sharingURL = process.env.AI_RELAY_SHARING_URL, accessToken, importer, onAppearance = () => {}, onNotify = () => {}, onHandoff = () => {}, onNotifications = () => {}, onLanguage = () => {}, onOpenWindow = null, cliConnection = null, systemLanguages = null, localesDir = defaultLocales, voice, phoneOptions, githubVault = null } = {}) {
   // A data folder with no workspaces and no settings yet is a new installation.
   const dataFolder = path.resolve(dataRoot || dataDir || path.join(root, '.data')), fresh = !fs.existsSync(path.join(dataFolder, 'projects.json')) && !fs.existsSync(path.join(dataFolder, 'settings.json'));
   const registry = new ProjectRegistry({ dataRoot: dataRoot || dataDir || path.join(root, '.data'), bins, lock });
@@ -118,7 +120,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   let sharing=(sharingURL||config.sharingURL)?new SharingClient({baseUrl:sharingURL||config.sharingURL,storePath:path.join(registry.dataRoot,'sharing-client.json'),createKey:process.env.AI_RELAY_SHARING_CREATE_KEY}):null;
   const configureSharing=input=>{const baseUrl=validateSharingURL(input.baseUrl);sharing=new SharingClient({baseUrl,storePath:path.join(registry.dataRoot,'sharing-client.json'),createKey:process.env.AI_RELAY_SHARING_CREATE_KEY});saveSettings({sharingURL:baseUrl});return {baseUrl};};
   const workspaceRoutes = createWorkspaceRoutes({ registry, body, json });
-  const githubRepoRoutes = createGitHubRepoRoutes({ registry, body, json, settings: () => config, saveSettings });
+  const githubRepoRoutes = createGitHubRepoRoutes({ registry, body, json, settings: () => config, saveSettings, signin: createGitHubSignIn({ vault: githubVault }) });
   // A backup's settings (#160) go through the same checks as the ones changed in Settings; any that don't pass are left.
   const applyBackupSettings = incoming => {
     const applied = [], listed = languages(localesDir).map(item => item.id), patch = {};
@@ -263,7 +265,10 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         if (req.phoneClient) return json(res, 403, { error: 'Manage watch-along on the computer.' });
         const projectId = url.searchParams.get('projectId') || null;
         if (req.method === 'GET') return json(res, 200, watchAlong.status(projectId));
-        if (req.method === 'POST') return json(res, 200, await watchAlong.manage({ ...await body(req, 16 * 1024), projectId }));
+        if (req.method === 'POST') {
+          const input = await body(req, 64 * 1024);
+          return json(res, 200, await watchAlong.manage({ ...input, ...(projectId ? { projectId } : {}) }));
+        }
         return json(res, 405, { error: 'Use GET or POST for watch-along.' });
       }
       if (url.pathname === '/api/phone') {
@@ -486,6 +491,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   const phoneAccess = createPhoneAccess({ ...phoneOptions, ...phoneBridge, remote: remotePhone });
   const watchAlong = createWatchAlong({ config: remotePhoneConfig, storeFile: path.join(registry.dataRoot, 'watch-along.json'),
     readConversation: projectId => watchView(registry.mainConversation(projectId, { limit: 600 })),
+    workspaceFor: projectId => currentWorkspace(registry, projectId),
     // A teammate's message joins this workspace's queue like one of yours, with the conversation's current agent, model,
     // effort and access, and always with Ask for permission. Flow doesn't route it: you see which agent will run it.
     sendMessage: (projectId, { text, author, billingConfirmed = false }) => {
@@ -493,6 +499,87 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       if (!c) throw Object.assign(Error('This workspace has no conversation yet.'), { status: 409 });
       const model = c.model || null;
       broker.queueAction(c, { action: 'add', text, provider: c.provider, model, effort: c.efforts?.[c.provider]?.[model || 'default'] ?? null, mode: c.mode, approvalPolicy: 'ask', billingConfirmed: billingConfirmed === true, executionRevision: broker.execution.defaults(c).revision }, { author });
+    },
+    // A turn a teammate ran on their own computer and account joins this workspace's shared conversation under their name.
+    recordTurn: (projectId, { prompt, reply, provider, model, author }) => {
+      const broker = registry.broker(projectId), c = broker.get(registry.mainConversationId(projectId));
+      if (!c) throw Object.assign(Error('This workspace has no conversation yet.'), { status: 409 });
+      const createdAt = new Date().toISOString();
+      broker.record(c, {
+        type: 'message',
+        message: { id: randomUUID(), role: 'user', text: prompt, provider: provider || c.provider, model: model || null, author, createdAt },
+      });
+      if (reply) {
+        broker.record(c, {
+          type: 'message',
+          message: { id: randomUUID(), role: 'assistant', text: reply, provider: provider || c.provider, model: model || null, status: 'complete', author, createdAt: new Date().toISOString() },
+        });
+      }
+    },
+    notePatch: (projectId, text) => {
+      const broker = registry.broker(projectId), c = broker.get(registry.mainConversationId(projectId));
+      if (c) broker.message(c, 'system', text);
+    },
+    // Running on the viewer's own computer and subscription, in their deliberately chosen local workspace copy.
+    runLocal: async ({ projectId, prompt, provider, model, view, onStep, registerCancel }) => {
+      const targetId = projectId && registry.list().some(p => p.id === projectId) ? projectId : registry.list()[0]?.id;
+      if (!targetId) throw Object.assign(Error('Open a local workspace first so your agent has a copy of the project to work in.'), { status: 409 });
+      const broker = registry.broker(targetId);
+      const c = broker.get(registry.mainConversationId(targetId)) || broker.create();
+      if (Array.isArray(view?.messages)) {
+        for (const msg of view.messages.slice(-20)) {
+          if (!msg?.id || !['user', 'assistant'].includes(msg.role) || !msg.text) continue;
+          const importedId = `watch-${msg.id}`;
+          if (c.messages.some(existing => existing.id === importedId || (existing.role === msg.role && existing.text === msg.text))) continue;
+          broker.record(c, {
+            type: 'message',
+            message: {
+              id: importedId,
+              role: msg.role,
+              text: msg.text,
+              ...(msg.provider ? { provider: msg.provider } : {}),
+              ...(msg.author ? { author: msg.author } : {}),
+              imported: true,
+              createdAt: msg.createdAt || new Date().toISOString(),
+            },
+          });
+        }
+      }
+      const chosenProvider = provider || c.provider || 'claude';
+      const chosenModel = model !== undefined ? model : (chosenProvider === c.provider ? c.model : c.models?.[chosenProvider] || null);
+      const { runId } = broker.start(c, {
+        text: prompt,
+        provider: chosenProvider,
+        model: chosenModel,
+        mode: c.mode || 'edit',
+        approvalPolicy: c.approvalPolicy || 'ask',
+        executionRevision: broker.execution.defaults(c).revision,
+      });
+      const activeRun = broker.running;
+      registerCancel?.(() => { if (broker.running?.id === runId) broker.stop(c.id); });
+      let lastStepId = null;
+      const onUpdate = ({ conversationId } = {}) => {
+        if (conversationId && conversationId !== c.id) return;
+        const stepMsg = c.messages.findLast(m => m.runId === runId && m.role === 'activity' && m.text);
+        if (stepMsg && stepMsg.id !== lastStepId) {
+          lastStepId = stepMsg.id;
+          onStep?.(stepMsg.text);
+        }
+      };
+      broker.on('update', onUpdate);
+      try {
+        const result = activeRun?.done ? await activeRun.done : { success: true };
+        const replies = c.messages.filter(m => m.runId === runId && m.role === 'assistant' && m.text).map(m => m.text.trim()).filter(Boolean);
+        const reply = replies.join('\n\n');
+        if (activeRun?.stopped) return { status: 'stopped', provider: chosenProvider, model: chosenModel, reply };
+        if (!result?.success && !reply) {
+          const errMsg = c.messages.findLast(m => m.runId === runId && m.role === 'error')?.text || result?.error || 'The local run did not complete.';
+          return { status: 'failed', provider: chosenProvider, model: chosenModel, reply: '', error: errMsg };
+        }
+        return { status: 'complete', provider: chosenProvider, model: chosenModel, reply };
+      } finally {
+        broker.off('update', onUpdate);
+      }
     },
     workspaceName: projectId => registry.get(projectId).name,
     defaultName: (() => { const name = os.userInfo().username || 'Teammate'; return name.charAt(0).toUpperCase() + name.slice(1); })(),

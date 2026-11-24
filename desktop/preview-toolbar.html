@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-JP/7lNfzlm6Ztx1LmVMLAx4BJeksJSeTJeyDD0AgvcE='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-rfKg6d1dESXHM6iuRj4oKMcx47FnGDhJDJgkEa+Xt0A='">
 <title>Preview toolbar</title>
 <style>
   /* Codeshi's Paper and Ink colours, as in public/editor-theme.css. */
@@ -108,6 +108,10 @@
   .design-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   #design-send { height: 28px; padding: 0 12px; border-radius: 6px; background: var(--accent); color: var(--on-accent); font-weight: 500; }
   #design-send:hover:enabled { background: var(--accent-strong); color: var(--on-accent); }
+  .design-send-group { display: flex; align-items: center; gap: 6px; }
+  #design-plan { height: 28px; padding: 0 10px; border-radius: 6px; font-size: 12px; }
+  .text-btn { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+  .text-btn:hover { color: var(--accent-strong); }
   #design-panel .drawer-body { padding: 0; }
 </style>
 </head>
@@ -137,14 +141,17 @@
         <span id="design-hint" role="status" aria-live="polite">Click a part of the page, or drag a box around an area.</span>
       </div>
       <div class="drawer-body">
-        <p id="design-empty">Mark each section you want changed, then write what it should do or look like. Everything goes into your message as one, with a screenshot numbered to match.</p>
+        <p id="design-empty">Mark each section you want changed, then write what it should do or look like. Everything goes into your message as one, or onto the Plan as a card, with a screenshot numbered to match. <button id="design-sketch" class="text-btn" type="button">Sketch a page that doesn’t exist yet</button></p>
         <div id="design-list" role="list" aria-label="Sections"></div>
       </div>
       <div class="design-foot">
         <textarea id="design-overall" aria-label="About the whole page" placeholder="About the whole page (optional)" spellcheck="true"></textarea>
         <div class="design-actions">
           <button id="design-clear" class="drawer-btn" type="button" disabled>Clear</button>
-          <button id="design-send" type="button" disabled title="Put the notes in your message (⌘Enter)">Add to message</button>
+          <span class="design-send-group">
+            <button id="design-plan" class="drawer-btn" type="button" disabled title="Put the notes on the Plan as a card, with the screenshots attached, to run later or with other cards">Add to Plan</button>
+            <button id="design-send" type="button" disabled title="Put the notes in your message (⌘Enter)">Add to message</button>
+          </span>
         </div>
       </div>
     </div>
@@ -329,11 +336,16 @@
     if ($('design-hint').textContent !== hint) $('design-hint').textContent = hint;
     $('design-clear').disabled = !count || design.busy;
     $('design-send').disabled = !count || design.busy;
-    $('design-send').textContent = design.busy ? 'Adding…' : 'Add to message';
+    $('design-plan').disabled = !count || design.busy;
+    $('design-send').textContent = design.busy && sendingTo !== 'plan' ? 'Adding…' : 'Add to message';
+    $('design-plan').textContent = design.busy && sendingTo === 'plan' ? 'Adding…' : 'Add to Plan';
   }
-  function sendDesign() {
+  // The notes go into the message box, or onto the Plan as a card with their screenshots attached (#125).
+  let sendingTo = null;
+  function sendDesign(to = 'message') {
     if (!design.sections.length || design.busy) return;
-    bridge.act('design-send', { notes: Object.fromEntries(notes), overall: $('design-overall').value });
+    sendingTo = to;
+    bridge.act('design-send', { notes: Object.fromEntries(notes), overall: $('design-overall').value, to });
   }
 
   function formatBody(raw) {
@@ -453,7 +465,7 @@
     const count = Number(value?.count) || 0;
     status('', count ? 'Your unsent design notes are back: ' + (count === 1 ? '1 section' : count + ' sections') : 'Your unsent design note is back');
   });
-  bridge.onDesignAdded?.(value => { $('design-overall').value = ''; status('picked', (value?.count === 1 ? '1 section' : (value?.count || 0) + ' sections') + ' added to your message', true); });
+  bridge.onDesignAdded?.(value => { $('design-overall').value = ''; sendingTo = null; status('picked', (value?.count === 1 ? '1 section' : (value?.count || 0) + ' sections') + (value?.to === 'plan' ? ' going onto the Plan as a card' : ' added to your message'), true); });
   bridge.onError(message => status('error', message));
 
   bridge.onStack?.(stack => {
@@ -493,7 +505,10 @@
   $('design-mark')?.addEventListener?.('click', () => bridge.act('design', { open: true, marking: !design.marking }));
   $('design-clear')?.addEventListener?.('click', () => { notes.clear(); $('design-overall').value = ''; bridge.act('design-clear'); });
   $('design-overall')?.addEventListener?.('input', keepNotes);
-  $('design-send')?.addEventListener?.('click', sendDesign);
+  $('design-send')?.addEventListener?.('click', () => sendDesign('message'));
+  $('design-plan')?.addEventListener?.('click', () => sendDesign('plan'));
+  // A page that doesn't exist yet is sketched in Codeshi's window (#125).
+  $('design-sketch')?.addEventListener?.('click', () => bridge.act('sketch'));
   $('design-panel')?.addEventListener?.('keydown', event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); sendDesign(); } });
   bridge.onToggleInspector?.(() => setDrawer(activeDrawer ? null : lastDrawer));
   const shortcut = /Mac/.test(window.navigator?.platform || '') ? '⇧⌘I' : 'Ctrl+Shift+I';

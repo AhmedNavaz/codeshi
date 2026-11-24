@@ -135,7 +135,7 @@ export class HandoffMonitor {
       if (models.length ? !allowedModels.length : !allowed(null)) continue;
       const usualSpend = usualWindowSpend(c, provider);
       const activeTasks = this.activeTasksOn(provider, run.id);
-      const nativeSkills = provider === 'claude' && !this.broker.configuredBins?.claude && (provider === c.provider ? c.transport || 'auto' : c.transports?.claude || 'auto') !== 'cli';
+      const nativeSkills = this.broker.nativeSkillsFor?.(c, provider) ?? false;
       const unsupportedSkills = this.broker.skills?.unsupportedFor?.(c, provider, { native: nativeSkills }) || [];
       candidates.push({ provider, models, billingSource: account.billingSource, usage, eligible: true, images: this.broker.imageConnection?.(c, provider, account), ...(models.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}), ...(activeTasks ? { activeTasks } : {}), ...(outcomes ? { outcomes } : {}), ...(unsupportedSkills.length ? { unsupportedSkills } : {}) });
     }

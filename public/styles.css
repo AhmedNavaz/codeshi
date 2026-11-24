@@ -205,6 +205,9 @@ summary::-webkit-details-marker { display: none; }
 #pick-folder, #pick-add-folder { margin-right: auto; }
 .project-error { margin: 10px 0 0; color: var(--danger); font-size: 12px; line-height: 1.5; }
 #github-repos-error { white-space: pre-line; }
+.github-signin { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; font-size: 12px; color: var(--text); }
+.github-signin-text { margin: 0; white-space: pre-line; }
+.github-signin-actions { display: flex; gap: 8px; }
 /* New workspace's two sources: folders on this computer, or one of your GitHub repositories (#159). */
 .project-source { display: flex; gap: 2px; margin: -4px 0 12px; border-bottom: 1px solid var(--border); }
 .project-source-tab { margin-bottom: -1px; padding: 5px 10px 6px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: 500 12px var(--font); cursor: pointer; }

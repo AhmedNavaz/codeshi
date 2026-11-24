@@ -4,7 +4,9 @@ import { isAntigravityACP, googleMetadata, connectGoogle, disconnectGoogle, clos
 import { geminiSetup, isAgy, agyUnsupported } from './gemini.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import { probeCli } from './cli-probe.mjs';
 import { resolveBinary, withBinaryPath } from './resolve-binary.mjs';
 import { localEndpoint, verifyLocalModel } from './local-models.mjs';
@@ -108,6 +110,25 @@ export class CodexClient extends EventEmitter {
   }
   async initialize() { await this.request('initialize', { clientInfo: { name: 'ai_relay', title: 'Codeshi', version: '0.2.0' } }); this.send({ method: 'initialized', params: {} }); }
   close() { if (!this.closed) { this.child.stdin.end(); this.child.kill('SIGTERM'); } }
+}
+
+// The skills a Codex thread has (#86): only the ones enabled in Codeshi. Their copy is added as a skill folder of this
+// app-server, and every other skill Codex finds (the repository's, the person's own, a plugin's, its built-in ones) is turned
+// off for this thread through its config, never by writing the person's Codex settings. Returns the thread config and
+// whether the copy was added. A Codex without these requests keeps its own skills, as before.
+export async function codexSkillScope(client, config) {
+  const folder = config.skills.folder || null;
+  let own = null;
+  if (folder) {
+    try { await client.request('skills/extraRoots/set', { extraRoots: [folder] }, 5000); own = fs.realpathSync(folder); }
+    catch { /* An older Codex: the skills are named in the prompt instead. */ }
+  }
+  let found;
+  try { found = (await client.request('skills/list', { cwds: [...new Set([config.workspace, ...(config.workspaces || [])])], forceReload: true }, 10000)).data.flatMap(entry => entry.skills || []); }
+  catch { return { config: {}, added: Boolean(own) }; }
+  const ours = file => { if (!own) return false; const relative = path.relative(own, file); return Boolean(relative) && !relative.startsWith('..') && !path.isAbsolute(relative); };
+  const off = [...new Set(found.map(skill => skill.path).filter(file => typeof file === 'string' && !ours(file)))].map(file => ({ path: file, enabled: false }));
+  return { config: { 'skills.bundled.enabled': false, ...(off.length ? { 'skills.config': off } : {}) }, added: Boolean(own) };
 }
 
 export async function runCodex(config, { event, approval, question = null, metadata, cancelled = () => false, steerable = () => {}, clientFactory = options => new CodexClient(options), verifyLocal = verifyLocalModel }) {
@@ -215,6 +236,13 @@ export async function runCodex(config, { event, approval, question = null, metad
     const approvalPolicy = config.mode === 'read' ? 'never' : config.approvalPolicy === 'auto' ? 'on-request' : 'untrusted';
     const options = { cwd: config.workspace, approvalPolicy, approvalsReviewer: 'user', sandbox: config.mode === 'read' ? 'read-only' : 'workspace-write', config: { 'sandbox_workspace_write.writable_roots': config.mode === 'read' ? [] : roots, 'sandbox_workspace_write.network_access': network, ...(selectedEffort ? { model_reasoning_effort: selectedEffort } : {}), ...(config.local ? localCodexConfig(config.local) : {}), ...(config.reviewSnapshot ? { mcp_servers: {}, web_search: 'disabled' } : {}) }, ...(selectedModel ? { model: selectedModel } : {}), ...(config.local ? { modelProvider: 'throughline_ollama' } : {}), ...(config.local || config.reviewSnapshot ? { ephemeral: true } : {}), ...(config.routingAssessment ? { baseInstructions: ASSESSOR_INSTRUCTIONS, developerInstructions: '' } : {}) };
     if (config.local && (!selectedModel || config.sessionId)) throw new Error('Local runs require an explicit model and a fresh session.');
+    const skills = config.skills && !config.routingAssessment && !config.reviewSnapshot ? config.skills : null, scope = skills ? await codexSkillScope(client, config) : null;
+    if (scope) Object.assign(options.config, scope.config);
+    // A skill you asked for goes in as Codex's own skill input. If its folder couldn't be added, Codex is told where the
+    // skills are, so it can still read them.
+    const skillInput = scope?.added ? (skills.chosen || []).filter(name => skills.names?.includes(name)).map(name => ({ type: 'skill', name, path: path.join(skills.folder, name, 'SKILL.md') })) : [];
+    const skillPaths = skills?.folder && !scope.added && skills.names?.length ? [{ type: 'text', text: `The enabled skills couldn't be added to your skills list. Read one from here when it fits the task:\n${skills.names.map(name => `- ${name}: ${path.join(skills.folder, name, 'SKILL.md')}`).join('\n')}` }] : [];
+    if (cancelled()) throw new Error('Run interrupted.');
     // Codex keeps its plan for the run with its plan tool, shown as a to-do list. A Codex that doesn't know the
     // setting refuses it, so the thread then starts without it.
     if (!config.reviewSnapshot) options.config['tools.update_plan'] = { enabled: true };
@@ -226,9 +254,10 @@ export async function runCodex(config, { event, approval, question = null, metad
     threadId = started.thread.id;
     event({ type: 'thread.started', thread_id: threadId });
     metadata({ effectiveModel: started.model || started.thread.model || selectedModel || 'unknown', transport: 'app-server', effectiveEffort: started.reasoningEffort || selectedEffort || null, ...(config.local ? { connection: 'local', account: { authenticated: true, authMode: 'local', billingSource: 'local' } } : {}) });
-    const turn = await client.request('turn/start', { threadId, ...(selectedEffort ? { effort: selectedEffort } : {}), input: [{ type: 'text', text: config.prompt }, ...(config.images || []).flatMap(image => [{ type: 'text', text: 'Attached image: ' + image.name }, { type: 'localImage', path: image.path }])], cwd: config.workspace,
+    const turn = await client.request('turn/start', { threadId, ...(selectedEffort ? { effort: selectedEffort } : {}), input: [{ type: 'text', text: config.prompt }, ...skillPaths, ...skillInput, ...(config.images || []).flatMap(image => [{ type: 'text', text: 'Attached image: ' + image.name }, { type: 'localImage', path: image.path }])], cwd: config.workspace,
       approvalPolicy: options.approvalPolicy, approvalsReviewer: 'user', sandboxPolicy: config.mode === 'read' ? { type: 'readOnly', networkAccess: false } : { type: 'workspaceWrite', writableRoots: roots, networkAccess: network }, ...(selectedModel ? { model: selectedModel } : {}), ...(config.routingAssessment ? { outputSchema: config.outputSchema } : {}) });
     turnId = turn.turn.id;
+    for (const item of skillInput) event({ type: 'relay.skill', name: item.name });
     // A note the person adds while Codex works joins this same turn; it fails once the turn has finished.
     if (!config.reviewSnapshot) steerable(async text => { await client.request('turn/steer', { threadId, expectedTurnId: turnId, input: [{ type: 'text', text }] }, 10000); });
     const timer = setInterval(() => { if (cancelled()) client.request('turn/interrupt', { threadId, turnId }).catch(() => {}); }, 200);

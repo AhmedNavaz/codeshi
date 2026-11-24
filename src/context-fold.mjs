@@ -1,5 +1,6 @@
 import { observationsFor } from './context-rollover.mjs';
 import { draftReplyNote } from './orchestration.mjs';
+import { namedWords, significantWords } from './request-words.mjs';
 
 // The rolling brief (#85): when the earlier conversation no longer fits a fresh envelope's history allowance, the older
 // part is folded into short excerpts instead of being cut off by age. Worked out locally from the journal each time, with
@@ -20,11 +21,33 @@ const firstParagraph = text => {
   return /^#{1,6}\s[^\n]*$/.test(parts[0]) && parts[1] ? `${parts[0].replace(/^#+\s*/, '')}: ${parts[1]}` : parts[0].replace(/^#+\s*/, '');
 };
 const size = value => Buffer.byteLength(JSON.stringify(value));
+
+// Older decisions the request is about (#85). The latest decisions always go; in a long conversation hundreds more were
+// settled before them, and a request that comes back to one ("how did I want Argon rated?", "what did I decide on #187?")
+// shares a rare word with it. Worked out locally from the words alone, without a model.
+const RELEVANT_DECISIONS = 6;
+// The older decisions sharing the most telling words with the request. A word counts when few decisions use it. An issue
+// number or a name is enough on its own; ordinary words need two, so "client" alone doesn't bring back every decision on it.
+export function relevantDecisions(decisions, request, { latest = DECISIONS, limit = RELEVANT_DECISIONS } = {}) {
+  const wanted = significantWords(request), named = namedWords(request), older = decisions.length - latest;
+  if (!wanted.size || older <= 0) return [];
+  const words = decisions.map(item => significantWords(item.text)), counts = new Map();
+  for (const set of words) for (const word of set) if (wanted.has(word)) counts.set(word, (counts.get(word) || 0) + 1);
+  const rare = Math.max(2, Math.ceil(decisions.length * 0.03));
+  const scored = [];
+  for (let index = 0; index < older; index++) {
+    const matched = [...wanted].filter(word => words[index].has(word) && counts.get(word) <= rare);
+    if (!matched.length || (matched.length < 2 && !matched[0].startsWith('#') && !(named.has(matched[0]) && counts.get(matched[0]) <= 2))) continue;
+    scored.push({ index, matched, score: matched.reduce((sum, word) => sum + Math.log(decisions.length / counts.get(word)), 0) });
+  }
+  return scored.sort((a, b) => b.score - a.score || b.index - a.index).slice(0, limit);
+}
 export const isRequest = message => message.role === 'user' && Boolean(message.text?.trim()) && !message.reviewId && !message.retry && !message.text.trim().startsWith(CONTINUE);
 
 // messages: the in-scope journal messages being folded, oldest first. inContext: ids of requests the envelope already
 // carries in full; keptTexts: the text of requests it carries, so one sent again later is not repeated here. skipDecisions: decision texts already sent elsewhere in the envelope.
-export function earlierConversation(c, messages, { trigger, inContext = new Set(), keptTexts = new Set(), skipDecisions = new Set(), limit = EARLIER_BYTES }) {
+// request: the words of the current task, for the older decisions it comes back to.
+export function earlierConversation(c, messages, { trigger, inContext = new Set(), keptTexts = new Set(), skipDecisions = new Set(), limit = EARLIER_BYTES, request = '' }) {
   const byText = new Map();
   let turn = null;
   for (const message of messages) {
@@ -51,12 +74,17 @@ export function earlierConversation(c, messages, { trigger, inContext = new Set(
   // Codeshi's own test runs for the folded work. Only these count as verified; agents' reports of passing tests do not.
   const runIds = new Set(messages.map(message => message.runId).filter(Boolean));
   const checks = (c.runs || []).filter(run => runIds.has(run.id) && ['passed', 'failed'].includes(run.check?.status)).slice(-CHECKS).map(run => ({ runId: run.id, agent: run.provider || null, status: run.check.status, command: clip(run.check.command || 'Project checks', 200), verified: run.check.status === 'passed' }));
+  // The latest decisions, and older ones the request comes back to, in the order they were made.
+  const relevant = new Map(relevantDecisions(decisions, request).map(item => [item.index, item.matched]));
+  // An older one is shortened from the middle, keeping the question's start and the answer at its end; the journal has it whole.
+  const ends = text => { const value = normalized(text); return value.length > 2 * TEXT ? `${value.slice(0, TEXT - 40).replace(/[\uD800-\uDBFF]$/, '')} … ${value.slice(-(TEXT + 40)).replace(/^[\uDC00-\uDFFF]/, '')}` : value; };
+  const keptDecisions = decisions.map((item, index) => index >= decisions.length - DECISIONS ? item : relevant.has(index) ? { ...item, text: ends(item.text), matched: relevant.get(index) } : null).filter(Boolean);
   const result = {
     note: EARLIER_NOTE,
     trigger,
     folded: { messages: messages.length, from: messages[0]?.id || null, to: messages.at(-1)?.id || null, ...(messages[0]?.createdAt ? { fromAt: messages[0].createdAt } : {}), ...(messages.at(-1)?.createdAt ? { toAt: messages.at(-1).createdAt } : {}) },
     requests: [],
-    ...(decisions.length ? { decisions: decisions.slice(-DECISIONS) } : {}),
+    ...(keptDecisions.length ? { decisions: keptDecisions, ...(relevant.size ? { matchedNote: 'A decision with matched is older than the latest ones and shares those words with the current request. It is history, like the rest.' } : {}) } : {}),
     ...(checks.length ? { checks } : {}),
   };
   // Bounded by size, not by count: the newest requests that fit, and always the latest one, so a chat of short exchanges
@@ -70,7 +98,12 @@ export function earlierConversation(c, messages, { trigger, inContext = new Set(
   }
   result.requests.reverse();
   const leftOut = requests.length - result.requests.length;
-  while (size(result) > limit && result.decisions?.length > 1) result.decisions.shift();
+  // The oldest of the latest decisions go before the ones the request comes back to.
+  while (size(result) > limit && result.decisions?.length > 1) {
+    const unmatched = result.decisions.findIndex(item => !item.matched);
+    result.decisions.splice(Math.max(0, unmatched), 1);
+  }
+  if (!result.decisions?.some(item => item.matched)) delete result.matchedNote;
   if (leftOut) result.requestsLeftOut = leftOut;
   result.repeatedRequests = [...byText.values()].reduce((sum, entry) => sum + (entry.repeated ? entry.repeated - 1 : 0), 0);
   if (!result.repeatedRequests) delete result.repeatedRequests;

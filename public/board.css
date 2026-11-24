@@ -79,6 +79,19 @@
 .board-check input[type=checkbox] { flex: none; margin: 0; accent-color: var(--accent); }
 .board-check-remove { flex: none; width: 24px; height: 24px; color: var(--muted); font-size: 15px; }
 .board-add-check { justify-self: start; font-size: 12px; }
+/* Attached (#125): image thumbnails in a wrapping row, other files as one-line rows; an image opens to the drawer's width. */
+.board-attached-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.board-attached-item { display: flex; align-items: center; gap: 2px; max-width: 100%; min-height: 28px; padding: 0 2px 0 6px; border: 1px solid var(--border); border-radius: var(--radius); }
+.board-attached-item.image { flex-direction: column; align-items: stretch; width: 120px; padding: 4px; }
+.board-attached-item.image.large { width: 100%; }
+.board-attached-open { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0; border: 0; background: none; color: var(--text-strong); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.board-attached-item.image .board-attached-open { flex-direction: column; align-items: stretch; }
+.board-attached-open img { display: block; width: 100%; height: 72px; object-fit: cover; object-position: top left; border-radius: calc(var(--radius) - 2px); background: var(--surface); }
+.board-attached-item.large img { height: auto; max-height: 60vh; object-fit: contain; }
+.board-attached-open .icon { flex: none; width: 14px; height: 14px; color: var(--muted); }
+.board-attached-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-attached-item.image .board-check-remove { align-self: flex-end; margin-top: -2px; }
+.board-attach-add { justify-self: start; font-size: 12px; }
 .board-labels-edit { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 30px; padding: 3px 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--input-bg, var(--bg)); cursor: text; }
 .board-labels-edit:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .board-label.editable { height: 22px; padding: 0 2px 0 8px; font-size: 11.5px; color: var(--text); }
@@ -346,7 +359,7 @@ ul.board-result-facts li { padding: 1px 8px; border: 1px solid var(--border); bo
 .board-schedule-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .board-schedule-title { flex: 1 1 auto; min-width: 0; color: var(--text-strong); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board-schedule-kind { flex: none; color: var(--faint); font-size: 11px; }
-.board-schedule-when, .board-schedule-last { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.board-schedule-when, .board-schedule-last, .board-schedule-cards { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
 .board-schedule-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .board-schedule-actions .board-remove { margin-left: auto; color: var(--danger); }
 .board-schedule-at { display: flex; gap: 6px; }

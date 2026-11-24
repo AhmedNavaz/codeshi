@@ -6,8 +6,10 @@ import path from 'node:path';
 import test from 'node:test';
 import { Broker } from '../src/broker.mjs';
 import { continuationRequest, prepareContext } from '../src/context.mjs';
-import { runClaude } from '../src/providers.mjs';
-import { compatibilityOf, parseSkill, STARTER_ROOT, validateSkill } from '../src/skills.mjs';
+import { EventEmitter } from 'node:events';
+import { antigravityInvocation, homeSkillsFolder, skillHome, skillHomesSupported } from '../src/antigravity.mjs';
+import { runClaude, runCodex } from '../src/providers.mjs';
+import { compatibilityOf, parseSkill, skillRead, STARTER_ROOT, validateSkill } from '../src/skills.mjs';
 import { noSymlinks, scriptCLIs } from './platform.mjs';
 
 const skill = (name, description = `Use ${name} when a task calls for it.`, body = `Steps for ${name}.`, extra = '') => `---\nname: ${name}\ndescription: ${description}\n${extra}---\n\n${body}\n`;
@@ -151,7 +153,7 @@ test('what can not work here fails clearly or needs an explicit choice', t => {
   const soft = env.add('soft-limits', skill('soft-limits', 'Declares tools.', 'Steps.', `allowed-tools: Bash(${path.basename(process.execPath)}:*) Read\n`));
   const saved = enable(env, soft).enabled.find(item => item.name === 'soft-limits');
   assert(saved.compatibility.unavailable.some(item => item.feature === 'allowed-tools' && /your access setting and approvals still decide/.test(item.detail)));
-  assert.deepEqual(saved.compatibility.adapters, { claude: 'native', codex: 'instructions', gemini: 'instructions' }, 'Only Claude uses its own skill system.');
+  assert.deepEqual(saved.compatibility.adapters, { claude: 'native', codex: 'native', gemini: 'native' }, 'Each agent uses its own skill system.');
   const broken = env.add('Bad-Name', skill('Bad-Name'));
   const listed = env.broker.skills.view(env.c).available.find(item => item.path === broken);
   assert.match(listed.problems[0], /lowercase/);
@@ -361,4 +363,156 @@ test('the Claude adapter loads the plugin, turns its skills on and shell lines o
   assert.deepEqual(options.settings, { disableAllHooks: true });
   await runClaude({ ...config, routingAssessment: true, mode: 'read' }, callbacks);
   assert.equal(options.plugins, undefined, 'A routing assessment loads nothing.');
+});
+
+test('Codex and Gemini get their own copy of the enabled skills, with a skill only for when you ask put in only when asked', t => {
+  const env = setup(t);
+  enable(env, env.add('release-notes', skill('release-notes', 'Write release notes.', 'Notes for $ARGUMENTS.', 'allowed-tools: Read\nmodel: opus\nargument-hint: "<version>"\nlicense: MIT\n'), { 'template.md': 'TEMPLATE', 'scripts/run.sh': 'echo hi' }), { acceptPartial: true });
+  enable(env, env.add('only-asked', skill('only-asked', 'Only when asked.', 'ASKED-STEPS', 'disable-model-invocation: true\n')));
+  const codex = env.broker.skills.agentCopy(env.c, 'codex');
+  assert.deepEqual(codex.names, ['release-notes'], 'A skill only for when you ask is not in the copy.');
+  assert(codex.folder.startsWith(path.join(env.broker.skills.root, 'codex-skills') + path.sep));
+  assert.deepEqual(fs.readdirSync(codex.folder).filter(name => !name.startsWith('.')), ['release-notes'], 'One folder per skill, and nothing else.');
+  const { frontmatter, body } = parseSkill(fs.readFileSync(path.join(codex.folder, 'release-notes', 'SKILL.md'), 'utf8'));
+  assert.deepEqual(Object.keys(frontmatter).sort(), ['description', 'name'], 'Only a name and a description.');
+  assert.match(body, /\$ARGUMENTS/);
+  assert.equal(fs.readFileSync(path.join(codex.folder, 'release-notes', 'template.md'), 'utf8'), 'TEMPLATE');
+  assert.equal(fs.statSync(path.join(codex.folder, 'release-notes', 'scripts', 'run.sh')).mode & 0o111, 0);
+  assert.equal(env.broker.skills.agentCopy(env.c, 'codex').folder, codex.folder, 'The same skills reuse one copy.');
+  const asked = env.broker.skills.agentCopy(env.c, 'codex', { chosen: ['only-asked'] });
+  assert.deepEqual(asked.names.sort(), ['only-asked', 'release-notes']);
+  assert.notEqual(asked.folder, codex.folder);
+  assert.notEqual(env.broker.skills.agentCopy(env.c, 'gemini').folder, codex.folder, 'Each agent has its own copy.');
+  env.broker.skills.change(env.c, { action: 'disable', name: 'release-notes' });
+  assert.deepEqual(env.broker.skills.agentCopy(env.c, 'codex'), { folder: null, names: [], versions: {} });
+  // Codex fills in no placeholders, so a skill that needs them is still listed as not working for Codex or Gemini.
+  env.broker.skills.change(env.c, { action: 'restore', name: 'release-notes' });
+  assert.deepEqual(env.broker.skills.unsupportedFor(env.c, 'codex', { native: true }), ['release-notes']);
+  assert.deepEqual(env.broker.skills.unsupportedFor(env.c, 'claude', { native: true }), []);
+});
+
+test('with their own skill systems, Codex and Gemini are told the skills are in their list, and one you ask for is named', t => {
+  const env = setup(t);
+  enable(env, env.add('db-migrations', skill('db-migrations', 'Plan schema changes and backfills against stored data safely.', 'MIGRATION-STEPS')));
+  for (const provider of ['codex', 'gemini']) {
+    const matched = env.broker.skills.forTask(env.c, { text: 'We need to plan schema changes and a backfill on stored data', provider, native: true });
+    assert.deepEqual([matched.catalog, matched.active], [[], []], `${provider} chooses from its own list.`);
+    assert.match(matched.note, /your own skills list under their names/);
+    assert.doesNotMatch(matched.note, /codeshi:name|Skill tool/);
+    const asked = env.broker.skills.forTask(env.c, { text: 'Please /db-migrations now', provider, native: true });
+    assert.deepEqual(asked.active.map(item => [item.name, item.inYourSkillsList, item.instructions, item.loadWithSkillTool]), [['db-migrations', 'db-migrations', undefined, undefined]]);
+    assert.deepEqual(asked.records.map(item => [item.route, item.delivered]), [['native', false]]);
+  }
+  assert.match(env.broker.skills.forTask(env.c, { text: 'hi', provider: 'gemini', native: true }).note, /a skill of the repository's own that isn't among them was not enabled/, 'Gemini still sees a repository\'s own skills.');
+});
+
+test('a skill Codex or Gemini reads from its copy is recorded as loaded, and nothing else is', t => {
+  const env = setup(t);
+  enable(env, env.add('tone-guide', skill('tone-guide', 'Copy rules.', 'TONE-STEPS')));
+  const { broker, c } = env, copy = broker.skills.agentCopy(c, 'codex'), file = path.join(copy.folder, 'tone-guide', 'SKILL.md');
+  assert.equal(skillRead({ type: 'command_execution', command: `cat ${file}`, commandActions: [{ type: 'read', path: file }] }, copy.folder), 'tone-guide');
+  assert.equal(skillRead({ type: 'command_execution', command: `/bin/zsh -lc 'sed -n 1,80p ${file}'` }, copy.folder), 'tone-guide', 'A command that prints it counts too.');
+  assert.equal(skillRead({ type: 'agent_tool', name: 'Read', input: { file_path: file } }, copy.folder), 'tone-guide');
+  for (const other of [path.join(copy.folder, 'tone-guide', 'template.md'), path.join(c.id, 'SKILL.md'), path.join(copy.folder, '..', 'x', 'tone-guide', 'SKILL.md'), path.join(copy.folder, 'SKILL.md')]) assert.equal(skillRead({ type: 'agent_tool', name: 'Read', input: { file_path: other } }, copy.folder), null, other);
+  assert.equal(skillRead({ type: 'agent_tool', name: 'Write', input: { file_path: file } }, copy.folder), null);
+  c.activeRun = { id: 'codex-run', provider: 'codex', context: { skills: [] } };
+  const run = { id: 'codex-run', c, provider: 'codex', tools: new Map(), nativeSkills: { ...copy, readFrom: copy.folder } };
+  const step = (id, extra) => broker.event(run, { type: 'item.completed', item: { id, type: 'command_execution', command: `cat ${file}`, aggregated_output: 'x', commandActions: [{ type: 'read', path: file }], ...extra } });
+  step('a', { status: 'failed', exit_code: 1 });
+  assert.deepEqual(c.activeRun.context.skills, [], 'A read that failed loaded nothing.');
+  step('b', { status: 'completed', exit_code: 0 }); step('c', { status: 'completed', exit_code: 0 });
+  broker.event(run, { type: 'relay.skill', name: 'tone-guide' });
+  assert.deepEqual(c.activeRun.context.skills.map(item => [item.name, item.route, item.delivered, item.reason]), [['tone-guide', 'native', true, 'Codex chose it from its skill list']]);
+  assert.equal(c.messages.filter(message => message.text === 'Codex loaded skill tone-guide on its own.').length, 1);
+  c.lastRun = c.activeRun; c.activeRun = null;
+  const next = broker.skills.forTask(c, { text: continuationRequest, relation: 'continuation', fresh: true, provider: 'claude', native: true });
+  assert.deepEqual(next.active.map(item => [item.name, item.reason]), [['tone-guide', 'continuing this task']], 'It goes with the task to the next agent.');
+});
+
+test('the Codex adapter adds the copy as a skill folder, turns every other skill off for the thread, and passes a skill you asked for', async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-codex-skills-'))), folder = path.join(root, 'copy');
+  fs.mkdirSync(path.join(folder, 'tone-guide'), { recursive: true }); fs.writeFileSync(path.join(folder, 'tone-guide', 'SKILL.md'), skill('tone-guide'));
+  try {
+    const fake = ({ extraRoots = true, list = true } = {}) => {
+      const calls = [];
+      const client = new EventEmitter();
+      client.initialize = async () => {};
+      client.close = () => {};
+      client.send = () => {};
+      client.request = async (method, params) => {
+        calls.push([method, params]);
+        if (method === 'skills/extraRoots/set') { if (!extraRoots) throw new Error('unknown method'); return {}; }
+        if (method === 'skills/list') { if (!list) throw new Error('unknown method'); return { data: [{ cwd: '/project', skills: [{ name: 'tone-guide', path: path.join(folder, 'tone-guide', 'SKILL.md') }, { name: 'repo-skill', path: '/project/.agents/skills/repo-skill/SKILL.md' }, { name: 'skill-creator', path: '/home/.codex/skills/.system/skill-creator/SKILL.md' }, { name: 'vercel:nextjs', path: '/home/.codex/plugins/cache/vercel/skills/nextjs/SKILL.md' }], errors: [] }] }; }
+        if (method === 'model/list') return { data: [] };
+        if (method === 'thread/start' || method === 'thread/resume') return { thread: { id: 't' } };
+        if (method === 'turn/start') { setImmediate(() => client.emit('message', { method: 'turn/completed', params: { threadId: 't', turn: { status: 'completed' } } })); return { turn: { id: 'x' } }; }
+        return {};
+      };
+      return { client, calls };
+    };
+    const config = { bin: '/codex', workspace: '/project', mode: 'edit', approvalPolicy: 'auto', prompt: 'Go', model: 'm', effort: 'low', skills: { folder, names: ['tone-guide'], chosen: ['tone-guide', 'not-enabled'] } };
+    let events = [];
+    const callbacks = (made) => ({ event: value => events.push(value), metadata() {}, approval: async () => true, clientFactory: () => made.client });
+    let made = fake();
+    await runCodex(config, callbacks(made));
+    assert.deepEqual(events.filter(value => value.type === 'relay.skill'), [{ type: 'relay.skill', name: 'tone-guide' }], 'A skill passed as Codex\'s own input counts as loaded.');
+    assert.deepEqual(made.calls.find(([method]) => method === 'skills/extraRoots/set')[1], { extraRoots: [folder] });
+    const thread = made.calls.find(([method]) => method === 'thread/start')[1];
+    assert.equal(thread.config['skills.bundled.enabled'], false);
+    assert.deepEqual(thread.config['skills.config'], ['/project/.agents/skills/repo-skill/SKILL.md', '/home/.codex/skills/.system/skill-creator/SKILL.md', '/home/.codex/plugins/cache/vercel/skills/nextjs/SKILL.md'].map(file => ({ path: file, enabled: false })), 'Every skill but the copy is off, for this thread only.');
+    const input = made.calls.find(([method]) => method === 'turn/start')[1].input;
+    assert.deepEqual(input.slice(1), [{ type: 'skill', name: 'tone-guide', path: path.join(folder, 'tone-guide', 'SKILL.md') }], 'Only an enabled skill you asked for goes in as a skill.');
+    assert.equal(made.calls.some(([method]) => method === 'skills/config/write'), false, 'The person\'s Codex settings are never written.');
+
+    made = fake();
+    await runCodex({ ...config, sessionId: 'saved' }, callbacks(made));
+    assert.equal(made.calls.find(([method]) => method === 'thread/resume')[1].config['skills.bundled.enabled'], false, 'A resumed thread gets the same scope.');
+
+    made = fake();
+    await runCodex({ ...config, skills: { folder: null, names: [], chosen: [] } }, callbacks(made));
+    assert.equal(made.calls.some(([method]) => method === 'skills/extraRoots/set'), false);
+    assert.equal(made.calls.find(([method]) => method === 'thread/start')[1].config['skills.config'].length, 4, 'With none enabled, Codex has no skills at all.');
+
+    made = fake({ extraRoots: false });
+    await runCodex(config, callbacks(made));
+    const fallback = made.calls.find(([method]) => method === 'turn/start')[1].input;
+    assert.equal(fallback.some(item => item.type === 'skill'), false);
+    assert.match(fallback[1].text, new RegExp(`tone-guide: ${path.join(folder, 'tone-guide', 'SKILL.md').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), 'A Codex that can\'t add the folder is told where the skills are.');
+    assert.equal(made.calls.find(([method]) => method === 'thread/start')[1].config['skills.config'].length, 4);
+
+    made = fake({ list: false });
+    await runCodex(config, callbacks(made));
+    assert.equal(made.calls.find(([method]) => method === 'thread/start')[1].config['skills.config'], undefined, 'A Codex that can\'t list its skills keeps them.');
+
+    for (const extra of [{ skills: undefined }, { routingAssessment: true, mode: 'read', outputSchema: {} }]) {
+      made = fake();
+      await runCodex({ ...config, ...extra }, callbacks(made));
+      assert.equal(made.calls.some(([method]) => method.startsWith('skills/')), false, 'No scope without skills, or for a routing assessment.');
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a Gemini run with skills uses a home for that set of skills, linked to the profile, and leaves the profile as it was', { skip: noSymlinks || !skillHomesSupported() }, t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-gemini-skills-'))), googleRoot = path.join(root, 'google'), profile = path.join(googleRoot, 'profile'), folder = path.join(root, 'copies', 'abc123');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(profile, 'antigravity-acp'), { recursive: true }); fs.writeFileSync(path.join(profile, 'oauth_creds.json'), 'OLD'); fs.writeFileSync(path.join(profile, 'antigravity-acp', 'settings.json'), '{}');
+  fs.mkdirSync(path.join(folder, 'tone-guide'), { recursive: true }); fs.writeFileSync(path.join(folder, 'tone-guide', 'SKILL.md'), skill('tone-guide')); fs.writeFileSync(path.join(folder, '.complete'), '');
+  const bin = path.join(root, 'agy_acp_server.par'), base = { bin, googleRoot, mode: 'edit', relay: null };
+  assert.equal(antigravityInvocation(base).env.GEMINI_HOME, profile, 'With no skills, the profile itself.');
+  const invocation = antigravityInvocation({ ...base, skills: { folder, names: ['tone-guide'] } }), home = invocation.env.GEMINI_HOME;
+  assert.equal(home, skillHome(googleRoot, folder));
+  assert.equal(fs.readFileSync(path.join(homeSkillsFolder(home), 'tone-guide', 'SKILL.md'), 'utf8'), skill('tone-guide'));
+  assert.equal(fs.readlinkSync(path.join(home, 'oauth_creds.json')), path.join(profile, 'oauth_creds.json'), 'The sign-in is the profile\'s.');
+  assert.equal(fs.readlinkSync(path.join(home, 'antigravity-acp')), path.join(profile, 'antigravity-acp'), 'So are saved conversations and trusted folders.');
+  assert.equal(fs.existsSync(path.join(profile, 'config')), false, 'The profile gets no skills.');
+  // The runtime replaced a file instead of writing through the link, and wrote a new one: both go back to the profile.
+  fs.rmSync(path.join(home, 'oauth_creds.json')); fs.writeFileSync(path.join(home, 'oauth_creds.json'), 'NEW');
+  const later = new Date(Date.now() + 5000); fs.utimesSync(path.join(home, 'oauth_creds.json'), later, later);
+  fs.writeFileSync(path.join(home, 'installation_id'), 'ID');
+  invocation.cleanup();
+  assert.equal(fs.readFileSync(path.join(profile, 'oauth_creds.json'), 'utf8'), 'NEW');
+  assert.equal(fs.readFileSync(path.join(profile, 'installation_id'), 'utf8'), 'ID');
+  assert(fs.lstatSync(path.join(home, 'oauth_creds.json')).isSymbolicLink() && fs.lstatSync(path.join(home, 'installation_id')).isSymbolicLink());
+  assert.equal(antigravityInvocation({ ...base, skills: { folder, names: ['tone-guide'] } }).env.GEMINI_HOME, home, 'The same skills reuse one home.');
+  assert.equal(antigravityInvocation({ ...base, skills: { folder: null, names: [] } }).env.GEMINI_HOME, profile);
 });

@@ -16,7 +16,7 @@ export const CLI_SCHEMA = 1;
 // Documented in docs/cli.md. Scripts rely on them, so they don't change meaning.
 export const EXIT = { ok: 0, failed: 1, usage: 2, needsInput: 3, busy: 4, unavailable: 5, detached: 130 };
 const AGENTS = ['codex', 'claude', 'gemini'], NAMES = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
-const COMMANDS = ['status', 'run', 'continue', 'wait', 'stop', 'tasks', 'help'];
+const COMMANDS = ['status', 'run', 'continue', 'wait', 'stop', 'tasks', 'skills', 'doctor', 'help'];
 export const FLOW_MODES = ['smart', 'saver', 'ultra'];
 export const FLOW_NAMES = { smart: 'Smart', saver: 'Saver', ultra: 'Ultra' };
 const LEGACY_FLOW = { balanced: 'smart', saving: 'saver', quality: 'ultra' };
@@ -57,6 +57,9 @@ Commands
   wait                 Follow the run that's working now until it ends
   stop                 Stop the run that's working in the workspace
   tasks                List the workspace's tasks
+  skills               The workspace's skills and what each agent can use of them
+  doctor               Check Codeshi, the workspace's folders and each agent's
+                       install and sign-in, and say what to fix
 
 Options
   -w, --workspace <name|path>  Workspace to use (default: the one holding this folder)
@@ -77,6 +80,7 @@ Options
 Progress goes to standard error; the agent's reply, or JSON, to standard output.
 Exit codes: 0 done, 1 run failed or was stopped, 2 usage, 3 needs your input,
 4 another run is working, 5 Codeshi couldn't be reached, 130 stopped watching (Ctrl+C).
+doctor ends with 1 when it finds a problem that stops work.
 Full reference: https://github.com/AhmedNavaz/codeshi/blob/main/docs/cli.md`;
 
 export class CliError extends Error { constructor(message, code = EXIT.failed, extra = {}) { super(message); this.code = code; Object.assign(this, extra); } }
@@ -267,6 +271,66 @@ export function describePending(item) {
 
 const firstLine = (text, width = 120) => { const line = String(text || '').split('\n').find(part => part.trim()) || ''; return line.length > width ? `${line.slice(0, width - 1)}…` : line; };
 
+// codeshi doctor (#90): what stands between this terminal and an agent at work, each with what to do about it. It only
+// reads: it checks the connection to Codeshi, the workspace's folders and each agent's install and sign-in, the same
+// checks the window's agent status makes. A check is ok, info (worth knowing, not a problem), warn (some work can't
+// happen) or fail (no work can happen). Never prints the connection's token.
+export const DOCTOR_LEVELS = ['ok', 'info', 'warn', 'fail'];
+const check = (id, status, title, detail = null, fix = null) => ({ id, status, title, detail, fix });
+export function engineCheck(connection, cliVersion) {
+  const app = connection?.appVersion || null, where = String(connection?.url || '').replace(/^http:\/\//, '');
+  const opened = check('engine', 'ok', `Codeshi${app ? ` ${app}` : ''} is open`, where ? `Reached at ${where}.` : null);
+  // A command left by another copy of the app (an older install, a build run from source) still works, but can lack what
+  // this app has, or send what it doesn't know. 0.0.0 and test are copies run from source.
+  if (!app || !cliVersion || app === cliVersion || ['0.0.0', 'test'].includes(app) || cliVersion === '0.0.0') return [opened];
+  return [opened, check('command-version', 'warn', `This codeshi command is ${cliVersion}, the open app is ${app}`, 'The command belongs to another copy of Codeshi.', 'Install it again from the open app: Install ‘codeshi’ Command… in the Codeshi menu on macOS, or File on Windows.')];
+}
+export function folderChecks(project, { statImpl = fs.statSync, accessImpl = fs.accessSync } = {}) {
+  return (project.folders || []).map(folder => {
+    const where = folder.path, name = folder.displayName || folder.name || path.basename(where);
+    let stat = null;
+    try { stat = statImpl(where); } catch { /* Missing. */ }
+    if (!stat?.isDirectory?.()) return check(`folder:${name}`, 'fail', `Folder ${name} is missing`, where, 'Restore it, or remove it from the workspace in Codeshi.');
+    try { accessImpl(where, fs.constants.R_OK | fs.constants.W_OK); }
+    catch { return check(`folder:${name}`, 'warn', `Folder ${name} can't be changed from this terminal`, where, 'Agents may be able to read it but not change it. Check the folder’s permissions.'); }
+    return check(`folder:${name}`, 'ok', `Folder ${name}`, where);
+  });
+}
+// One agent's account, as GET /api/providers/<agent>/account reports it, the way the window's status reads it.
+export function agentCheck(provider, account, error = null) {
+  const name = NAMES[provider], id = `agent:${provider}`;
+  if (error) return check(id, 'warn', `${name} couldn't be checked`, firstLine(error.message || String(error), 300), 'Open Codeshi’s agent settings to check it there.');
+  const note = account?.message ? firstLine(account.message, 300) : null;
+  if (!account?.installed) return check(id, 'info', `${name} isn't installed`, note, `Install ${name} if you want Codeshi to use it.`);
+  if (account.errorCategory === 'timeout') return check(id, 'warn', `${name} didn't answer in time`, account.path || null, `Run ${provider} in a terminal to see whether it starts, then try again.`);
+  if (!account.available) return check(id, 'warn', `${name} is installed but can't be used`, note || firstLine(account.error, 300) || null, 'Open Codeshi’s agent settings for what it needs.');
+  if (account.authenticated === false) return check(id, 'warn', `${name} isn't signed in`, account.version || null, `Sign in with ${name}'s own command, or Connect account in Codeshi.`);
+  const facts = [account.version, account.plan, account.authenticated === true ? 'signed in' : 'sign-in not confirmed'].filter(Boolean).join(' · ');
+  if (account.billingSource === 'api') return check(id, 'info', `${name} bills by use`, facts, 'The terminal never agrees to charges, so Flow won’t choose it from here. Name it with --agent, or use it from the window.');
+  if (account.authenticated !== true) return check(id, 'info', `${name} is installed`, facts, 'Codeshi checks its sign-in when it first runs.');
+  return check(id, 'ok', `${name} is ready`, facts);
+}
+// Whether any agent can take work: at least one installed, usable and not signed out.
+export const readyAgents = accounts => Object.entries(accounts).filter(([, account]) => account?.installed && account.available && account.authenticated !== false && account.errorCategory !== 'timeout').map(([provider]) => provider);
+
+// codeshi skills (#90, #86): the workspace's enabled skills from GET /api/skills, and for each agent how it gets a skill
+// and what it can't use of it. A blocking item leaves the skill only partly usable by the agents it names.
+export function skillsReport(view) {
+  const skills = (view?.enabled || []).map(skill => {
+    const compatibility = skill.compatibility || {}, unavailable = compatibility.unavailable || [];
+    const agents = Object.fromEntries(AGENTS.map(agent => {
+      const problems = unavailable.filter(item => item.blocking && (item.agents || AGENTS).includes(agent)).map(item => item.detail);
+      return [agent, { route: compatibility.adapters?.[agent] || 'instructions', ready: !problems.length, problems }];
+    }));
+    return { name: skill.name, description: skill.description || '', enabled: skill.enabled !== false, version: skill.version ? String(skill.version).slice(0, 12) : null, source: skill.sourceLabel || null,
+      onlyWhenAsked: Boolean(compatibility.personOnly), pinned: Boolean(skill.pinned), updateAvailable: Boolean(skill.updateAvailable), sourceMissing: Boolean(skill.sourceMissing),
+      agents, notes: unavailable.filter(item => !item.blocking).map(item => item.detail) };
+  });
+  return { skills, available: (view?.available || []).filter(item => !(item.problems || []).length).length };
+}
+const ROUTE_WORDS = { native: 'its own skills', instructions: 'as instructions' };
+
+
 export async function main(argv, { stdin: givenStdin, stdout = process.stdout, stderr = process.stderr, env = process.env, cwd = process.cwd(), version = '0.0.0', fetchImpl = fetch, signals = process } = {}) {
   let options;
   const say = line => { try { stderr.write(`${line}\n`); } catch { /* A closed terminal only loses progress. */ } };
@@ -305,12 +369,17 @@ export async function main(argv, { stdin: givenStdin, stdout = process.stdout, s
     if (following) signals.on?.('SIGINT', interrupt);
     try {
     // Stop and wait have nothing to act on when Codeshi isn't open, so they don't start it.
-    const api = client(await connect({ env, start: !['stop', 'wait'].includes(options.command), say: options.json || options.jsonl ? () => {} : say }), { fetchImpl });
+    let connection;
+    try { connection = await connect({ env, start: !['stop', 'wait'].includes(options.command), say: options.json || options.jsonl ? () => {} : say }); }
+    catch (error) { if (options.command === 'doctor' && error instanceof CliError) return doctorReport([check('engine', 'fail', "Codeshi couldn't be reached", error.message, 'Open Codeshi, then run codeshi doctor again.')], null, error.code); throw error; }
+    const api = client(connection, { fetchImpl });
     const projects = await api.get('/api/projects');
     if (options.command === 'status') return status(projects);
+    if (options.command === 'doctor') return await doctor(api, connection, projects);
     const project = chooseWorkspace(projects, { name: options.workspace, cwd });
     const workspace = { id: project.id, name: project.name }, q = `projectId=${encodeURIComponent(project.id)}`;
     if (options.command === 'tasks') return tasks(project, (await api.get(`/api/tasks?${q}`)).tasks || []);
+    if (options.command === 'skills') return skills(project, await api.get(`/api/skills?${q}`));
     const conversation = await api.get(`/api/conversation?${q}&limit=1`);
     const route = action => `/api/conversations/${conversation.id}/${action}?${q}&limit=1`;
     if (options.command === 'stop') {
@@ -472,6 +541,58 @@ export async function main(argv, { stdin: givenStdin, stdout = process.stdout, s
       else if (result === 'incomplete') say(`The run didn't finish${run.errorCategory === 'quota' ? ': the agent reached its usage limit. codeshi continue --agent <another> hands it on.' : problem ? `: ${firstLine(problem, 300)}` : '.'}`);
     }
     return finish({ result, workspace, conversationId: view.id, runId, taskId: run.execution?.taskId || run.taskId || null, agent: run.provider, model: run.model || null, routing: runRouting(run), reply, error: result === 'complete' ? null : problem, errorCategory: run.errorCategory || null }, result === 'complete' ? EXIT.ok : EXIT.failed);
+  }
+
+  async function doctor(api, connection, projects) {
+    const checks = engineCheck(connection, version);
+    let project = null;
+    try { project = chooseWorkspace(projects, { name: options.workspace, cwd }); }
+    catch (error) { if (!(error instanceof CliError)) throw error; checks.push(check('workspace', options.workspace ? 'fail' : 'info', 'No workspace for this folder', error.message, options.workspace ? null : 'Run codeshi doctor in a workspace folder, or name one with --workspace, to check its folders.')); }
+    if (project) {
+      checks.push(check('workspace', 'ok', `Workspace ${project.name}`, null));
+      checks.push(...folderChecks(project));
+      if (project.pendingApprovals) checks.push(check('waiting', 'info', `${project.pendingApprovals} ${project.pendingApprovals === 1 ? 'approval or question waits' : 'approvals or questions wait'} for you`, null, 'Answer in Codeshi, or follow the run with codeshi wait in a terminal.'));
+    }
+    if (!options.json && !options.jsonl) say('Checking agents…');
+    const q = project ? `?projectId=${encodeURIComponent(project.id)}` : '';
+    const accounts = {};
+    checks.push(...await Promise.all(AGENTS.map(async provider => {
+      try { accounts[provider] = await api.get(`/api/providers/${provider}/account${q}`); return agentCheck(provider, accounts[provider]); }
+      catch (error) { if (error instanceof CliError && error.code === EXIT.unavailable) throw error; return agentCheck(provider, null, error); }
+    })));
+    if (!readyAgents(accounts).length) checks.push(check('agents', 'fail', 'No agent is ready to work', null, 'Install and sign in to Codex, Claude Code or Gemini (Antigravity).'));
+    return doctorReport(checks, project, checks.some(item => item.status === 'fail') ? EXIT.failed : EXIT.ok);
+  }
+  function doctorReport(checks, project, code) {
+    if (options.json || options.jsonl) return finish({ result: 'doctor', ok: code === EXIT.ok, workspace: project ? { id: project.id, name: project.name } : null, checks }, code);
+    const marks = { ok: '✓', info: '·', warn: '!', fail: '✗' };
+    for (const item of checks) {
+      out(`${marks[item.status]} ${item.title}${item.detail ? `: ${item.detail}` : ''}\n`);
+      if (item.fix && item.status !== 'ok') out(`    ${item.fix}\n`);
+    }
+    const problems = checks.filter(item => item.status === 'fail').length, warnings = checks.filter(item => item.status === 'warn').length;
+    out(`\n${problems ? `${problems} ${problems === 1 ? 'problem stops' : 'problems stop'} work.` : warnings ? `Ready, with ${warnings} ${warnings === 1 ? 'thing' : 'things'} to look at.` : 'Ready.'}\n`);
+    return code;
+  }
+
+  function skills(project, view) {
+    const report = skillsReport(view), workspace = { id: project.id, name: project.name };
+    if (options.json || options.jsonl) return finish({ result: 'skills', workspace, ...report }, EXIT.ok);
+    if (!report.skills.length) out(`No skills are enabled in ${project.name}.\n`);
+    for (const skill of report.skills) {
+      const tags = [skill.version, skill.source, !skill.enabled && 'off', skill.onlyWhenAsked && 'only when you ask for it with /name', skill.pinned && 'pinned', skill.updateAvailable && 'update available', skill.sourceMissing && 'its source is gone'].filter(Boolean);
+      out(`${skill.name}${tags.length ? `  (${tags.join(', ')})` : ''}\n`);
+      if (skill.description) out(`  ${firstLine(skill.description, 110)}\n`);
+      const groups = new Map();
+      for (const agent of AGENTS) { const how = ROUTE_WORDS[skill.agents[agent].route] || skill.agents[agent].route; groups.set(how, [...(groups.get(how) || []), NAMES[agent]]); }
+      out(`  ${[...groups].map(([how, names]) => `${names.join(', ')}: ${how}`).join(' · ')}\n`);
+      const problems = new Map();
+      for (const agent of AGENTS) for (const problem of skill.agents[agent].problems) problems.set(problem, [...(problems.get(problem) || []), NAMES[agent]]);
+      for (const [problem, names] of problems) out(`  ! ${names.length === AGENTS.length ? '' : `${names.join(', ')}: `}${problem}\n`);
+      for (const note of skill.notes) out(`  · ${note}\n`);
+    }
+    if (report.available) out(`\n${report.available} more ${report.available === 1 ? 'skill is' : 'skills are'} available to enable under Skills in Codeshi.\n`);
+    return EXIT.ok;
   }
 
   function status(projects) {

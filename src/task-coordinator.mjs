@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readLedger } from './task-ledger.mjs';
-import { evaluateIntegration, stepPrompt } from './orchestration.mjs';
+import { designSection, evaluateIntegration, stepPrompt } from './orchestration.mjs';
 import { reviewHolds } from './plan-review.mjs';
 import { runSteps } from './recap.mjs';
 import { noteActivity } from './activity.mjs';
@@ -577,7 +577,8 @@ export class TaskCoordinator {
     const ids = [...new Set((c.parallelTasks || []).filter(item => item.batch && ['waiting', 'running'].includes(item.status)).map(item => item.batch.id))];
     return ids.map(id => {
       const { tasks, used } = this.runUsage(c, id), batch = tasks[0].batch;
-      return { id, limits: batch.limits, startedAt: batch.startedAt, cards: tasks.map(item => item.board?.cardId).filter(Boolean), running: tasks.filter(item => item.status === 'running').length, waiting: tasks.filter(item => item.status === 'waiting').length, used: { workingMs: used.workingMs, tokens: used.tokens, spendUSD: used.spendUSD } };
+      // A Flow schedule's prompt is a run with no cards, named by its title.
+      return { id, ...(batch.title ? { title: batch.title } : {}), limits: batch.limits, startedAt: batch.startedAt, cards: tasks.map(item => item.board?.cardId).filter(Boolean), running: tasks.filter(item => item.status === 'running').length, waiting: tasks.filter(item => item.status === 'waiting').length, used: { workingMs: used.workingMs, tokens: used.tokens, spendUSD: used.spendUSD } };
     });
   }
   runSpent(c, batch) {
@@ -634,7 +635,7 @@ export class TaskCoordinator {
       const strip = file => task.prefix && file.startsWith(`${task.prefix}/`) ? file.slice(task.prefix.length + 1) : file;
       let copyFiles = null, copyPaths = [];
       if ((task.board || task.plan) && task.mode === 'worktree' && task.worktree && fs.existsSync(task.worktree)) { try { copyPaths = this.planFor(c, task).plan.files.map(file => strip(file.path)); copyFiles = copyPaths.length; } catch { /* Counted again when it's accepted. */ } }
-      const result = { summary: clip(reply, 3000), files: [...new Set([...copyPaths, ...runSteps(messages).files])].slice(0, 20), runId: run?.id || null, at: new Date().toISOString() };
+      const result = { summary: clip(step.artifact === 'design' ? designSection(reply) || reply : reply, 3000), files: [...new Set([...copyPaths, ...runSteps(messages).files])].slice(0, 20), runId: run?.id || null, at: new Date().toISOString() };
       this.update(c, task, { stepResult: result, ...(copyFiles !== null ? { copyFiles } : {}) });
       if (plan && step.artifact) this.main.record(c, { type: 'orchestration_artifact', id: plan.id, stepId: step.id, kind: step.artifact, content: result.summary, revision: result.runId || id, role: step.role || null });
       if (task.board && step.artifact) this.main.record(c, { type: 'board_card_artifact', cardId: step.id, taskId: task.id, kind: step.artifact, content: result.summary, revision: result.runId || id, role: step.role || null });

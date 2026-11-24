@@ -281,3 +281,121 @@ test('scheduled runs and missed ones are alerts of their own, and a missed one s
   const [workspace] = buildRecap({ since: '2026-11-11T08:00:00.000Z', now: new Date('2026-11-11T12:00:00.000Z'), registry, git: () => ({ repositories: [] }) }).workspaces;
   assert.deepEqual(workspace.missed.map(item => item.title), ['Nightly tidy'], 'A missed run alone is enough to show the workspace.');
 });
+
+// Flow schedules (#132, third stage): made in Flow, they bind the cards you ticked or a prompt, Flow's mode and one
+// limit every run shares. Routing's own ranking is tested elsewhere: here it takes the first agent offered, or none.
+const flowOn = env => env.broker.setRouting(env.c, { mode: 'smart', executionRevision: env.broker.execution.defaults(env.c).revision });
+const flowOff = env => env.broker.setRouting(env.c, { mode: null });
+function routeTo(t, env, answer = rows => ({ provider: rows[0].provider, model: null, effort: null, quota: { state: 'ok' } })) {
+  const row = provider => ({ provider, models: [], usage: { available: false }, readAt: Date.now(), account: { authenticated: true, billingSource: 'subscription' }, billingSource: 'subscription', eligible: true });
+  const asked = [];
+  env.broker.router.candidates = async () => { asked.push('rows'); return [row('claude'), row('codex')]; };
+  const route = globalThis.relayRouting.route;
+  globalThis.relayRouting.route = input => { asked.push(input); return answer(input.candidates, input); };
+  t.after(() => { globalThis.relayRouting.route = route; });
+  return { asked, set: next => { answer = next; } };
+}
+const limit = { maxWorkingMinutes: 30, maxTokens: null, maxSpendUSD: null };
+
+test('a Flow schedule is made only in Flow, with a limit, and binds the cards ticked at their revisions and Flow’s mode', async t => {
+  const env = setup(t);
+  const pinned = env.board.create(env.c, { title: 'Bump versions', column: 'ready', agent: { provider: 'codex' }, folderId: 'a' });
+  const loose = env.board.create(env.c, { title: 'Write release notes', column: 'ready', agent: null, folderId: 'a' });
+  const both = { target: { type: 'cards', cardIds: [pinned.id, loose.id] }, flow: { shared: limit }, when: { repeat: 'daily', time: '09:00' } };
+  assert.throws(() => env.schedules.create(env.c, both), /made in Flow\. Turn Flow on/, 'Outside Flow nothing is scheduled for Flow to choose.');
+  assert.throws(() => env.schedules.create(env.c, { ...both, flow: undefined }), /scheduled together in Flow/);
+  flowOn(env);
+  assert.throws(() => env.schedules.create(env.c, { ...both, flow: { shared: { maxWorkingMinutes: null, maxTokens: null, maxSpendUSD: null } } }), /limit for each run/, 'No one may be watching, so a run needs a limit.');
+  const made = env.schedules.create(env.c, both);
+  assert.deepEqual([made.target, made.flow, made.title, made.changed], [{ type: 'cards', cards: [{ cardId: pinned.id, revision: 1 }, { cardId: loose.id, revision: 1 }] }, { routingMode: 'smart', shared: limit }, 'Bump versions and 1 more', false]);
+  // One card's Schedule… in Flow is a Flow schedule of that card, and may be a card with no agent.
+  const one = env.schedules.create(env.c, { target: { type: 'card', cardId: loose.id }, flow: { shared: limit }, when: { repeat: 'weekly', weekday: 5, time: '17:00' } });
+  assert.deepEqual([one.target.type, one.title], ['cards', 'Write release notes']);
+  // An edited card is shown as changed; a removed one too, until none of its cards is left.
+  env.board.edit(env.c, loose.id, { notes: 'Mention the new flag.' });
+  assert.deepEqual(env.board.view(env.c).schedules.find(item => item.id === made.id).cards.map(item => item.changed), [false, true]);
+  env.board.remove(env.c, pinned.id);
+  assert.equal(env.board.view(env.c).schedules.find(item => item.id === made.id).cards[0].gone, true);
+  env.board.remove(env.c, loose.id);
+  assert.deepEqual(env.c.schedules, [], 'A Flow schedule goes once none of its cards is left.');
+  // A Flow prompt can leave the agent to Flow.
+  const prompt = env.schedules.create(env.c, { target: { type: 'prompt', text: 'Triage new issues.', agent: null }, flow: { shared: limit }, when: { repeat: 'daily', time: '09:00' } });
+  assert.deepEqual([prompt.target.agent, prompt.target.folderId, prompt.agent], [null, 'a', null]);
+  assert.throws(() => env.schedules.edit(env.c, prompt.id, { flow: null }), /stays Normal or Flow/);
+});
+
+test('at its time a Flow schedule runs exactly its cards under its own Flow policy and limit, and leaving Flow pauses it', { skip: scriptCLIs }, async t => {
+  const env = setup(t), routed = routeTo(t, env);
+  flowOn(env);
+  const pinned = env.board.create(env.c, { title: 'Pinned', column: 'ready', agent: { provider: 'codex' }, folderId: 'a' });
+  const loose = env.board.create(env.c, { title: 'No agent', column: 'ready', agent: null, tier: 'light', dependsOn: [pinned.id], folderId: 'a' });
+  const left = env.board.create(env.c, { title: 'Left in Ready', column: 'ready', agent: null, folderId: 'a' });
+  env.script(`Pinned`, 'hold');
+  const made = env.schedules.create(env.c, { target: { type: 'cards', cardIds: [pinned.id, loose.id] }, flow: { shared: limit }, when: { repeat: 'daily', time: '09:00' } });
+  env.at(2026, 10, 11, 9, 0);
+  await env.schedules.tick();
+  const schedule = env.schedule(made.id), [first, second] = schedule.last.taskIds.map(env.task);
+  assert.deepEqual([first.provider, first.routing, second.provider, second.routing], ['codex', undefined, 'claude', { mode: 'smart', planned: 'light' }], 'The pinned card keeps its agent; Flow picks for the other at its size.');
+  assert.equal(routed.asked.filter(item => item !== 'rows').length, 1, 'Only the card with no agent is routed.');
+  assert.deepEqual([first.batch.id === second.batch.id, first.batch.limits, second.board.flow, second.dependsOn], [true, limit, true, [first.id]]);
+  assert.equal(env.broker.execution.current(env.c, second.execution.taskId).mode, 'flow', 'The card Flow picks for runs under a Flow policy of its own.');
+  assert.equal(env.broker.execution.current(env.c, first.execution.taskId).mode, 'normal', 'The pinned card runs as you set it.');
+  assert.equal(second.billingConfirmed, false, 'Nothing bills by use, as no one was asked.');
+  assert.match(first.requestId, /^schedule-/);
+  assert.equal(env.card(left.id).column, 'ready', 'A card you didn’t tick isn’t added.');
+  // Leaving Flow ends what hasn't started and pauses the schedule, which only resumes in Flow.
+  flowOff(env);
+  assert.deepEqual([env.card(loose.id).column, env.task(second.id).status], ['ready', 'cancelled']);
+  assert.deepEqual([env.schedule(made.id).paused, env.schedule(made.id).pausedBy, env.schedule(made.id).nextAt], [true, 'flow', null]);
+  assert.throws(() => env.schedules.pause(env.c, made.id, { paused: false }), /Turn Flow on to resume/);
+  await assert.rejects(env.schedules.runNow(env.c, made.id), /Turn Flow on to run/);
+  flowOn(env);
+  env.schedules.pause(env.c, made.id, { paused: false });
+  assert.equal(env.schedule(made.id).nextAt, new Date(local(2026, 10, 12, 9, 0)).toISOString());
+  env.release(first.id);
+  await until(() => env.card(pinned.id).column === 'review', 'the pinned card to finish');
+});
+
+test('a Flow schedule waits when no agent Flow may use has room, and an edited card waits for you', { skip: scriptCLIs }, async t => {
+  const env = setup(t), iso = (...parts) => new Date(local(...parts)).toISOString();
+  const routed = routeTo(t, env, () => ({ error: 'Auto found no connected agent within your rules.' }));
+  flowOn(env);
+  const card = env.board.create(env.c, { title: 'Tidy', column: 'ready', agent: null, folderId: 'a' });
+  const made = env.schedules.create(env.c, { target: { type: 'card', cardId: card.id }, flow: { shared: limit }, when: { repeat: 'daily', time: '09:00' } });
+  const notices = []; env.broker.on('notify', notice => notices.push(notice));
+  env.at(2026, 10, 11, 9, 0);
+  await env.schedules.tick();
+  assert.match(env.schedule(made.id).missed.reason, /^Flow found no agent for it: Auto found no connected agent/);
+  assert.equal(env.card(card.id).column, 'ready');
+  // Every agent at its limit, resetting within ten minutes: it waits for any of them, not one by name.
+  routed.set(rows => ({ provider: rows[0].provider, quota: { state: 'exhausted', windows: [{ state: 'exhausted', resetsAt: iso(2026, 10, 12, 9, 5) }] } }));
+  env.at(2026, 10, 12, 9, 0);
+  await env.schedules.tick();
+  assert.deepEqual([env.schedule(made.id).waiting.provider, env.schedule(made.id).waiting.resetsAt], [null, iso(2026, 10, 12, 9, 5)]);
+  assert.match(notices.at(-1).body, /Every agent Flow may use is at its usage limit/);
+  env.schedules.pause(env.c, made.id); env.schedules.pause(env.c, made.id, { paused: false });
+  // An edited card doesn't run on its own, and no usage is read for it.
+  env.board.edit(env.c, card.id, { notes: 'Also the docs folder.' });
+  const asked = routed.asked.length;
+  env.at(2026, 10, 13, 9, 0);
+  await env.schedules.tick();
+  assert.match(env.schedule(made.id).missed.reason, /“Tidy” changed after it was scheduled/);
+  assert.equal(routed.asked.length, asked);
+});
+
+test('a Flow prompt with no agent runs as one task Flow routes, under the schedule’s limit, and ends when you leave Flow', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  routeTo(t, env);
+  flowOn(env);
+  const made = env.schedules.create(env.c, { target: { type: 'prompt', text: 'Triage new issues.', agent: null }, flow: { shared: limit }, when: { repeat: 'daily', time: '09:00' } });
+  env.at(2026, 10, 11, 9, 0);
+  await env.schedules.tick();
+  const task = env.task(env.schedule(made.id).last.taskId);
+  assert.deepEqual([task.provider, task.routing, task.batch.flow, task.batch.limits, task.billingConfirmed], ['claude', { mode: 'smart', planned: null }, true, limit, false]);
+  assert.equal(env.broker.execution.current(env.c, task.execution.taskId).mode, 'flow');
+  assert.deepEqual(env.board.view(env.c).runs.map(run => [run.title, run.cards.length]), [['Triage new issues.', 0]], 'The Plan shows the run by the prompt’s name.');
+  flowOff(env);
+  assert.equal(env.schedule(made.id).paused, true);
+  await until(() => !['waiting', 'running'].includes(env.task(task.id).status) || env.broker.execution.current(env.c, task.execution.taskId).mode === 'normal', 'Flow to let go of the task');
+  if (['waiting', 'running'].includes(env.task(task.id).status)) { env.release(task.id); await until(() => !['waiting', 'running'].includes(env.task(task.id).status), 'the task to end'); }
+});

@@ -199,7 +199,7 @@ export class Subtasks {
     const requestId = `task-${task.id}-sub-${sub.id}-${randomUUID().slice(0, 6)}`;
     const subtasks = (card.subtasks || []).map(item => item.id === sub.id ? { ...item, status: 'running', taskId: task.id, requestId, startedAt: new Date().toISOString() } : item);
     this.board.update(c, card, { subtasks });
-    const input = { text: subtaskRequest({ ...card, subtasks }, sub, { brief }), role: task.role || card.role || 'builder', mode: task.accessMode, approvalPolicy: task.approvalPolicy, billingConfirmed: task.billingConfirmed, requestId };
+    const input = { text: subtaskRequest({ ...card, subtasks }, sub, { brief }), role: task.role || card.role || 'builder', mode: task.accessMode, approvalPolicy: task.approvalPolicy, billingConfirmed: task.billingConfirmed, requestId, ...(task.attachments?.length ? { attachments: task.attachments } : {}) };
     // Chosen by you: that agent, model and effort. On Smart, the subtask's own or its card's: routed at the subtask's size,
     // as a Flow message is (#12). Otherwise the card's own agent, as for a card Flow started that you took over from Flow,
     // which no longer chooses an agent for it (TaskCoordinator.leaveFlow).

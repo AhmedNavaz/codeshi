@@ -1,4 +1,4 @@
-import { isAntigravityACP, antigravityReadOnly } from './antigravity.mjs';
+import { isAntigravityACP, antigravityReadOnly, skillHome, homeSkillsFolder, skillHomesSupported } from './antigravity.mjs';
 import { fork } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -19,13 +19,14 @@ import { observeReading, observeRunSize, usageWatch, usualWindowSpend } from './
 import { contextControlView, estimateContext, findMessage, managedContextVersion, milestoneMemory, observationsFor, REFRESH_HISTORY, rolloverDecision, sessionSeed } from './context-rollover.mjs';
 import { waitingSummary } from './context-fold.mjs';
 import { privatePath } from './task-context.mjs';
+import { RetrievalIndex } from './retrieval-index.mjs';
 import { carriedPlan, reportedPlan } from './task-plan.mjs';
 import { TaskCoordinator } from './task-coordinator.mjs';
 import { cleanEntryInput, editedEntry, isSuggestionKey, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
 import { planCopy, writeCopy } from './memory-instructions.mjs';
 import { applyBudgetRecord, finishingRun, isExplicitRetry, TaskBudgets } from './task-budget.mjs';
 import { noteActivity } from './activity.mjs';
-import { SkillCatalog, CLAUDE_PLUGIN } from './skills.mjs';
+import { SkillCatalog, CLAUDE_PLUGIN, AGENT_NAMES, skillRead } from './skills.mjs';
 import { fileChanges, toolInput } from './activity-format.mjs';
 import { AttachmentStore, attachmentLimits } from './attachments.mjs';
 import { processStart, reused } from './mutation-lock.mjs';
@@ -149,6 +150,8 @@ export class Broker extends EventEmitter {
     this.dataDir = dataDir; this.googleRoot = googleRoot; this.verificationCadence = verificationCadence; this.contextLimit = contextLimit; this.contextRouting = contextRouting;
     this.skills = new SkillCatalog(this);
     this.attachments = new AttachmentStore(dataDir);
+    // The saved file index each fresh brief looks files up in (#85), kept next to the journal.
+    this.retrieval = new RetrievalIndex(path.join(dataDir, 'retrieval'), { privatePath });
     this.configuredBins = { ...bins };
     this.acquireMutation = acquireMutation;
     this.bins = Object.fromEntries(PROVIDERS.map(provider => [provider, resolveBinary(provider, { override: bins[provider], googleRoot: this.googleRoot })]));
@@ -679,7 +682,7 @@ export class Broker extends EventEmitter {
     const provider = c.provider, text = c.messages.some(message => message.role === 'user') ? continuationRequest : 'Preview';
     const decision = rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: c.routing?.mode || this.contextRouting() });
     const rollover = decision.rollover ? { ...decision, memory: milestoneMemory(c, { folders: this.workspaceFolders, text }) } : null;
-    const prepared = prepareContext(c, text, { verification: verificationForRun(this.verificationCadence()), rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode: c.mode, policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: this.skills.forTask(c, { text, relation: text === continuationRequest ? 'continuation' : null, fresh: true, provider, native: provider === 'claude' && transportFor(provider, c.transport || 'auto', this.configuredBins[provider]) === 'sdk' }), readAttachment: () => ({ text: '' }), includeImages: false });
+    const prepared = prepareContext(c, text, { verification: verificationForRun(this.verificationCadence()), rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode: c.mode, policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), retrieval: this.retrieval, skills: this.skills.forTask(c, { text, relation: text === continuationRequest ? 'continuation' : null, fresh: true, provider, native: this.nativeSkillRoute(provider, transportFor(provider, c.transport || 'auto', this.configuredBins[provider])) }), readAttachment: () => ({ text: '' }), includeImages: false });
     const envelope = JSON.parse(prepared.prompt.slice(prepared.prompt.indexOf('\n') + 1));
     return { brief: envelope.brief || null, ...(envelope.milestone ? { milestone: envelope.milestone } : {}), metadata: prepared.metadata };
   }
@@ -1028,7 +1031,7 @@ export class Broker extends EventEmitter {
       if (models.length ? !allowedModels.length : !allowed(null)) continue;
       const usualSpend = usualWindowSpend(c, provider);
       const activeTasks = this.handoff?.activeTasksOn?.(provider, run.id) || 0;
-      const nativeSkills = provider === 'claude' && !this.configuredBins?.claude && (provider === c.provider ? c.transport || 'auto' : c.transports?.claude || 'auto') !== 'cli';
+      const nativeSkills = this.nativeSkillsFor(c, provider);
       const unsupportedSkills = this.skills?.unsupportedFor?.(c, provider, { native: nativeSkills }) || [];
       candidates.push({ provider, account, models: models.filter(m => !allowedModels.length || allowedModels.includes(m.id || m.model || m.value)), billingSource: account.billingSource, usage: provUsage, eligible: true, images: this.imageConnection(c, provider, account), ...(allowedModels.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}), ...(activeTasks ? { activeTasks } : {}), ...(outcomes ? { outcomes } : {}), ...(unsupportedSkills.length ? { unsupportedSkills } : {}) });
     }
@@ -1146,7 +1149,7 @@ export class Broker extends EventEmitter {
     const sessionReason = review ? 'review' : local ? 'local-handoff' : rollover ? 'context-rollover' : changedWorkspace ? 'workspace-changed' : switchedAgent ? 'cross-agent-handoff' : fresh ? 'explicit-restart' : effectiveFresh ? 'new-conversation' : 'same-agent-continuation';
     let sessionId = effectiveFresh ? null : c.sessions[provider]?.id;
     const verification = verificationForRun(this.verificationCadence(), { retryOf, automaticReview });
-    let prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, orchestrate ? planningRequest(text, { documents, revising, conversational: this.planChat === true, folders: this.workspaceFolders }) : text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, taskScope: this.taskScope(), fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.forAgent(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh || restoreAfterCompaction(c, provider, effectiveFresh), provider, native: !review && provider === 'claude' && actualTransport === 'sdk' }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
+    let prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, orchestrate ? planningRequest(text, { documents, revising, conversational: this.planChat === true, folders: this.workspaceFolders }) : text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, taskScope: this.taskScope(), fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.forAgent(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), retrieval: this.retrieval, skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh || restoreAfterCompaction(c, provider, effectiveFresh), provider, native: !review && this.nativeSkillRoute(provider, actualTransport) }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
     if (review && Buffer.byteLength(prepared.prompt) > 192000) throw Object.assign(new Error('Review context exceeds 192 KB. Select fewer files or shorten the saved project brief.'), { status: 413 });
     if (actualTransport === 'cli' && prepared.images.length) throw Object.assign(new Error('Image attachments require the native Codex or Claude connection. Switch the transport from CLI, or remove the images.'), { status: 400 });
     const images = prepared.images.map(file => this.attachments.imageInput(file.id));
@@ -1167,7 +1170,7 @@ export class Broker extends EventEmitter {
         ...(automaticReview ? { automaticReview } : {}),
         message: { id: randomUUID(), role: 'user', text, ...(author ? { author } : {}), ...(text === continuationRequest ? { continuation: true } : {}), ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(orchestrate ? { orchestrationId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { mode: routing.mode, reason: routing.reason, policy: globalThis.relayRouting.POLICY_VERSION, ...(routing.selectedBy === 'you' ? { selectedBy: 'you' } : {}), ...(routing.tier ? { tier: routing.tier } : {}), ...(routing.steppedDown ? { steppedDown: true } : {}), ...(routing.plannedHandoff ? { plannedHandoff: true } : {}), ...(routing.assessment ? { ratedBy: routing.assessment.source, ...(routing.assessment.ms ? { ratedMs: routing.assessment.ms } : {}) } : {}), model, effort } } : {}), ...(retryOf ? { retry: { of: retryOf } } : {}), provider, createdAt: new Date().toISOString(), runId } });
     } catch (error) { lease.release(); throw error; }
-    for (const skill of prepared.metadata?.skills || []) this.message(c, 'activity', skill.route === 'native' && !skill.delivered ? `Asked Claude to use skill ${skill.name}: ${skill.reason}` : `Using skill ${skill.name}: ${skill.reason}`, provider);
+    for (const skill of prepared.metadata?.skills || []) this.message(c, 'activity', skill.route === 'native' && !skill.delivered ? `Asked ${AGENT_NAMES[provider] || provider} to use skill ${skill.name}: ${skill.reason}` : `Using skill ${skill.name}: ${skill.reason}`, provider);
     // A message sent by hand takes the place of a wait for a reset.
     if (c.resume && !resume && !review) this.resume.end(c, 'superseded');
     // So does any new run for an offered retry.
@@ -1301,7 +1304,7 @@ export class Broker extends EventEmitter {
                 if (account.authenticated === false) throw Object.assign(new Error('Sign in through the provider’s supported authentication flow before running.'), { category: 'authentication' });
                 if (account.billingSource !== 'subscription' && !billingConfirmed) throw Object.assign(new Error(`Billing source is ${account.billingSource}. Explicitly confirm this provider run before it may consume usage.`), { category: 'permission' });
                 run.billingSource = account.billingSource;
-                prepared = prepareContext(c, text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode, session: { sessionReason: 'cross-agent-handoff', previousProvider }, attachments, readAttachment: id => this.attachments.forAgent(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: true, provider, native: provider === 'claude' && actualTransport === 'sdk' }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
+                prepared = prepareContext(c, text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode, session: { sessionReason: 'cross-agent-handoff', previousProvider }, attachments, readAttachment: id => this.attachments.forAgent(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), retrieval: this.retrieval, skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: true, provider, native: this.nativeSkillRoute(provider, actualTransport) }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
                 this.record(c, { type: 'run_metadata', metadata: { routingFallback: { from: previousProvider, fromModel: previousModel, to: provider, toModel: model, toEffort: effort ?? null, toTransport: actualTransport, freshSession: !sessionId, reason: `${previousProvider} quota is ${quota.state} (${globalThis.relayRouting.quotaText(quota)})` } } });
                 this.message(c, 'activity', `${previousProvider === 'codex' ? 'Codex' : previousProvider === 'claude' ? 'Claude' : 'Gemini'} is near its quota limit (${globalThis.relayRouting.quotaText(quota)}). Smart routing switched to ${provider === 'claude' ? 'Claude' : provider === 'gemini' ? 'Gemini' : 'Codex'}${model ? ` (${model})` : ''}.`, provider);
                 if (fallback.usage) this.observeQuota(c, provider, fallback.usage);
@@ -1338,10 +1341,18 @@ export class Broker extends EventEmitter {
         if (remainingSpend !== null) this.record(c, { type: 'run_metadata', metadata: { budgetEnforcement: { spend: maxBudgetUsd !== null ? 'native' : 'reported-usage', maxSpendUSD: remainingSpend } } });
         // The worker cannot launch a provider until its PID and mutation lease are durable.
         if (this.execution.current(c, task.id)?.override?.scope === 'step') this.record(c, { type: 'execution_override_used', taskId: task.id });
-        // Claude through its SDK gets the enabled skills through its own skill system (#86), from Codeshi's private plugin.
-        if (provider === 'claude' && actualTransport === 'sdk' && !review && !local && prepared.metadata?.skillCatalog) {
-          try { run.nativeSkills = this.skills.claudePlugin(c, { chosen: (prepared.metadata.skills || []).map(skill => skill.name) }); }
-          catch (error) { this.message(c, 'activity', clip(`Couldn't give Claude the enabled skills: ${error.message}`), provider); }
+        // Each agent gets the enabled skills through its own skill system (#86): Claude from Codeshi's private plugin, Codex
+        // and Gemini from a private copy. Codex gets its scope even with none enabled, so it uses no skill you didn't enable.
+        if (!review && !local && this.nativeSkillRoute(provider, actualTransport) && (provider === 'codex' || prepared.metadata?.skillCatalog)) {
+          const chosen = (prepared.metadata?.skills || []).map(skill => skill.name);
+          try {
+            if (provider === 'claude') run.nativeSkills = this.skills.claudePlugin(c, { chosen });
+            else {
+              const copy = this.skills.agentCopy(c, provider, { chosen });
+              // Gemini reads them from its home for this set of skills, which the run prepares; Codex from the copy itself.
+              run.nativeSkills = { ...copy, chosen, ...(copy.folder ? { readFrom: provider === 'gemini' ? homeSkillsFolder(skillHome(this.googleRoot, copy.folder)) : copy.folder } : {}) };
+            }
+          } catch (error) { this.message(c, 'activity', clip(`Couldn't give ${AGENT_NAMES[provider]} the enabled skills: ${error.message}`), provider); }
         }
         run.child = fork(fileURLToPath(new URL('./provider-worker.mjs', import.meta.url)), [], { cwd: this.workspace, silent: true, detached: process.platform !== 'win32', execArgv: [], env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
         run.child.on('error', error => { run.spawnError = error; });
@@ -1417,7 +1428,7 @@ export class Broker extends EventEmitter {
         this.record(c, { type: 'run_process', pid: run.child.pid, pidStart });
         lease.setProcess(run.child.pid, pidStart);
         this.execution.assert(c, execution, executionOptions); verifyExecution?.();
-        run.child.send({ type: 'start', config: { ...(maxBudgetUsd !== null && actualTransport === 'sdk' ? { maxBudgetUsd } : {}), bin, googleRoot: this.googleRoot, args: command.args, workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, prompt: prepared.prompt, images, transport: actualTransport, provider, mode, approvalPolicy, model, effort, sessionId, ...(run.nativeSkills ? { skills: { plugin: run.nativeSkills.plugin, names: run.nativeSkills.names } } : {}), ...(local ? { local } : {}), ...(review ? { reviewSnapshot: true } : {}) } });
+        run.child.send({ type: 'start', config: { ...(maxBudgetUsd !== null && actualTransport === 'sdk' ? { maxBudgetUsd } : {}), bin, googleRoot: this.googleRoot, args: command.args, workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, prompt: prepared.prompt, images, transport: actualTransport, provider, mode, approvalPolicy, model, effort, sessionId, ...(run.nativeSkills ? { skills: provider === 'claude' ? { plugin: run.nativeSkills.plugin, names: run.nativeSkills.names } : { folder: run.nativeSkills.folder, names: run.nativeSkills.names, chosen: run.nativeSkills.chosen } } : {}), ...(local ? { local } : {}), ...(review ? { reviewSnapshot: true } : {}) } });
       } catch (error) { run.errorCategory = error.category || classifyError(error); complete(null, null, error); }
     };
     launch();
@@ -1472,6 +1483,8 @@ export class Broker extends EventEmitter {
     }
     if (event.type === 'relay.delta') { const id = `${run.id}:${event.id}`; const existing = findMessage(c, id); this.message(c, 'assistant', (existing?.text || '') + event.text, provider, id, 'streaming'); return; }
     if (event.type === 'relay.notice') { this.message(c, 'activity', clip(event.text), provider); return; }
+    // Codex took a skill you asked for as its own skill input, which gives it the instructions with the message (#86).
+    if (event.type === 'relay.skill') { if (typeof event.name === 'string') this.skillUsed(run, event.name); return; }
     if (provider === 'codex' || provider === 'gemini') {
       if (!run.review && !run.local && event.type === 'thread.started' && event.thread_id) this.record(c, { type: 'session', provider, id: event.thread_id, workspaceSignature: run.workspaceSignature || this.workspaceSignature, managedContextVersion: c.activeRun?.context?.sessionMode === 'fresh' ? managedContextVersion : c.sessions[provider]?.managedContextVersion });
       if (event.type === 'turn.completed') run.terminalSuccess = true;
@@ -1501,6 +1514,8 @@ export class Broker extends EventEmitter {
           this.message(c, 'activity', 'Blocked by Read only: switch to Can edit files to let Codex use the network or change files.', provider);
         }
       }
+      // Codex and Gemini load a skill by reading its SKILL.md from their copy (#86).
+      if (event.type === 'item.completed' && run.nativeSkills?.readFrom && item.status !== 'failed' && item.failed !== true && (item.exit_code ?? 0) === 0) { const name = skillRead(item, run.nativeSkills.readFrom); if (name) this.skillUsed(run, name); }
       if (item.type === 'file_change') this.message(c, 'activity', `File changes: ${JSON.stringify(fileChanges(item.changes))}`, provider, id);
       // Saved as Claude's steps are: the tool's name, its input as one line of JSON, then its result.
       if (item.type === 'agent_tool') this.message(c, 'activity', clip(`${item.name}\n${toolInput(item.name, item.input)}${item.result ? `\n${item.result}` : ''}`), provider, id, undefined, { status: event.type === 'item.completed' ? 'completed' : 'running', isError: item.failed === true });
@@ -1582,16 +1597,33 @@ export class Broker extends EventEmitter {
     }
   }
 
-  // Claude loaded one of the enabled skills with its own Skill tool (#86). Saved with the run, at the version it loaded, so
+  // Claude loaded one of the enabled skills with its own Skill tool (#86). A load is saved with the run, at its version, so
   // a later message of this task, or the agent it's handed to, carries on with the same skill.
   skillLoaded(run, called) {
-    const { c, provider } = run, prefix = `${CLAUDE_PLUGIN}:`, name = called.replace(/^\//, '').startsWith(prefix) ? called.replace(/^\//, '').slice(prefix.length) : null;
+    const prefix = `${CLAUDE_PLUGIN}:`, name = called.replace(/^\//, '').startsWith(prefix) ? called.replace(/^\//, '').slice(prefix.length) : null;
+    if (name) this.skillUsed(run, name);
+  }
+  // An agent loaded one of the enabled skills with its own skill system: Claude's Skill tool, or Codex or Gemini reading it.
+  skillUsed(run, name) {
+    const { c, provider } = run, agent = AGENT_NAMES[provider] || provider;
     const version = name && run.nativeSkills?.versions?.[name], skill = version && (c.skills || []).find(item => item.name === name && item.version === version);
     if (!skill || run.skillsLoaded?.has(name)) return;
     (run.skillsLoaded ||= new Set()).add(name);
     const asked = (c.activeRun?.context?.skills || []).find(item => item.name === name);
-    this.record(c, { type: 'skill_loaded', runId: run.id, skill: { name, version, reason: asked?.reason || 'Claude chose it from its skill list', source: skill.sourceLabel, ...(skill.revision ? { revision: skill.revision } : {}), route: 'native', delivered: true } });
-    this.message(c, 'activity', `Claude loaded skill ${name}${asked ? '' : ' on its own'}.`, provider);
+    this.record(c, { type: 'skill_loaded', runId: run.id, skill: { name, version, reason: asked?.reason || `${agent} chose it from its skill list`, source: skill.sourceLabel, ...(skill.revision ? { revision: skill.revision } : {}), route: 'native', delivered: true } });
+    this.message(c, 'activity', `${agent} loaded skill ${name}${asked ? '' : ' on its own'}.`, provider);
+  }
+  // Whether an agent gets the enabled skills through its own skill system (#86) on this connection: Claude through its SDK,
+  // Codex through its app-server, Gemini through Antigravity (not on Windows). An agent run from a path you set
+  // (AI_RELAY_*_BIN, or a test's stand-in) gets them as instructions.
+  // The same for a conversation's saved connection to that agent, before a run has chosen one.
+  nativeSkillsFor(c, provider) { return this.nativeSkillRoute(provider, transportFor(provider, provider === c?.provider ? c?.transport || 'auto' : c?.transports?.[provider] || 'auto', this.configuredBins[provider])); }
+  nativeSkillRoute(provider, transport) {
+    if (this.configuredBins?.[provider]) return false;
+    if (provider === 'claude') return transport === 'sdk';
+    if (provider === 'codex') return transport === 'app-server';
+    if (provider === 'gemini') return transport === 'acp' && isAntigravityACP(resolveBinary('gemini', { googleRoot: this.googleRoot })) && skillHomesSupported();
+    return false;
   }
 
   signal(run, signal) {

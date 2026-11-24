@@ -176,7 +176,7 @@ export class RoutingDispatcher {
       const eligible = account?.installed !== false && account?.authenticated !== false && (provider !== 'gemini' || ((input.mode !== 'read' && input.orchestrate !== true) || !antigravity) && (!multiple || (antigravity ? account?.capabilities?.additionalDirectories === true : broker.workspaces.length <= 6)));
       const usualSpend = usualWindowSpend(c, provider);
       const activeTasks = broker.handoff?.activeTasksOn?.(provider) || 0;
-      const nativeSkills = provider === 'claude' && !broker.configuredBins?.claude && (provider === c?.provider ? c?.transport || 'auto' : c?.transports?.claude || 'auto') !== 'cli';
+      const nativeSkills = broker.nativeSkillsFor?.(c, provider) ?? false;
       const unsupportedSkills = broker.skills ? broker.skills.unsupportedFor(c, provider, { native: nativeSkills }) : [];
       return [{ provider, models, usage, eligible: eligible && (!policy.allowedProviders || policy.allowedProviders.includes(provider)), account, bin, readAt: at, billingSource: account?.billingSource || 'unknown', images: broker.imageConnection?.(c, provider, account), allowedModels: policy.allowedModels?.[provider], ...(usualSpend ? { usualSpend } : {}), ...(activeTasks ? { activeTasks } : {}), ...(outcomes ? { outcomes } : {}), ...(unsupportedSkills.length ? { unsupportedSkills } : {}) }];
     });

@@ -1,0 +1,48 @@
+/* Sketch a page (#125): the sections to add on the left, the page in the middle, the numbered notes on the right. */
+.sketch-dialog { width: min(1240px, calc(100vw - 48px)); height: min(860px, calc(100vh - 48px)); max-width: none; max-height: none; padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); overflow: hidden; }
+.sketch-dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.sketch-dialog::backdrop { background: var(--backdrop); }
+.sketch-head { display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 16px; border-bottom: 1px solid var(--border); }
+.sketch-title { margin: 0; color: var(--text-strong); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.sketch-name { flex: 0 1 260px; min-width: 120px; height: var(--control-md, 28px); padding: 0 8px; border: 1px solid var(--input-border); border-radius: var(--radius); background: var(--bg); color: var(--text); font: inherit; font-size: 12.5px; }
+.sketch-name:focus { outline: none; border-color: var(--focus); }
+.sketch-frames { display: inline-flex; margin-left: auto; padding: 2px; border: 1px solid var(--border); border-radius: var(--radius); }
+.sketch-frame { height: 24px; padding: 0 10px; border: 0; border-radius: calc(var(--radius) - 2px); background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+.sketch-frame:hover { color: var(--text); }
+.sketch-frame[aria-pressed="true"] { background: var(--list-active); color: var(--text-strong); }
+.sketch-close::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon-close) center / contain no-repeat; mask: var(--icon-close) center / contain no-repeat; }
+.sketch-body { display: grid; grid-template-columns: 128px minmax(0, 1fr) 300px; min-height: 0; }
+.sketch-palette { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; border-right: 1px solid var(--border); overflow: auto; }
+.sketch-label { padding: 0 8px 4px; color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.sketch-kind { height: 26px; padding: 0 8px; border: 0; border-radius: var(--radius); background: none; color: var(--text); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.sketch-kind::before { content: "+"; display: inline-block; width: 14px; color: var(--faint); }
+.sketch-kind:hover:enabled { background: var(--hover); }
+.sketch-kind:disabled { color: var(--faint); cursor: default; }
+.sketch-stage { position: relative; min-width: 0; padding: 24px; overflow: auto; background: var(--bg); }
+.sketch-frame-area { position: relative; margin: 0 auto; border: 1px solid var(--border-strong); border-radius: 4px; background-color: var(--panel-bg); background-image: linear-gradient(to right, var(--border) 1px, transparent 1px), linear-gradient(to bottom, var(--border) 1px, transparent 1px); cursor: crosshair; touch-action: none; user-select: none; }
+.sketch-empty { position: absolute; top: 96px; left: 50%; width: min(380px, calc(100% - 64px)); margin: 0; transform: translateX(-50%); color: var(--muted); font-size: 12.5px; line-height: 1.5; text-align: center; pointer-events: none; }
+.sketch-box { position: absolute; box-sizing: border-box; display: flex; align-items: flex-start; gap: 6px; padding: 6px; border: 1.5px solid var(--muted); border-radius: 3px; background: color-mix(in srgb, var(--overlay-bg) 88%, transparent); color: var(--text-strong); font-size: 12px; cursor: move; overflow: hidden; }
+.sketch-box:hover { border-color: var(--text); }
+.sketch-box.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); z-index: 1; }
+.sketch-box:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.sketch-badge { flex: none; width: 20px; height: 20px; border-radius: 10px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 600; line-height: 20px; text-align: center; }
+.sketch-box-kind { min-width: 0; padding-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sketch-handle { position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, var(--muted) 50%); }
+.sketch-box.selected .sketch-handle { background: linear-gradient(135deg, transparent 50%, var(--accent) 50%); }
+.sketch-side { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--border); }
+.sketch-side-head { display: flex; align-items: baseline; justify-content: space-between; padding: 12px 14px 8px; font-size: 12.5px; }
+.sketch-count { color: var(--faint); font-size: 11.5px; }
+.sketch-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0 14px 14px; overflow: auto; list-style: none; }
+.sketch-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) 24px; gap: 6px 8px; align-items: center; padding: 6px; border-radius: var(--radius); }
+.sketch-row.selected { background: var(--hover); }
+.sketch-row-kind { height: 24px; min-width: 0; padding: 0 4px; border: 1px solid var(--input-border); border-radius: var(--radius); background: var(--bg); color: var(--text); font: inherit; font-size: 12px; }
+.sketch-remove::before { content: ""; width: 13px; height: 13px; background: currentColor; -webkit-mask: var(--icon-trash) center / contain no-repeat; mask: var(--icon-trash) center / contain no-repeat; }
+.sketch-remove { width: 24px; height: 24px; color: var(--muted); }
+.sketch-note, .sketch-overall { box-sizing: border-box; width: 100%; padding: 6px 8px; border: 1px solid var(--input-border); border-radius: var(--radius); background: var(--bg); color: var(--text); font: inherit; font-size: 12.5px; line-height: 1.4; resize: vertical; }
+.sketch-note { grid-column: 2 / 4; min-height: 48px; }
+.sketch-note:focus, .sketch-overall:focus, .sketch-row-kind:focus { outline: none; border-color: var(--focus); }
+.sketch-foot { display: grid; gap: 8px; padding: 10px 16px 12px; border-top: 1px solid var(--border); }
+.sketch-overall { min-height: 40px; }
+.sketch-actions { display: flex; align-items: center; gap: 8px; }
+.sketch-spacer { flex: 1; }
+@media (max-width: 860px) { .sketch-body { grid-template-columns: 112px minmax(0, 1fr); } .sketch-side { display: none; } }

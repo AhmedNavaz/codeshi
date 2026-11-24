@@ -6,9 +6,11 @@ import path from 'node:path';
 import { gitExecutable } from './resolve-binary.mjs';
 import { workspaceGit } from './workspace-git.mjs';
 import { commandOutcome } from './tool-outcomes.mjs';
+import { fileNameWords } from './request-words.mjs';
 
 // Task-scoped context (#85): the facts a fresh agent needs to pick a task up, worked out locally from the saved
-// conversation and the folders as they are now. No model is called, and nothing is kept outside the journal.
+// conversation and the folders as they are now. No model is called. Besides the journal, only the file index in
+// retrieval-index.mjs is kept, and it locates files without holding their text.
 //
 // Everything is read when the prompt is built, so a file reference can't be stale when it is sent. A session that resumes
 // is only told what changed since. All of this is evidence for the agent to check. Text from files and tools stays inside
@@ -164,25 +166,54 @@ function changedFiles(messages, folders) {
 }
 
 // Files and symbols the request names, found locally. Each excerpt says which version of the file it came from.
-function relevantFiles(words, folders) {
+// retrieval is the saved index (retrieval-index.mjs): with it, a file named by its name alone is found wherever it is, a
+// symbol's excerpt is where it is defined rather than where it is first mentioned, and files whose names share two
+// telling words with the request are listed. Without it, or for a folder it can't list, the search is as before.
+function relevantFiles(words, folders, retrieval = null) {
   const results = new Map(), capturedAt = new Date().toISOString();
+  const indexes = new Map(folders.map(folder => { try { return [folder.id, retrieval?.for(folder) || null]; } catch { return [folder.id, null]; } }));
+  const listed = (folder, relative, reason) => {
+    const key = folder.id + '\0' + relative, found = readableFile(folder, relative);
+    if (!found || results.has(key)) return;
+    results.set(key, { folder: folderName(folder), folderId: folder.id, path: relative, bytes: found.stat.size, reason, ...(found.stat.size <= 2 * 1024 * 1024 ? { sha256: sha256(fs.readFileSync(found.file)) } : {}), capturedAt });
+  };
   const tokens = [...new Set(words.match(/[\w@.-]+(?:\/[\w@.-]+)+|[\w-]+\.[A-Za-z]\w{0,7}\b/g) || [])].slice(0, 20);
   for (const token of tokens) for (const folder of folders) {
-    const found = readableFile(folder, token);
-    if (found) results.set(folder.id + '\0' + token, { folder: folderName(folder), folderId: folder.id, path: token, bytes: found.stat.size, reason: 'named', ...(found.stat.size <= 2 * 1024 * 1024 ? { sha256: sha256(fs.readFileSync(found.file)) } : {}), capturedAt });
+    if (readableFile(folder, token)) { listed(folder, token, 'named'); continue; }
+    // A name that fits one or two files: routing.js for public/routing.js. More than that says too little.
+    const matches = indexes.get(folder.id)?.named(token) || [];
+    if (matches.length && matches.length <= 2) for (const relative of matches) listed(folder, relative, `named as ${token}`);
   }
   const symbols = [...new Set([...words.matchAll(/`([A-Za-z_$][\w$]{3,})`/g)].map(match => match[1]).concat(words.match(/\b[a-z]+[A-Z]\w{2,}\b|\b[A-Za-z]+_\w{3,}\b/g) || []))].slice(0, 4);
+  const excerpt = (folder, relative, at, reason) => {
+    const found = readableFile(folder, relative);
+    if (!found || !at || found.stat.size > 2 * 1024 * 1024) return false;
+    const bytes = fs.readFileSync(found.file), lines = bytes.toString('utf8').split('\n'), start = Math.max(0, at - 1 - Math.floor(EXCERPT_LINES / 2)), end = Math.min(lines.length, start + EXCERPT_LINES);
+    results.set(folder.id + '\0' + relative, { folder: folderName(folder), folderId: folder.id, path: relative, sha256: sha256(bytes), lines: [start + 1, end], reason, excerpt: lines.slice(start, end).map(value => value.slice(0, 200)).join('\n'), capturedAt });
+    return lines;
+  };
   let excerpts = 0;
   for (const symbol of symbols) for (const folder of folders) {
     if (excerpts >= EXCERPT_FILES) break;
+    const index = indexes.get(folder.id);
+    // A file already listed by its name still gets the excerpt of what it defines.
+    const definition = index?.defined(symbol).find(item => !privatePath(item.path) && !results.get(folder.id + '\0' + item.path)?.excerpt);
+    if (definition) {
+      const key = folder.id + '\0' + definition.path, listedBefore = results.get(key);
+      const lines = excerpt(folder, definition.path, definition.line, `defines ${symbol}`);
+      // The index is only a locator: a definition no longer on its line means the file changed, so it is read again next time.
+      if (lines && String(lines[definition.line - 1] || '').includes(symbol)) { excerpts++; continue; }
+      if (listedBefore) results.set(key, listedBefore); else results.delete(key);
+      retrieval.forget(folder, definition.path);
+    }
     const hit = git(folder, ['grep', '-n', '-I', '-F', '--max-count=1', '-e', symbol])?.split('\n').find(line => { const relative = line.split(':')[0]; return relative && !privatePath(relative) && !results.has(folder.id + '\0' + relative); });
     if (!hit) continue;
-    const [relative, line] = hit.split(':'), found = readableFile(folder, relative), at = Number(line);
-    if (!found || !at || found.stat.size > 2 * 1024 * 1024) continue;
-    const bytes = fs.readFileSync(found.file), lines = bytes.toString('utf8').split('\n'), start = Math.max(0, at - 1 - Math.floor(EXCERPT_LINES / 2)), end = Math.min(lines.length, start + EXCERPT_LINES);
-    results.set(folder.id + '\0' + relative, { folder: folderName(folder), folderId: folder.id, path: relative, sha256: sha256(bytes), lines: [start + 1, end], reason: `mentions ${symbol}`, excerpt: lines.slice(start, end).map(value => value.slice(0, 200)).join('\n'), capturedAt });
-    excerpts++;
+    const [relative, line] = hit.split(':');
+    if (excerpt(folder, relative, Number(line), `mentions ${symbol}`)) excerpts++;
   }
+  const wanted = fileNameWords(words), byName = [];
+  if (wanted.size) for (const folder of folders) for (const match of indexes.get(folder.id)?.matching(wanted) || []) if (!privatePath(match.path)) byName.push({ folder, ...match });
+  for (const match of byName.sort((a, b) => b.matched.length - a.matched.length || a.depth - b.depth).slice(0, 3)) listed(match.folder, match.path, `name matches ${match.matched.join(', ')}`);
   return [...results.values()].slice(0, 8);
 }
 
@@ -210,12 +241,12 @@ export function failedAttempts(messages, runs) {
 }
 
 // The brief itself. fresh means an agent starting with nothing; otherwise it says only what changed since this session's last run.
-export function taskBrief(c, { source, scope, folders, primary, text, taskMessages, words, fresh, provider, journal }) {
+export function taskBrief(c, { source, scope, folders, primary, text, taskMessages, words, fresh, provider, journal, retrieval = null }) {
   const scoped = folders.filter(folder => scope.folders.includes(folder.id));
   const previous = c.lastRun?.provider === provider ? c.lastRun.context : null;
   const hashes = {};
   const changes = fresh ? changedFiles(taskMessages, scoped) : null;
-  const relevant = relevantFiles(words, scoped);
+  const relevant = relevantFiles(words, scoped, retrieval);
   const revisions = Object.fromEntries(scoped.map(folder => [folder.id, revisionOf(folder)]));
   const previousFiles = Object.keys(previous?.fileHashes || {}).map(key => { const [folderId, relative] = key.split('\0'); return { folderId, path: relative }; });
   const instructions = repositoryInstructions(scoped, { provider, primary, known: fresh ? null : previous?.instructions, paths: [...(changes?.files || []), ...relevant, ...previousFiles] });

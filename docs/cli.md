@@ -91,6 +91,8 @@ Two things work differently from the window:
 | `codeshi wait` | Follows the run that's working now until it ends. With nothing working, it reports how the last run ended. |
 | `codeshi stop` | Stops the run that's working in the workspace's chat, as **Stop** does. |
 | `codeshi tasks` | Lists the workspace's tasks. |
+| `codeshi skills` | Lists the workspace's enabled skills and, for each agent, how it gets them: each agent through its own skill system. It names what an agent can't use of a skill, such as placeholders only Claude fills in, and counts the skills you could still enable. On a connection without its own skill system (Claude's command line, the Gemini CLI, Gemini on Windows) an agent gets skills as instructions, which the command doesn't check. |
+| `codeshi doctor` | Checks what stands between the terminal and an agent at work, and says what to fix: Codeshi is open, this command matches the open app's version, the workspace's folders exist and can be changed, and each agent is installed, answers and is signed in. It also says when an agent bills by use, which Flow won't choose from the terminal, and when approvals wait for you. It only reads, the same checks the window's agent status makes. |
 
 ### Options
 
@@ -130,6 +132,8 @@ With `--json` or `--jsonl`, standard output holds only JSON. Every object has `"
 | `started` | `--detach`: the run started. | 0 |
 | `idle` | `wait` or `stop` found nothing working, and no earlier run. | 0 |
 | `status`, `tasks` | The listing, in `workspaces` or `tasks`. | 0 |
+| `skills` | `skills` lists each enabled skill with `name`, `description`, `enabled`, `version`, `source`, `onlyWhenAsked`, `pinned`, `updateAvailable`, `sourceMissing`, `notes` (what's left off for every agent, without stopping the skill) and `agents`: for `codex`, `claude` and `gemini`, its `route` (`native` or `instructions`), `ready` and the `problems` that stop it working fully there. `available` counts skills you could still enable. | 0 |
+| `doctor` | `ok` and `checks`, each with `id` (such as `engine`, `folder:app` or `agent:claude`), `status` (`ok`, `info`, `warn` or `fail`), `title`, `detail` and `fix`. `fail` means no work can happen, such as a missing folder or no agent ready; `warn` means some can't. | 0, or 1 with a `fail`, or 5 when Codeshi can't be reached |
 | `incomplete` | The run ended without finishing. `errorCategory` says why when known, such as `quota` for a usage limit, and `error` holds the message. Also when `wait` followed Flow choosing an agent and no run started. | 1 |
 | `stopped` | The run was stopped, here, in the app or by Codeshi. | 1 |
 | `needs_input` | The run waits for an approval or a question. `pending` lists them, each with `id`, `kind` (`approval` or `question`), `summary` and `detail`. | 3 |
@@ -155,7 +159,7 @@ When a handoff or retry continues the task in a new run, the command follows it,
 | Code | Meaning |
 |---|---|
 | 0 | Done. |
-| 1 | The run didn't finish or was stopped. |
+| 1 | The run didn't finish or was stopped, or `doctor` found a problem that stops work. |
 | 2 | Usage: an unknown command or option, no message, or no matching workspace. |
 | 3 | The run needs your input, and the command can't ask for it. |
 | 4 | An agent is already working in the workspace's chat. |
@@ -188,5 +192,6 @@ The command never runs an engine of its own, so the app and the terminal can't b
 - Running without the desktop app at all, such as over SSH, in CI or on Linux servers.
 - Attaching images or files to a message from the session (paste a path instead).
 - Answering a split Flow suggests, or agreeing to charges, from the terminal. Both stay in the window.
-- Starting tasks in their own copy, workflows (`codeshi workflow run`), `codeshi skills` and `codeshi doctor`.
+- Starting tasks in their own copy, and workflows (`codeshi workflow run`).
+- Enabling or changing skills from the terminal. `codeshi skills` only lists them.
 - Installing on Linux.

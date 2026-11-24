@@ -47,7 +47,7 @@ const FLOW_REVIEW_NOTE = 'Flow has a Review your app card with an agent-maintain
 // policy 'task' sends the current task first and leaves out other folders' work (#85). 'recency' is the older selection, by
 // how recent each message is, kept so the two can be compared on the same work (#84). 'task-unfolded' is 'task' without
 // the rolling brief, cutting the oldest history off as before 0.38.0; only evaluations use it, as a baseline.
-export function prepareContext(c, text, { workspace, workspaces, workspaceFolders, fresh = false, provider = c.provider, mode = c.mode, maxBytes = 192000, attachments = [], readAttachment, includeImages = true, session = {}, policy = 'recency', journal = null, skills = null, verification = null, rollover = null, taskScope = null } = {}) {
+export function prepareContext(c, text, { workspace, workspaces, workspaceFolders, fresh = false, provider = c.provider, mode = c.mode, maxBytes = 192000, attachments = [], readAttachment, includeImages = true, session = {}, policy = 'recency', journal = null, skills = null, verification = null, rollover = null, taskScope = null, retrieval = null } = {}) {
   const fold = policy !== 'task-unfolded';
   if (!fold) policy = 'task';
   const restoredAfterCompaction = policy === 'task' && restoreAfterCompaction(c, provider, fresh);
@@ -86,7 +86,7 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
   const scope = task && taskFolders.length ? selectFolders([words], taskFolders, { inherited: c.lastRun?.context?.scope }) : null;
   const runs = scope ? runFolders(c.messages, taskFolders) : new Map();
   const hidden = message => Boolean(scope) && outOfScope(message, scope.folders, runs, taskFolders);
-  const compiled = scope ? taskBrief(c, { source, scope, folders: taskFolders, primary: workspace, text: continuing ? text : null, taskMessages, words, fresh: reconstruct, provider, journal }) : null;
+  const compiled = scope ? taskBrief(c, { source, scope, folders: taskFolders, primary: workspace, text: continuing ? text : null, taskMessages, words, fresh: reconstruct, provider, journal, retrieval }) : null;
   const remembered = scope ? memoryForTask(c, { words: words + '\n' + (c.context?.goal || ''), scope: scope.folders, folders: taskFolders, fresh: reconstruct, provider }) : null;
   const hasSkills = task && Boolean(skills?.catalog.length || skills?.active.length || skills?.native && skills.announce);
   // The person's requests to keep in full: the task's opening and the eight latest. Under the task policy a request sent
@@ -118,7 +118,7 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
       // Requests the envelope carries anyway, by id and by text, so the fold does not repeat them.
       const inContext = new Set([...protectedUsers.map(index => source[index].id), ...(rollover?.memory?.userRequests || []).map(item => item.messageId)]);
       const keptTexts = new Set([...protectedUsers.map(index => source[index]), ...source.slice(foldEnd)].filter(message => message.role === 'user' && !hidden(message)).map(message => sameText(message.text)));
-      earlier = earlierConversation(c, folded, { trigger: { reason, historyBytes, allowanceBytes: TASK_HISTORY_BYTES }, inContext, keptTexts, skipDecisions: new Set((rollover?.memory?.decisions || []).map(item => item.text)),
+      earlier = earlierConversation(c, folded, { trigger: { reason, historyBytes, allowanceBytes: TASK_HISTORY_BYTES }, inContext, keptTexts, request: words, skipDecisions: new Set((rollover?.memory?.decisions || []).map(item => item.text)),
         // A refresh seed stays small, or the fresh session starts close to its limit; its milestone already has the latest requests and decisions.
         limit: rollover ? EARLIER_BYTES / 2 : EARLIER_BYTES });
     }
