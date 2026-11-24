@@ -91,7 +91,7 @@ Codeshi gives every workspace three views you can switch between at the top righ
     </td>
     <td width="50%" valign="top">
       <a href="docs/features/plan.webp"><img src="docs/features/plan.webp" alt="Codeshi Plan view with cards arranged on a dependency canvas beside the Plan chat"></a><br>
-      <b>The Plan</b> <i>(Experimental)</i> — Columns, dependency <b>Canvas</b>, and <b>Outline</b> beside a dedicated <b>Plan chat</b>. Draft cards from prompts or specs, split major cards into subtasks, run with test gates, and keep changed-file diffs in Review &amp; Done.
+      <b>The Plan</b> <i>(Experimental)</i> — Columns, dependency <b>Canvas</b>, and <b>Outline</b> beside a dedicated <b>Plan chat</b>. Draft cards from prompts, sketches, or specs (including PDFs on macOS), attach up to six files per card, split major cards into subtasks, run specialist roles with test gates, and keep changed-file diffs in Review &amp; Done.
     </td>
   </tr>
 </table>
@@ -107,8 +107,8 @@ Codeshi gives every workspace three views you can switch between at the top righ
 
 - **Tasks side by side** *(Experimental)*: Run multiple tasks concurrently in the same workspace. Every task in a Git repository with at least one commit always runs in its own isolated Git worktree (copy-on-write `node_modules` clone, omitting `.env`), so the **Workspace chat** stays free. Enforces per-folder edit boundaries, opens task files from chat, and merges back with **Review and merge** or **Resolve with an agent** ([Guide](docs/guide.md#models-runs-git-and-usage)).
 - **Run and review your project** *(Experimental)*: Have an agent prepare a launch map (`.codeshi/preview.json`), start services in dependency order from a Flow card, inspect startup logs, and open previews ([Guide](docs/guide.md#models-runs-git-and-usage)).
-- **Design notes & Point and tell** (Desktop): Click elements or drag boxes on your running app's preview to attach numbered screenshots, selectors, and development source locations straight into your message box ([Guide](docs/guide.md#models-runs-git-and-usage)).
-- **Schedules**: Schedule Ready or Done cards or standalone prompts once, daily, on weekdays, or weekly in local time. Stays in the menu bar / notification area when scheduled, supports **Open at login**, and catches missed runs ([Guide](docs/guide.md#models-runs-git-and-usage)).
+- **Design notes, Sketch a page & Point and tell** (Desktop): Click elements or drag boxes on your running app's preview—or lay out a page that doesn't exist yet with **Sketch a page**—and send numbered notes and screenshots into your message box or onto the Plan with **Add to Plan** ([Guide](docs/guide.md#models-runs-git-and-usage)).
+- **Schedules**: Schedule Ready or Done cards, ticked Ready cards in Flow, or standalone prompts (with a chosen agent or on **Auto** in Flow under a shared usage limit) once, daily, on weekdays, or weekly in local time. Stays in the menu bar / notification area when scheduled, supports **Open at login**, and catches missed runs ([Guide](docs/guide.md#models-runs-git-and-usage)).
 - **Interactive approvals & cross-agent review**: Default **Ask before changes** allows reads and pauses edits, installs, commands, and network access (once, for this run, or always in this workspace). Request read-only **Cross-agent code review** from another provider against selected file snapshots and send findings back as fixes ([Guide](docs/guide.md#cross-agent-review)).
 
 ### Phone, Tracking, Terminal & Sharing
@@ -118,9 +118,9 @@ Codeshi gives every workspace three views you can switch between at the top righ
 - **Remote access** *(Experimental)*: Scan a QR code to follow live runs, approve commands, answer questions, dictate prompts, and get lock-screen notifications from a phone browser — direct over Wi-Fi or end-to-end encrypted away from home ([Guide](docs/guide.md#remote-access-away-from-home)).
 - **Activity & Work time**: Live work timer in the status bar with automatic break, lunch, wrap-up, and sleep reminders. Click it for **Activity**: today's timeline, weekly bars, monthly calendar, token breakdown by agent, and eight local monthly badges ([Guide](docs/guide.md#models-runs-git-and-usage)).
 - **While you were away & Menu bar status**: Return after two minutes to a local recap (written or read aloud) of finished runs, changed files, and waiting approvals. On macOS, Codeshi's `シ` menu bar item and optional **Progress pill** show live status from other apps ([Guide](docs/guide.md#models-runs-git-and-usage)).
-- **The `codeshi` command (CLI) & Terminal**: Interactive terminal session (`codeshi`) and scriptable subcommands (`codeshi run`, `status`, `wait`, `stop`, `continue`, `tasks --json`), sharing the window's conversation, plus an in-app **CLI** tab and multi-pane **Terminal** / **Run** panel ([CLI Reference](docs/cli.md)).
+- **The `codeshi` command (CLI) & Terminal**: Interactive terminal session (`codeshi`) and scriptable subcommands (`codeshi run`, `status`, `wait`, `stop`, `continue`, `doctor`, `skills`, `tasks --json`), sharing the window's conversation, plus an in-app **CLI** tab and multi-pane **Terminal** / **Run** panel ([CLI Reference](docs/cli.md)).
 - **Checkpoints, Timeline & Git**: Per-run undo/redo, **Timeline** checkpoint restore with conversation rewind, local **Git activity** (including image diffs), staging/commits with your own hooks, and **Open pull request** via `gh` ([Guide](docs/guide.md#models-runs-git-and-usage)).
-- **Workspace continuity & collaboration**: **Memory** and **Skills** (**Brief** panel), on-device **Voice** dictation and Flow voice conversations, [Claude Code & Codex chat import](docs/guide.md#import-claude-code-and-codex-chats), [Move to another computer](docs/guide.md#move-to-another-computer) by `.codeshibackup` file or Wi-Fi, [**Share live**](docs/guide.md#share-live-with-a-teammate) read-only/queued teammate watching, and [**Ask a Friend**](docs/guide.md#ask-a-friend) patch workflows. See the full [User Guide](docs/guide.md).
+- **Workspace continuity & collaboration**: **Memory** and native **Skills** across Claude, Codex, and Gemini (**Brief** panel), **New workspace › From GitHub** (via `gh` or **Sign in with GitHub**), on-device **Voice** dictation and Flow voice conversations, [Claude Code & Codex chat import](docs/guide.md#import-claude-code-and-codex-chats), [Move to another computer](docs/guide.md#move-to-another-computer) by `.codeshibackup` file or Wi-Fi, [**Share live**](docs/guide.md#share-live-with-a-teammate) (watch read-only, send messages, or run turns on a teammate's own account with reviewed patches), and [**Ask a Friend**](docs/guide.md#ask-a-friend) patch workflows. See the full [User Guide](docs/guide.md).
 
 ---
 
@@ -214,7 +214,7 @@ Current **Now** priorities from [ROADMAP.md](ROADMAP.md):
 | 2 | **One Plan** | Live checks of drafting cards and running a plan with several agents | [#162](https://github.com/AhmedNavaz/codeshi/issues/162) |
 | 3 | **Flow manages a whole outcome** | Live checks of a handoff between real accounts and of a split finished with real agents | [#107](https://github.com/AhmedNavaz/codeshi/issues/107) |
 | 4 | **One routing policy for the whole task** | Live check of Flow handoffs between real accounts, measured model ratings, context-size checks against a model, and automatic fallback to a local model | [#12](https://github.com/AhmedNavaz/codeshi/issues/12) |
-| 5 | **Specialist roles** | Stricter contract-first ordering, machine-readable events with distinct outcomes, and a measured comparison with one agent | [#89](https://github.com/AhmedNavaz/codeshi/issues/89) |
+| 5 | **Specialist roles** | Showing on the Plan which cards need another check after a contract or schema changes, and a measured comparison with one agent | [#89](https://github.com/AhmedNavaz/codeshi/issues/89) |
 
 See [ROADMAP.md](ROADMAP.md) for **Next**, **Later**, **Final checks**, **Ongoing checks**, **Exploring**, and **Recently shipped**, and [CHANGELOG.md](CHANGELOG.md) for release-by-release notes.
 
