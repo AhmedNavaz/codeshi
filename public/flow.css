@@ -43,8 +43,8 @@
 .mac-titlebar :is(#app-shell.flow, #app-shell.plan) .flow-brand { margin-left: 64px; }
 :is(#app-shell.flow, #app-shell.plan) .workspace-chip, :is(#app-shell.flow, #app-shell.plan) #layout-toggles, :is(#app-shell.flow, #app-shell.plan) .panel-toggles { display: none; }
 :is(#app-shell.flow, #app-shell.plan) .command-bar { grid-column: 2; grid-row: 1; width: 100%; max-width: none; margin: 0; }
-:is(#app-shell.flow, #app-shell.plan) .command-bar input { border-color: transparent; background: transparent; }
-:is(#app-shell.flow, #app-shell.plan) .command-bar input:hover { border-color: var(--border); }
+:is(#app-shell.flow, #app-shell.plan) .command-bar input { border-color: var(--border); background: transparent; }
+:is(#app-shell.flow, #app-shell.plan) .command-bar input:hover { border-color: var(--border-strong); }
 :is(#app-shell.flow, #app-shell.plan) .command-bar input:focus { border-color: var(--focus); background: var(--surface-input); }
 :is(#app-shell.flow, #app-shell.plan) .header-actions { grid-column: 3; grid-row: 1; justify-self: end; }
 :is(#app-shell.flow, #app-shell.plan) .header-lead { grid-column: 1; grid-row: 1; }
@@ -541,7 +541,6 @@ button.flow-task-row:focus-visible { outline: 2px solid var(--focus); outline-of
 .flow-phone .settings-group-description { margin-top: 0; }
 .flow-phone :is(button, input, select, summary):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 /* Flow keeps shell tools out of the conversation, including keyboard and menu entry points. */
-:is(#app-shell.flow, #app-shell.plan) #bottom-panel { display: none; }
 @media (max-width: 600px) {
   .flow-detail { width: calc(100vw - 24px); max-height: calc(100dvh - 80px); border-radius: 16px; }
   .flow-detail-head { gap: 12px; padding: 18px; }

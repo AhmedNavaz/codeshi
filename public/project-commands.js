@@ -1,26 +1,27 @@
 (() => {
   'use strict';
-  // Run, a tab of the bottom panel: the workspace's own commands, such as its dev server, tests, build or any script.
-  // The list on the left shows each one's state; the selected one's output fills the rest, with its colours, links to
-  // local addresses and Start, Stop and Restart. Commands are added or edited in a short form that offers what the
-  // folder already defines. Commands run in the person's own shell until stopped, whether or not the panel shows.
-  // A workspace with several folders lists its commands under the folder each runs in, and the output says where.
+  // Run chooses commands in the sidebar; each output has its own main tab. The process belongs to the workspace,
+  // so closing its output or switching workspaces leaves it running until Stop is used.
   const $ = id => document.getElementById(id), api = window.relayUI, panel = $('project-commands');
   if (!api || !panel) return;
-  const states = new Map(), selected = new Map(), found = new Map(), requests = new Map();
+  const states = new Map(), selected = new Map(), found = new Map(), requests = new Map(), outputs = new Map(), restored = new Set();
   const active = session => ['starting', 'running', 'stopping'].includes(session?.status);
   let projectId = '', pending = false, generation = 0, form = null, tick = 0;
-  const project = () => api.getState().projects.find(item => item.id === projectId);
-  const state = () => states.get(projectId) || { commands: [], sessions: {} };
+  const project = (scope = projectId) => api.getState().projects.find(item => item.id === scope);
+  const state = (scope = projectId) => states.get(scope) || { commands: [], sessions: {} };
   const current = () => state().commands.find(command => command.id === selected.get(projectId)) || state().commands[0] || null;
-  const sessionOf = command => command ? state().sessions[command.id] || null : null;
+  const sessionOf = (command, scope = projectId) => command ? state(scope).sessions[command.id] || null : null;
   const error = text => { $('command-error').textContent = text || ''; $('command-error').hidden = !text; };
   const node = (tag, className, text) => { const value = document.createElement(tag); if (className) value.className = className; if (text !== undefined) value.textContent = text; return value; };
-  const folderName = folderId => { const folder = project()?.folders.find(item => item.id === folderId); return folder ? folder.displayName || folder.name : ''; };
-  const place = command => [folderName(command.folderId), command.directory].filter(Boolean).join('/');
-  const several = () => (project()?.folders || []).length > 1;
+  const folderName = (folderId, scope = projectId) => { const folder = project(scope)?.folders.find(item => item.id === folderId); return folder ? folder.displayName || folder.name : ''; };
+  const place = (command, scope = projectId) => [folderName(command.folderId, scope), command.directory].filter(Boolean).join('/');
+  const several = (scope = projectId) => (project(scope)?.folders || []).length > 1;
   // Where a command runs, in full: its folder's path and the subdirectory inside it.
-  const fullPath = command => { const folder = project()?.folders.find(item => item.id === command.folderId); return folder ? [folder.path, command.directory].filter(Boolean).join('/') : ''; };
+  const fullPath = (command, scope = projectId) => { const folder = project(scope)?.folders.find(item => item.id === command.folderId); return folder ? [folder.path, command.directory].filter(Boolean).join('/') : ''; };
+  const outputKey = (scope, id) => JSON.stringify([scope, id]);
+  const tabId = id => `command:${id}`;
+  const failed = session => session?.status === 'failed' || (session?.status === 'exited' && Number(session.exitCode) !== 0);
+  const localAddress = value => { try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && !url.username && !url.password ? url.href : null; } catch { return null; } };
   const elapsed = since => { const seconds = Math.max(0, Math.round((Date.now() - Date.parse(since)) / 1000)); return seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s` : `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`; };
   function describe(session) {
     if (!session) return 'Not started';
@@ -28,7 +29,7 @@
     if (session.status === 'running') return `Running · ${elapsed(session.startedAt)}`;
     if (session.status === 'stopping') return 'Stopping…';
     if (session.status === 'stopped') return 'Stopped';
-    if (session.status === 'exited') return `Finished${session.exitCode ? ` · exit ${session.exitCode}` : ''}`;
+    if (session.status === 'exited' && !failed(session)) return 'Finished';
     return session.error ? `Failed · ${session.error}` : `Failed${session.exitCode !== null && session.exitCode !== undefined ? ` · exit ${session.exitCode}` : ''}`;
   }
 
@@ -58,11 +59,11 @@
   }
 
   function renderCounts() {
-    const sessions = Object.values(state().sessions), running = sessions.filter(active).length, failed = sessions.some(session => session?.status === 'failed');
-    $('run-tab-count').textContent = running ? String(running) : ''; $('run-tab-count').hidden = !running;
+    const sessions = Object.values(state().sessions), running = sessions.filter(active).length, hasFailure = sessions.some(failed);
+    if ($('run-tab-count')) { $('run-tab-count').textContent = running ? String(running) : ''; $('run-tab-count').hidden = !running; }
     const badge = $('status-run-state');
-    if (badge) { badge.hidden = !running && !failed; badge.dataset.state = running ? 'running' : 'failed'; badge.textContent = running ? String(running) : ''; badge.title = running ? `${running} running` : 'A command failed'; }
-    $('status-run')?.setAttribute('aria-label', `Run${running ? `, ${running} running` : failed ? ', a command failed' : ''}`);
+    if (badge) { badge.hidden = !running && !hasFailure; badge.dataset.state = running ? 'running' : 'failed'; badge.textContent = running ? String(running) : ''; badge.title = running ? `${running} running` : 'A command failed'; }
+    $('status-run')?.setAttribute('aria-label', `Run${running ? `, ${running} running` : hasFailure ? ', a command failed' : ''}`);
   }
 
   // With several folders, each folder heads the commands that run in it, with + to add one there.
@@ -87,8 +88,8 @@
     list.replaceChildren(...groups.filter(group => group.commands.length).flatMap(group => [folderHeading(group.folder), ...group.commands.map(command => commandRow(command, chosen))]));
   }
   function commandRow(command, chosen) {
-      const session = sessionOf(command), row = node('div', 'command-row');
-      row.dataset.commandId = command.id; row.dataset.status = session?.status || 'idle';
+      const scope = projectId, session = sessionOf(command), row = node('div', 'command-row');
+      row.dataset.commandId = command.id; row.dataset.status = failed(session) ? 'failed' : session?.status || 'idle';
       const pick = node('button', 'command-pick'); pick.type = 'button';
       if (command === chosen) pick.setAttribute('aria-current', 'true');
       pick.append(node('span', 'command-dot'), node('span', 'command-name', command.name));
@@ -96,30 +97,44 @@
       if (command.directory) pick.append(node('span', 'command-where', command.directory));
       if (command.test) { const mark = node('span', 'command-test-mark'); mark.title = 'Used by Check with tests'; mark.setAttribute('aria-label', 'Used by Check with tests'); pick.append(mark); }
       pick.title = `${command.command}${place(command) ? ` · runs in ${place(command)}` : ''}`;
-      pick.addEventListener('click', () => { selected.set(projectId, command.id); form = null; error(''); refresh(); render(); });
+      pick.addEventListener('click', () => { selected.set(scope, command.id); form = null; error(''); openOutput(command, scope); refresh(scope); render(); });
       const running = active(session), quick = node('button', `icon-button command-quick ${running ? 'stop' : 'start'}`);
       quick.type = 'button'; quick.setAttribute('aria-label', `${running ? 'Stop' : 'Start'} ${command.name}`); quick.title = running ? 'Stop' : 'Start';
       quick.disabled = pending || session?.status === 'stopping';
-      quick.addEventListener('click', () => { selected.set(projectId, command.id); running ? stop(command) : start(command); });
+      quick.addEventListener('click', () => { selected.set(scope, command.id); running ? stop(command, scope) : start(command, scope); });
       row.append(pick, quick);
+      if (window.relayTabs) {
+        const status = node('span', 'command-row-state', describe(session)); row.append(status);
+        if (session) {
+          const restart = node('button', 'icon-button command-icon command-row-restart'); restart.type = 'button'; restart.dataset.icon = 'restart';
+          restart.setAttribute('aria-label', `Restart ${command.name}`); restart.title = 'Restart'; restart.disabled = pending || session.status === 'stopping';
+          restart.addEventListener('click', () => perform(id => api.post('/api/commands/restart', { id: command.id }, id), scope)); row.append(restart);
+        }
+        if (failed(session)) {
+          const ask = node('button', 'text-link command-row-fix', 'Ask the agent'); ask.type = 'button';
+          ask.addEventListener('click', () => askAgent(command, scope)); row.append(ask);
+        }
+      }
       return row;
   }
 
-  function renderView() {
-    const command = current(), session = sessionOf(command), running = active(session);
+  function renderView(command = current(), scope = projectId, parts = null) {
+    if (!command) return;
+    const $ = id => parts ? parts[id.slice('command-'.length)] : document.getElementById(id);
+    const session = sessionOf(command, scope), running = active(session);
     $('command-state').textContent = describe(session); $('command-state').dataset.status = session?.status || 'idle';
-    $('command-line').textContent = command.command; $('command-line').title = place(command) ? `Runs in ${place(command)}` : '';
+    $('command-line').textContent = command.command; $('command-line').title = place(command, scope) ? `Runs in ${place(command, scope)}` : '';
     // Where it runs, before what it runs: the folder, and the subdirectory inside it.
-    const where = several() || command.directory ? place(command) : '';
-    $('command-place').textContent = where; $('command-place').hidden = !where; $('command-place').title = fullPath(command) ? `Runs in ${fullPath(command)}` : '';
+    const where = several(scope) || command.directory ? place(command, scope) : '';
+    $('command-place').textContent = where; $('command-place').hidden = !where; $('command-place').title = fullPath(command, scope) ? `Runs in ${fullPath(command, scope)}` : '';
     $('command-start').hidden = running; $('command-start').disabled = pending;
     $('command-stop').hidden = !running; $('command-stop').disabled = pending || session?.status === 'stopping';
-    $('command-restart').hidden = !running; $('command-restart').disabled = pending || session?.status === 'stopping';
+    $('command-restart').hidden = !session; $('command-restart').disabled = pending || session?.status === 'stopping';
     $('command-clear').hidden = !session || running; $('command-clear').disabled = pending;
     $('command-edit').disabled = pending;
-    $('command-fix').hidden = session?.status !== 'failed';
+    $('command-fix').hidden = !failed(session);
     // A running app with a local address can open in the preview, to point at what should change (#19).
-    const address = running ? (session?.urls || []).find(url => { try { const parsed = new URL(url); return ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname) && !parsed.username && !parsed.password; } catch { return false; } }) : null;
+    const address = running ? (session?.urls || []).map(localAddress).find(Boolean) : null;
     $('command-preview').hidden = !address || !window.relayPreview?.available; $('command-preview').dataset.url = address || '';
     $('command-truncated').hidden = !session?.truncated;
     $('command-links').replaceChildren();
@@ -139,6 +154,82 @@
       else { output.classList.add('placeholder'); output.textContent = session ? 'No output yet.' : 'Start it to see its output here.'; }
       if (follow) output.scrollTop = output.scrollHeight;
     }
+  }
+
+  function createOutput(command, scope) {
+    const element = node('section', 'command-view command-tab-view'), parts = {};
+    element.dataset.commandId = command.id; element.dataset.projectId = scope; element.hidden = true;
+    element.setAttribute('aria-label', `${command.name} output`);
+    const part = (name, tag, className, text) => { const value = node(tag, className, text); value.dataset.commandPart = name; parts[name] = value; return value; };
+    const bar = node('div', 'run-pane-bar'), buttons = node('span', 'command-buttons');
+    bar.append(part('state', 'span', 'command-state'), part('place', 'span', 'command-place'), part('line', 'code', 'command-line'), part('links', 'span', 'command-links'), buttons);
+    parts.state.setAttribute('role', 'status');
+    const latest = () => state(scope).commands.find(item => item.id === command.id);
+    const action = (name, label, className, handler, icon = null) => {
+      const button = part(name, 'button', className, icon ? undefined : label); button.type = 'button'; button.title = label; button.setAttribute('aria-label', label);
+      if (icon) button.dataset.icon = icon;
+      button.addEventListener('click', () => { const item = latest(); if (item) handler(item); }); buttons.append(button);
+    };
+    action('fix', 'Ask the agent', 'toolbar-button command-fix', item => askAgent(item, scope));
+    action('preview', 'Open preview', 'pill-button command-preview', () => { const url = localAddress(parts.preview.dataset.url); if (url && scope === projectId) window.relayPreview?.open(url); });
+    action('start', 'Start', 'pill-button command-start', item => start(item, scope));
+    action('stop', 'Stop', 'pill-button command-stop', item => stop(item, scope));
+    action('restart', 'Restart', 'icon-button command-icon', item => perform(id => api.post('/api/commands/restart', { id: item.id }, id), scope), 'restart');
+    action('clear', 'Clear output', 'icon-button command-icon', item => perform(id => api.post('/api/commands/clear', { id: item.id }, id), scope), 'clear');
+    action('edit', 'Edit command', 'icon-button command-icon', item => { if (scope === projectId) openForm(item); }, 'edit');
+    element.append(bar, part('truncated', 'p', 'command-note', 'Older output was discarded. Showing the latest 64K characters.'), part('output', 'pre', 'command-output'));
+    parts.output.tabIndex = 0; parts.output.setAttribute('aria-label', `${command.name} output`);
+    const entry = { scope, commandId: command.id, element, parts };
+    outputs.set(outputKey(scope, command.id), entry); return entry;
+  }
+  function registerOutput(entry) {
+    const { scope, commandId, element } = entry, command = state(scope).commands.find(item => item.id === commandId);
+    if (!command) return;
+    const session = sessionOf(command, scope);
+    window.relayTabs.upsert({ id: tabId(commandId), projectId: scope, title: command.name, kind: 'command', element,
+      state: active(session) ? 'running' : failed(session) ? 'failed' : session?.status === 'exited' ? 'finished' : !session && entry.restored ? 'restart' : 'stopped', restore: { commandId },
+      onSelect: () => { selected.set(scope, commandId); if (scope === projectId) { renderList(); refresh(scope); } },
+      onClose: () => { outputs.delete(outputKey(scope, commandId)); },
+    });
+    if (session) entry.restored = false;
+    renderView(command, scope, entry.parts);
+    entry.parts.start.textContent = !session && entry.restored ? 'Start again' : 'Start';
+    if (!session && entry.restored) { entry.parts.output.textContent = 'This command is no longer running. Start again when you are ready.'; delete entry.parts.output.dataset.text; }
+  }
+  function openOutput(command, scope = projectId, { select = true, restore = false } = {}) {
+    if (!command || !window.relayTabs) return;
+    const entry = outputs.get(outputKey(scope, command.id)) || createOutput(command, scope);
+    entry.restored ||= restore;
+    registerOutput(entry);
+    if (select && scope === projectId) window.relayTabs.select(tabId(command.id));
+  }
+  function renderOutputs(scope = projectId) {
+    if (!window.relayTabs || !states.has(scope)) return;
+    if (!restored.has(scope)) {
+      restored.add(scope);
+      for (const saved of window.relayTabs.getSaved(scope, 'command')) {
+        const command = state(scope).commands.find(item => item.id === saved.restore?.commandId || tabId(item.id) === saved.id);
+        if (command) openOutput(command, scope, { select: false, restore: true });
+        else window.relayTabs.remove(saved.id, { projectId: scope });
+      }
+    }
+    for (const entry of [...outputs.values()].filter(item => item.scope === scope)) {
+      if (state(scope).commands.some(item => item.id === entry.commandId)) registerOutput(entry);
+      else { outputs.delete(outputKey(scope, entry.commandId)); window.relayTabs.remove(tabId(entry.commandId), { projectId: scope }); }
+    }
+  }
+  async function askAgent(command, scope = projectId) {
+    // A sidebar failure may not have fetched its output yet. Read that command before drafting the message.
+    if (!('output' in (sessionOf(command, scope) || {}))) await refresh(scope, command.id);
+    if (scope !== projectId) return;
+    const session = sessionOf(command, scope), input = $('message-input');
+    if (!session || !input) return;
+    const tail = String(session.output || '').trim().slice(-3000);
+    const text = [`The ${command.name} command failed${session.exitCode !== null && session.exitCode !== undefined ? ` with exit code ${session.exitCode}` : ''}. Find the cause and fix it.`, '', `Command: ${command.command}${place(command, scope) ? ` (in ${place(command, scope)})` : ''}`, '', 'End of its output:', '```', tail || '(no output)', '```'].join('\n');
+    window.relayTabs?.showChat();
+    input.value = input.value.trim() ? `${input.value.trimEnd()}\n\n${text}` : text;
+    input.dispatchEvent(new Event('input', { bubbles: true })); input.focus();
+    api.announce?.('The failure is in the message box, ready to send.');
   }
 
   // Commands the folder already defines, as one-click choices. Each shows its name and the command it runs.
@@ -191,24 +282,27 @@
 
   function render() {
     renderCounts();
+    renderOutputs();
     if (panel.hidden) return;
     const commands = state().commands;
     renderList();
     $('command-form').hidden = !form;
     $('command-empty').hidden = Boolean(form) || commands.length > 0;
-    $('command-view').hidden = Boolean(form) || !commands.length;
+    $('command-view').hidden = Boolean(window.relayTabs) || Boolean(form) || !commands.length;
     $('command-add').disabled = pending || !projectId || commands.length >= 12;
     if (form) return;
-    if (!commands.length) renderEmpty(); else renderView();
+    if (!commands.length) renderEmpty(); else if (!window.relayTabs) renderView();
   }
 
-  async function refresh() {
-    const scope = projectId, version = generation;
+  async function refresh(scope = projectId, wanted = null) {
+    const version = generation;
     if (!scope) return;
-    const want = panel.hidden ? 'none' : current()?.id || 'none', requestKey = `${scope}:${want}`;
+    const hasOutputs = [...outputs.values()].some(item => item.scope === scope);
+    const hasSaved = !restored.has(scope) && window.relayTabs?.getSaved(scope, 'command').length;
+    const want = wanted || (window.relayTabs ? hasOutputs || hasSaved ? 'all' : 'none' : panel.hidden ? 'none' : current()?.id || 'none'), requestKey = `${scope}:${want}`;
     let request = requests.get(requestKey);
     if (!request) {
-      request = api.api(`/api/commands?output=${encodeURIComponent(want)}`, {}, scope).finally(() => requests.delete(requestKey));
+      request = api.api(want === 'all' ? '/api/commands' : `/api/commands?output=${encodeURIComponent(want)}`, {}, scope).finally(() => requests.delete(requestKey));
       requests.set(requestKey, request);
     }
     try {
@@ -216,28 +310,36 @@
       // A poll that left out output keeps the output already shown.
       for (const [id, session] of Object.entries(value.sessions || {})) if (!('output' in session) && previous?.sessions?.[id]?.id === session.id) Object.assign(session, { output: previous.sessions[id].output, ansi: previous.sessions[id].ansi });
       states.set(scope, value);
+      if (window.relayTabs) {
+        for (const entry of outputs.values()) {
+          if (entry.scope !== scope) continue;
+          const next = value.sessions?.[entry.commandId], before = previous?.sessions?.[entry.commandId];
+          if (next && typeof next.output === 'string' && next.output !== before?.output && next.output) window.relayTabs.notify(tabId(entry.commandId), scope);
+        }
+      }
       window.dispatchEvent(new CustomEvent('relay-commands', { detail: { projectId: scope, commands: value.commands } }));
-      if (scope === projectId && version === generation) render();
+      if (scope === projectId && version === generation) render(); else renderOutputs(scope);
     } catch (failure) { if (scope === projectId && version === generation && !panel.hidden) error(failure.message); }
   }
-  async function perform(callback) {
-    if (pending || !projectId) return;
-    const scope = projectId, version = generation;
+  async function perform(callback, scope = projectId) {
+    if (pending || !scope) return;
+    const version = generation;
     pending = true; error(''); render();
     try { await callback(scope, () => scope === projectId && version === generation); }
     catch (failure) { if (scope === projectId && version === generation) error(failure.message); else api.showNotice(failure.message); }
-    finally { pending = false; await refresh(); render(); }
+    finally { pending = false; await refresh(scope); render(); }
   }
-  const start = command => perform(scope => api.post('/api/commands/start', { id: command.id }, scope));
-  const stop = command => perform(async scope => { const session = states.get(scope)?.sessions?.[command.id]; if (session) await api.post('/api/commands/stop', { id: command.id, sessionId: session.id }, scope); });
+  const start = (command, scope = projectId) => { openOutput(command, scope); return perform(id => api.post('/api/commands/start', { id: command.id }, id), scope); };
+  const stop = (command, scope = projectId) => perform(async id => { const session = states.get(id)?.sessions?.[command.id]; if (session) await api.post('/api/commands/stop', { id: command.id, sessionId: session.id }, id); }, scope);
   // A suggestion from the folder is added in one click and selected, ready to start.
   const add = (suggestion, folderId) => perform(async (scope, still) => {
     const saved = await api.post('/api/commands/save', { name: suggestion.name, command: suggestion.command, folderId, directory: '', test: Boolean(suggestion.test) && !states.get(scope)?.commands.some(command => command.test) }, scope);
-    if (still()) selected.set(scope, saved.id);
+    if (still()) { selected.set(scope, saved.id); await refresh(scope); openOutput(saved, scope); }
   });
 
   // The form adds a command or edits one. It offers what the chosen folder defines, and saves only what is entered.
   function openForm(command = null, { test = false, folderId = null } = {}) {
+    window.relaySidebar?.show('run');
     form = { id: command?.id || null };
     const folders = project()?.folders || [];
     $('command-form-title').textContent = command ? `Edit ${command.name}` : test ? 'Choose a test command' : 'Add a command';
@@ -276,7 +378,7 @@
   $('command-form').addEventListener('submit', event => {
     event.preventDefault();
     const input = { ...(form?.id ? { id: form.id } : {}), name: $('command-name').value.trim(), folderId: $('command-folder').value, directory: $('command-directory').value.trim(), command: $('command-text').value.trim(), test: $('command-test').checked };
-    perform(async (scope, still) => { const saved = await api.post('/api/commands/save', input, scope); if (still()) { selected.set(scope, saved.id); form = null; } });
+    perform(async (scope, still) => { const saved = await api.post('/api/commands/save', input, scope); if (still()) { selected.set(scope, saved.id); form = null; await refresh(scope); openOutput(saved, scope); } });
   });
   $('command-cancel').addEventListener('click', closeForm);
   $('command-remove').addEventListener('click', () => { const id = form?.id; if (id) perform(async (scope, still) => { await api.post('/api/commands/remove', { id }, scope); if (still()) { selected.delete(scope); form = null; } }); });
@@ -290,32 +392,28 @@
   $('command-clear').addEventListener('click', () => { const command = current(); if (command) perform(scope => api.post('/api/commands/clear', { id: command.id }, scope)); });
   // A failed command can go to an agent: its command and the end of its output are put in the message box, to read
   // and send. Nothing is sent from here.
-  $('command-fix').addEventListener('click', () => {
-    const command = current(), session = sessionOf(command), input = $('message-input');
-    if (!command || !session || !input) return;
-    const tail = String(session.output || '').trim().slice(-3000);
-    const text = [`The ${command.name} command failed${session.exitCode !== null && session.exitCode !== undefined ? ` with exit code ${session.exitCode}` : ''}. Find the cause and fix it.`, '', `Command: ${command.command}${place(command) ? ` (in ${place(command)})` : ''}`, '', 'End of its output:', '```', tail || '(no output)', '```'].join('\n');
-    input.value = input.value.trim() ? `${input.value.trimEnd()}\n\n${text}` : text;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.focus();
-    api.announce?.('The failure is in the message box, ready to send.');
-  });
+  $('command-fix').addEventListener('click', () => { const command = current(); if (command) askAgent(command); });
 
   window.addEventListener('relay-panel', () => { if (!panel.hidden) { refresh(); render(); } });
+  window.addEventListener('relay-sidebar', () => { if (!panel.hidden) { refresh(); render(); } });
   window.addEventListener('relay-state', () => {
     const chosen = api.getState().projectId;
     if (chosen === projectId) return;
     projectId = chosen; generation++; form = null; error('');
     render(); refresh();
   });
-  // Poll only the selected workspace: often while the tab shows, now and then for the status bar otherwise. Commands
-  // keep running whether or not anyone looks.
-  setInterval(() => { if (document.hidden || !projectId) return; tick++; if (!panel.hidden || tick % 3 === 0) refresh(); }, 1500);
+  // Open outputs keep their state and unread marker current even when Chat or another workspace is in front.
+  setInterval(() => {
+    if (document.hidden || !projectId) return;
+    tick++;
+    if (!panel.hidden || [...outputs.values()].some(item => item.scope === projectId) || tick % 3 === 0) refresh();
+    if (tick % 3 === 0) for (const scope of new Set([...outputs.values()].map(item => item.scope))) if (scope !== projectId) refresh(scope);
+  }, 1500);
   window.relayCommands = {
     // Opens Run; for Check with tests, straight into choosing a test command when none is marked.
-    open: ({ test = false } = {}) => { window.relayPanel?.show('run'); if (test && !state().commands.some(command => command.test)) openForm(null, { test: true }); },
+    open: ({ test = false } = {}) => { if (window.relaySidebar) window.relaySidebar.show('run'); else window.relayPanel?.show('run'); if (test && !state().commands.some(command => command.test)) openForm(null, { test: true }); },
     refresh,
     // The local address of a running command, for opening the app in the preview.
-    localURL: () => Object.values(state().sessions).filter(active).flatMap(session => session.urls || []).find(url => { try { return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(url).hostname); } catch { return false; } }) || null,
+    localURL: () => Object.values(state().sessions).filter(active).flatMap(session => session.urls || []).map(localAddress).find(Boolean) || null,
   };
 })();

@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // Resizable sections: the sidebar, right-hand panel and bottom panel (Terminal and Run).
+  // Resizable sections: the sidebar and right-hand panel. The tab split owns its divider.
   // Drag a handle, use the arrow keys on it, or double-click to reset. Sizes are kept per
   // viewer in this browser only; without storage the defaults apply.
   const KEY = 'throughline:layout', root = document.documentElement, $ = id => document.getElementById(id);
@@ -37,13 +37,12 @@
   window.addEventListener('pagehide', () => endDrag());
   document.addEventListener('visibilitychange', () => { if (document.hidden) endDrag(); });
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && dragging) { event.preventDefault(); endDrag(); } }, true);
-  const sidePanels = () => ['git-panel', 'agents-panel', 'brief-panel', 'tasks-panel', 'timeline-panel', 'review-panel'].map($).filter(Boolean);
+  const sidePanels = () => ['agents-panel', 'brief-panel', 'timeline-panel', 'review-panel'].map($).filter(Boolean);
 
   // name: [how to measure the current size, how to apply a size, min, max, axis, sign, label]
   const sections = {
     sidebar: { measure: () => document.querySelector('.sidebar')?.getBoundingClientRect().width, apply: value => value ? root.style.setProperty('--sidebar-width', value + 'px') : root.style.removeProperty('--sidebar-width'), min: 260, max: 520, axis: 'x', sign: 1, label: 'Resize the sidebar' },
     inspector: { measure: () => sidePanels().find(panel => !panel.hidden)?.getBoundingClientRect().width, apply: value => value ? root.style.setProperty('--inspector-width', value + 'px') : root.style.removeProperty('--inspector-width'), min: 360, max: 720, axis: 'x', sign: -1, label: 'Resize the side panel' },
-    panel: { measure: () => $('bottom-panel')?.getBoundingClientRect().height, apply: value => { const panel = $('bottom-panel'); if (panel) panel.style.height = value ? value + 'px' : ''; }, min: 140, max: 720, axis: 'y', sign: -1, label: 'Resize the terminal and Run panel' },
   };
   function set(name, value) {
     const section = sections[name];
@@ -81,7 +80,6 @@
   for (const name of Object.keys(sizes)) if (sections[name]) set(name, sizes[name]);
   handle(document.querySelector('.sidebar'), 'sidebar', 'edge-end');
   for (const panel of sidePanels()) handle(panel, 'inspector', 'edge-start');
-  handle($('bottom-panel'), 'panel', 'edge-top');
   // While the pointer moves, each divider shows a small grip, so it's clear which ones can be dragged. Only the dividers
   // change, not the page, so moving the mouse stays cheap in a long conversation.
   let hinting = false, hintTimer = null;
@@ -101,7 +99,7 @@
     $('toggle-sidebar')?.setAttribute('aria-pressed', String(!shell?.classList.contains('sidebar-collapsed')));
     $('toggle-side-panel')?.setAttribute('aria-pressed', String(sidePanels().some(panel => !panel.hidden)));
     for (const id of ['toggle-sidebar', 'toggle-side-panel']) if ($(id)) $(id).disabled = flowing();
-    for (const [id, name] of [['agents-panel', 'agents'], ['git-panel', 'git'], ['brief-panel', 'brief'], ['tasks-panel', 'tasks'], ['timeline-panel', 'timeline']]) if ($(id) && !$(id).hidden) write(LAST_PANEL_KEY, name);
+    for (const [id, name] of [['agents-panel', 'agents'], ['brief-panel', 'brief'], ['timeline-panel', 'timeline']]) if ($(id) && !$(id).hidden) write(LAST_PANEL_KEY, name);
   }
   function setSidebar(collapsed) {
     endDrag();
@@ -114,12 +112,10 @@
   $('toggle-side-panel')?.addEventListener('click', () => {
     if (flowing()) return;
     if (!$('agents-panel')?.hidden) { write(LAST_PANEL_KEY, 'agents'); $('open-agents')?.click(); }
-    else if (!$('git-panel')?.hidden) { write(LAST_PANEL_KEY, 'git'); $('open-git')?.click(); }
     else if (!$('brief-panel')?.hidden) { write(LAST_PANEL_KEY, 'brief'); window.relayBrief?.close(); }
-    else if (!$('tasks-panel')?.hidden) { write(LAST_PANEL_KEY, 'tasks'); window.relayTasks?.close(); }
     else if (!$('timeline-panel')?.hidden) { write(LAST_PANEL_KEY, 'timeline'); window.relayTimeline?.close(); }
     else if (!$('review-panel')?.hidden) window.relayReviews?.closePanel?.();
-    else { const last = read(LAST_PANEL_KEY); if (last === 'timeline') window.relayTimeline?.open(); else if (last === 'brief') window.relayBrief?.open(); else if (last === 'tasks') window.relayTasks?.open(); else $(last === 'git' ? 'open-git' : 'open-agents')?.click(); }
+    else { const last = read(LAST_PANEL_KEY); if (last === 'timeline') window.relayTimeline?.open(); else if (last === 'brief') window.relayBrief?.open(); else $('open-agents')?.click(); }
     sync();
   });
   if (typeof MutationObserver === 'function') {

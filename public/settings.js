@@ -11,7 +11,7 @@
   if (!modal || !content) return;
   const PAGES = [['general', t('General')], ['appearance', t('Appearance')], ['accounts', t('Agents & accounts')], ['routing', t('Routing & handoffs')], ['testing', t('Testing')], ['phone', t('Phone & remote')], ['voice', t('Voice')], ['alerts', t('Alerts')], ['experimental', t('Experimental')], ['updates', t('Updates')]];
   // Places in Settings by the names other parts of the app used before it had these pages.
-  const ALIASES = { flags: 'experimental', preferences: 'general', connections: 'accounts', remote: 'phone', handoff: 'routing', context: 'routing' };
+  const ALIASES = { flags: 'experimental', preferences: 'general', connections: 'accounts', remote: 'phone', handoff: 'routing', context: 'routing', limits: 'routing', results: 'experimental' };
   const HEADINGS = { Alerts: 'alerts', Voice: 'voice', Updates: 'updates', Appearance: 'appearance', Testing: 'testing', 'Remote access': 'phone', 'While agents work': 'general', 'Work time': 'general' };
   const node = (tag, text, cls) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (cls) value.className = cls; return value; };
   const providerName = provider => ({ codex: 'Codex', claude: 'Claude', gemini: 'Gemini' })[provider];
@@ -104,6 +104,12 @@
       kit.row(move, { label: t('Codeshi backup'), description: t('Save your workspaces, their conversations, memory, skills, board cards and tasks, and these settings to one file locked with a passphrase. Import it on the other computer. Sign-ins never move.'), keywords: 'backup export import move migrate transfer new computer laptop restore', control: [kit.button(t('Export…'), () => window.relayBackup.open('export')), kit.button(t('Import…'), () => window.relayBackup.open('import'))] });
       kit.row(move, { label: t('Over this network'), description: t('Send the same contents straight to another computer on this Wi-Fi or network, with a move code and no file. Nothing goes through a server.'), keywords: 'move send receive network wifi lan transfer new computer laptop', control: [kit.button(t('Send…'), () => window.relayBackup.open('send')), kit.button(t('Receive…'), () => window.relayBackup.open('receive'))] });
     }
+    // Export task usage without prompts (#84, #190).
+    const usage = kit.group(host, t('Task usage'));
+    const exportUsageBtn = kit.button(t('Export without prompts'), () => window.relayLimits?.exportUsage?.());
+    exportUsageBtn.id = 'settings-export-usage';
+    exportUsageBtn.disabled = !api().getState().projectId || !window.relayLimits?.exportUsage;
+    kit.row(usage, { label: t('Export task usage'), description: t('Save this workspace’s task times, agents, token totals and test results as JSON, with your requests and commands left out so it can be shared.'), keywords: 'export task usage ledger json without prompts share report', control: exportUsageBtn });
     const bridge = window.relayDesktop;
     if (bridge?.getKeepAwake && bridge?.setKeepAwake) {
       const work = kit.group(host, t('While agents work'));
@@ -186,6 +192,11 @@
       api().api('/api/preferences').then(value => { savedLimit = value.contextLimit ?? 'auto'; limit.value = typeof savedLimit === 'number' && ![50000, 100000, 150000].includes(savedLimit) ? 'custom' : String(savedLimit); custom.hidden = limit.value !== 'custom'; customRow.hidden = custom.hidden; if (typeof savedLimit === 'number') custom.value = String(savedLimit); limit.disabled = false; }).catch(() => {});
       kit.note(work.parentNode, t('Auto targets 120,000 tokens after recent provider activity and 75,000 after a longer pause, capped at 75% of the reported model window. Cache lifetime uses provider reports when available and otherwise a conservative five-minute estimate; cache hits are not guaranteed. Custom limits stay fixed. Older unmeasured sessions refresh once. Recorded activity supplies a labeled byte estimate when native readings are missing. Native agents manage compaction during a run. Compact context or /compact schedules a manual refresh without a model call.'));
     }
+    const limits = kit.group(host, t('Task limits'));
+    const limitsBtn = kit.button(t('Edit limits…'), () => window.relayLimits?.open?.());
+    limitsBtn.id = 'settings-task-limits';
+    limitsBtn.disabled = !api().getState().projectId || !window.relayLimits?.open;
+    kit.row(limits, { label: t('Task limits'), description: t('Set working time, token, API spend, handoff, retry, review, repeated failure and parallel task limits, and restrict which agents or models this workspace may use.'), keywords: 'task limits budget tokens spend minutes handoffs retries reviews failures concurrent allowed agents models', control: limitsBtn });
   }
   // Testing: when agents run broad checks.
   function testing(host) {
@@ -210,11 +221,11 @@
     kit.note(testing.parentNode, t('Applies to new turns in every workspace, in Normal and Flow. Running agents keep their starting setting. Review first defers Codeshi’s routine automatic test command and repair loop; explicitly selected build/review workflows and required repository checks still apply. Agents receive guidance, not a command block, and must report deferred verification honestly.'));
   }
   function phone(host) { if (window.relayExperimental?.enabled('remote') === false) kit.note(host, t('Remote access is turned off. Turn it on in Settings › Experimental.')); else if (window.relayPhone) window.relayPhone.settings(host, kit); else kit.note(host, t('Phone access is not available here.')); }
-  // Experimental: the newer features, each with a switch. All are on by default; one that is off leaves the window.
+  // Experimental: the newer features, each with a switch. One that is off leaves the window until turned back on.
   function experimental(host) {
     const flags = window.relayExperimental;
     if (!flags) { kit.note(host, t('Experimental features are not available here.')); return; }
-    const rows = kit.group(host, t('Experimental features'), t('These parts of Codeshi are new and may change. All are on by default; turn one off and it leaves the window until you turn it back on.'));
+    const rows = kit.group(host, t('Experimental features'), t('These parts of Codeshi are new and may change. Turn one off and it leaves the window until you turn it back on.'));
     for (const item of flags.features) {
       const box = kit.toggle(rows, { label: item.name, description: item.description, keywords: `experimental beta flag feature ${item.id}`, checked: flags.enabled(item.id), onChange: value => perform(async () => {
         box.disabled = true;
@@ -223,13 +234,29 @@
       box.id = `settings-experimental-${item.id}`;
       box.closest('.settings-row').querySelector('.settings-row-label').append(flags.badge());
     }
+    const openBtn = kit.button(t('View Smart results…'), () => window.relaySmartResults?.open?.());
+    openBtn.id = 'settings-open-smart-results';
+    openBtn.disabled = !flags.enabled('smartResults') || !api().getState().projectId || !window.relaySmartResults?.open;
+    const openRow = kit.row(rows, { label: t('Smart results report'), description: t('Inspect comparisons across Smart, Saver, Ultra and your manual tasks, export reports, or prepare a shareable copy.'), keywords: 'smart results comparison report export share', control: openBtn });
+    openRow.id = 'settings-smart-results-row';
+    openRow.dataset.hidden = String(!flags.enabled('smartResults'));
+    openRow.hidden = !flags.enabled('smartResults');
   }
   function updates(host) {
     if (window.relayUpdater) { const part = node('div', undefined, 'settings-section'); host.append(part); window.relayUpdater.settings(part, kit); }
     else kit.note(host, t('Updates are handled where you installed Codeshi.'));
   }
   // Turned on from the offer at a usage limit.
-  window.relayExperimental?.onChange(() => { if (modal.open && sections.phone) render('phone'); if (modal.open && sections.experimental) for (const item of window.relayExperimental.features) { const box = $(`settings-experimental-${item.id}`); if (box) box.checked = window.relayExperimental.enabled(item.id); } });
+  window.relayExperimental?.onChange(() => {
+    if (modal.open && sections.phone) render('phone');
+    if (modal.open && sections.experimental) {
+      for (const item of window.relayExperimental.features) { const box = $(`settings-experimental-${item.id}`); if (box) box.checked = window.relayExperimental.enabled(item.id); }
+      const on = window.relayExperimental.enabled('smartResults');
+      const row = $('settings-smart-results-row'), btn = $('settings-open-smart-results');
+      if (row) { row.dataset.hidden = String(!on); row.hidden = !on; }
+      if (btn) btn.disabled = !on || !api().getState().projectId || !window.relaySmartResults?.open;
+    }
+  });
   window.addEventListener('relay-handoff-preferences', () => { handoff = null; });
   async function saveHandoff(patch) {
     await perform(async () => { handoff = await api().post('/api/handoff-preferences', patch); });
@@ -346,9 +373,9 @@
     nav.querySelectorAll('[data-page]').forEach(button => button.setAttribute('aria-current', !terms.length && button.dataset.page === page ? 'page' : 'false'));
     let found = 0;
     for (const [name, section] of Object.entries(sections)) {
-      if (!terms.length) { section.hidden = name !== page; for (const item of section.querySelectorAll('.settings-row')) item.hidden = false; for (const group of section.querySelectorAll('.settings-group')) group.hidden = false; for (const note of section.querySelectorAll('.settings-note')) note.hidden = false; continue; }
+      if (!terms.length) { section.hidden = name !== page; for (const item of section.querySelectorAll('.settings-row')) item.hidden = item.dataset.hidden === 'true'; for (const group of section.querySelectorAll('.settings-group')) group.hidden = false; for (const note of section.querySelectorAll('.settings-note')) note.hidden = false; continue; }
       let shown = 0;
-      for (const item of section.querySelectorAll('.settings-row')) { const group = item.closest('.settings-group'), text = `${item.textContent} ${item.dataset.keywords || ''} ${group?.querySelector('h3')?.textContent || ''}`.toLowerCase(), match = terms.every(term => text.includes(term)); item.hidden = !match; if (match) shown++; }
+      for (const item of section.querySelectorAll('.settings-row')) { const group = item.closest('.settings-group'), text = `${item.textContent} ${item.dataset.keywords || ''} ${group?.querySelector('h3')?.textContent || ''}`.toLowerCase(), match = terms.every(term => text.includes(term)); const allowed = match && item.dataset.hidden !== 'true'; item.hidden = !allowed; if (allowed) shown++; }
       for (const group of section.querySelectorAll('.settings-group')) group.hidden = ![...group.querySelectorAll('.settings-row')].some(item => !item.hidden);
       for (const note of section.querySelectorAll('.settings-note')) if (!note.closest('.settings-row')) note.hidden = true;
       section.hidden = !shown; found += shown;

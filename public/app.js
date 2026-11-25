@@ -3024,10 +3024,12 @@
     { label: "Normal view: every panel, and you choose the agent", run: () => window.relayFlow?.leave() },
     { label: "Agents: plan usage and handoff", run: () => window.relayAgents?.open() },
     { label: "Brief: memory and skills every agent gets", run: () => window.relayBrief?.open() },
-    { label: "Tasks: what each task used, and its limits", run: () => window.relayTasks?.open() },
+    { label: "Task limits…", run: () => window.relayLimits?.open?.() },
+    { label: "Export task usage without prompts", run: () => window.relayLimits?.exportUsage?.() },
+    { label: "Smart results", experimental: "smartResults", run: () => window.relaySmartResults?.open?.() },
     { label: "New task beside this one", experimental: "tasks", run: () => window.relayTaskThreads?.open() },
     { label: "Timeline: review and restore checkpoints", run: () => window.relayTimeline?.open() },
-    { label: "Git activity", run: () => { if ($("git-panel").hidden) $("open-git").click(); } },
+    { label: "Git activity", run: () => { if (window.relayGit?.open) window.relayGit.open(); else if ($("git-panel").hidden) $("open-git").click(); } },
     { label: "Terminal", workbench: true, run: () => window.relayTerminal?.open() },
     { label: "Run: your dev servers, tests and scripts", workbench: true, run: () => window.relayPanel?.show("run") },
     ...(window.relayExperimental?.enabled("review") === false ? [] : [{ label: "Review your app: launch map and live services", run: () => window.relayProjectReview?.open() }]),
@@ -3230,7 +3232,7 @@
   document.addEventListener("keydown", (event) => {
     if (!(mac ? event.metaKey : event.ctrlKey) || event.altKey) return;
     // Ctrl keys typed in the terminal belong to the shell.
-    if (!mac && event.target?.closest?.("#terminal-panel")) return;
+    if (!mac && event.target?.closest?.("#terminal-panel, .terminal-workspace-tab, .cli-view")) return;
     const key = event.key.toLowerCase(), run = (name, value) => { if (commands[name](value)) event.preventDefault(); };
     if (key === "k" && !event.shiftKey) run("filter-workspaces");
     else if (key === "l" && !event.shiftKey) run("focus-message");
@@ -3299,8 +3301,8 @@
   // Choosing an action from the ⋯ menu closes it.
   $("header-menu").addEventListener("click", event => { if (event.target?.closest?.("button")) $("header-menu").hidePopover?.(); });
   // The tabs at the top of a side panel switch to the other panel.
-  // The side panel's tabs: Agents, Brief, Tasks, Git and Timeline, each opened by its own module.
-  const sidePanelOpeners = { agents: () => $("open-agents").click(), git: () => $("open-git").click(), brief: () => window.relayBrief?.open(), tasks: () => window.relayTasks?.open(), timeline: () => window.relayTimeline?.open() };
+  // The side panel's tabs: Agents, Brief, Git and Timeline, each opened by its own module.
+  const sidePanelOpeners = { agents: () => $("open-agents").click(), git: () => $("open-git").click(), brief: () => window.relayBrief?.open(), timeline: () => window.relayTimeline?.open() };
   const showSidePanel = name => { const panel = $(`${name}-panel`); if (panel?.hidden !== false) sidePanelOpeners[name]?.(); };
   // Each panel draws its own copy of the tab row, so the tab that was used is hidden with its panel. When a tab had
   // focus, focus moves to the same tab in the panel now showing rather than falling back to the page (#26).

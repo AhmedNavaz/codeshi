@@ -1,8 +1,8 @@
 (() => {
   'use strict';
-  // Smart results (#139): the Tasks panel section and the Flow card. Both read /api/results, which works the summary out
-  // from this workspace's saved tasks with no model call. It is fetched when a task ends or a setting here changes, never
-  // on a timer. Extra usage, savings and "not enough data" are said in the same plain way.
+  // Smart results (#139, #190): off by default, opened from Settings › Experimental when enabled. Reads /api/results,
+  // which works the summary out from this workspace's saved tasks with no model call. While off or closed it fetches
+  // nothing, while the journal keeps recording task facts as usual.
   const $ = id => document.getElementById(id), api = window.relayUI;
   if (!api) return;
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
@@ -20,7 +20,7 @@
   const projectKey = name => `throughline:results-${name}:${api.getState().projectId || ''}`;
   const read = (name, fallback) => { try { return JSON.parse(localStorage.getItem(projectKey(name)) || 'null') ?? fallback; } catch { return fallback; } };
   const write = (name, value) => { try { localStorage.setItem(projectKey(name), JSON.stringify(value)); } catch { /* A convenience only. */ } };
-  let data = null, failed = null, received = 0, shown = null, loading = 0, mode = null, showTasks = false, lastProjectId = null;
+  let data = null, failed = null, received = 0, shown = null, loading = 0, mode = null, showTasks = false, lastProjectId = null, returnFocus = null;
   const listeners = new Set();
   const notify = () => { received++; for (const listener of listeners) listener(); };
 
@@ -52,7 +52,7 @@
     return [line, button('Try again', () => { failed = null; notify(); refresh(); })];
   }
 
-  // ---- What a comparison says, in one sentence, for the card and the panel alike.
+  // ---- What a comparison says, in one sentence.
   function verdict(result, name) {
     if (!result) return { tone: 'quiet', text: 'Loading…' };
     if (result.status === 'not-enough-data') return { tone: 'quiet', text: 'Not enough comparable data yet to compare with your manual tasks.' };
@@ -74,37 +74,10 @@
     return ends[0] === ends[1] ? `${ends[0]} ${ends[2]}` : `${ends[0]} to ${ends[1]} ${ends[2]}`;
   };
 
-  // ---- The Flow card (#107): quiet, one comparison, a way into the evidence.
-  function renderCard(card) {
-    const state = api.getState(), current = window.relayRouting?.normalizeMode?.(state.conversation?.routing?.mode) || 'smart';
-    load();
-    const signature = JSON.stringify([current, received]);
-    if (signature === card.signature) return;
-    card.signature = signature;
-    const title = card.element.querySelector('h2');
-    if (title) {
-      const text = title.querySelector('.flow-card-title');
-      if (text) text.textContent = `${NAMES[current]} results`;
-      else if (title.firstChild?.nodeType === 3) title.firstChild.textContent = `${NAMES[current]} results`;
-      else title.textContent = `${NAMES[current]} results`;
-    }
-    card.body.replaceChildren(); card.foot.replaceChildren();
-    card.foot.append(button('Details', () => openDetails(current), 'flow-button'));
-    if (!data) { card.body.append(...pending('flow-empty')); return; }
-    const seen = data.observed[current], range = DAYS.find(([value]) => value === String(data.range.days ?? 'all'))?.[1] || 'All time';
-    if (!seen.tasks) { card.body.append(node('p', 'flow-empty', `${range}: no finished ${NAMES[current]} tasks yet. Results build up from your own tasks; nothing is estimated for you in advance.`)); return; }
-    const facts = node('ul', 'results-facts');
-    facts.append(node('li', '', `${range} · ${plural(seen.tasks, 'task')} · ${seen.verified} verified by tests`));
-    facts.append(node('li', '', `${duration(seen.workingMs)} working${seen.newTokens.total === null ? '' : ` · ${compact(seen.newTokens.total)} new tokens${seen.newTokens.tasks < seen.newTokens.of ? ` (${seen.newTokens.tasks} of ${seen.newTokens.of} tasks reported)` : ''}`}`));
-    const said = verdict(data.comparisons[current], NAMES[current]), line = node('p', `results-verdict ${said.tone}`, said.text);
-    card.body.append(facts, line);
-  }
-
-  // ---- The Tasks panel section: every group, the comparison with its arithmetic, and the tasks behind it.
+  // ---- The Smart results dialog: every group, the comparison with its arithmetic, and the tasks behind it.
   function renderSection() {
-    const host = $('tasks-results-body'); if (!host) return;
-    const section = $('tasks-results');
-    if (!data) { host.replaceChildren(...pending('panel-muted')); if (failed && section) section.hidden = false; return; }
+    const host = $('results-dialog-body'); if (!host) return;
+    if (!data) { host.replaceChildren(...pending('panel-muted')); return; }
     const current = mode || window.relayRouting?.normalizeMode?.(api.getState().conversation?.routing?.mode) || 'smart';
     const controls = node('div', 'results-controls'), days = node('select', 'results-select'), baseline = node('select', 'results-select'), compareWith = node('select', 'results-select');
     days.setAttribute('aria-label', 'Time range');
@@ -169,7 +142,6 @@
     const foot = node('div', 'results-foot'); foot.append(tasksToggle, exportPlain, exportPrompts, shareButton);
     host.replaceChildren(controls, table, comparison, notes, foot);
     if (showTasks) host.append(taskList());
-    if (section) section.hidden = false;
   }
   function metricLines(result, current) {
     const lines = [], name = NAMES[current];
@@ -268,15 +240,36 @@
     try { if (window.relayDesktop?.openExternal) await window.relayDesktop.openExternal(url); else window.open(url, '_blank', 'noopener,noreferrer'); closeShare(); api.showNotice(`Saved ${shared.fileName}. Attach it to the post on GitHub before you submit.`); }
     catch (error) { api.showNotice(error.message || 'GitHub could not be opened.'); }
   }
-  function openDetails(current) {
-    mode = current;
-    // In Flow the Tasks panel opens as Flow's own sheet.
-    window.relayTasks?.open?.();
-    renderSection();
-    setTimeout(() => $('tasks-results')?.scrollIntoView?.({ block: 'start' }), 0);
-  }
 
-  listeners.add(() => { renderSection(); window.dispatchEvent(new CustomEvent('relay-results')); });
-  window.addEventListener('relay-state', () => { if (!$('tasks-panel')?.hidden || window.relayFlow?.isOn?.()) load(); });
-  window.relaySmartResults = { load, refresh, renderCard, renderSection, data: () => data, verdict };
+  function close() {
+    const dialog = $('results-dialog');
+    if (dialog?.open) dialog.close();
+    if (returnFocus?.isConnected) returnFocus.focus();
+    returnFocus = null;
+  }
+  function open(requestedMode = null) {
+    if (window.relayExperimental?.enabled?.('smartResults') === false) {
+      api.showNotice?.('Smart results is turned off. Turn it on in Settings › Experimental.');
+      return false;
+    }
+    if (!api.getState().projectId) {
+      api.showNotice?.('Open a workspace to view Smart results.');
+      return false;
+    }
+    const dialog = $('results-dialog');
+    if (!dialog) return false;
+    if (requestedMode) mode = requestedMode;
+    returnFocus = document.activeElement;
+    renderSection();
+    if (!dialog.open) dialog.showModal();
+    load();
+    return true;
+  }
+  $('results-dialog-close')?.addEventListener('click', close);
+  $('results-dialog-done')?.addEventListener('click', close);
+  $('results-dialog')?.addEventListener('cancel', event => { event.preventDefault(); close(); });
+
+  listeners.add(() => { if ($('results-dialog')?.open) renderSection(); window.dispatchEvent(new CustomEvent('relay-results')); });
+  window.addEventListener('relay-state', () => { if ($('results-dialog')?.open) load(); });
+  window.relaySmartResults = { open, close, load, refresh, renderSection, data: () => data, verdict };
 })();

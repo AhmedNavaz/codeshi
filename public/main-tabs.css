@@ -1,0 +1,45 @@
+/* Workspace tools share the conversation's work area. */
+.main-tabs { height: 37px; padding: 0 6px; gap: 2px; overflow-x: auto; overflow-y: hidden; }
+.main-tool-tabs { display: flex; align-items: stretch; min-width: 0; flex: 0 0 auto; }
+.work-tab { display: flex; align-items: center; border-right: 1px solid var(--border-subtle, var(--border)); flex: none; max-width: 260px; }
+.work-tab[hidden], .main-work-area [hidden], .sidebar [hidden] { display: none !important; }
+.work-tab .main-tab { min-width: 0; padding-left: 8px; padding-right: 4px; }
+.main-tab-label { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.main-tab-state { color: var(--faint); font-size: 13px; flex: none; }
+.work-tab[data-state="running"] .main-tab-state { color: var(--accent); animation: work-tab-pulse 1.4s ease-in-out infinite; }
+.work-tab[data-state="failed"] .main-tab-state { color: var(--danger, #c0392b); font-weight: 700; }
+.work-tab[data-state="finished"] .main-tab-state { color: var(--success, var(--accent)); }
+.work-tab.tab-unread .main-tab-label::after { content: ''; display: inline-block; width: 5px; height: 5px; margin-left: 5px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
+.work-tab.tab-in-split { background: var(--hover); }
+.tab-action { border: 0; background: none; color: var(--muted); width: 22px; height: 25px; padding: 0; border-radius: 4px; font-size: 16px; flex: none; }
+.tab-action:hover { background: var(--hover); color: var(--text-strong); }
+.main-tab-new { align-self: center; font-size: 21px; flex: none; }
+.main-tab-name { width: 120px; font: inherit; padding: 0 3px; }
+.main-work-area { display: flex; position: relative; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.chat-stage { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.tab-stage { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.tab-stage > :not([hidden]) { flex: 1; min-height: 0; min-width: 0; }
+.main-work-area.has-beside > .chat-stage { flex: 0 0 var(--chat-share, 50%); }
+.tab-beside { display: flex; flex-direction: column; position: relative; flex: 1; min-width: 0; min-height: 0; border-left: 1px solid var(--border); }
+.tab-beside-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding: 3px 10px; border-bottom: 1px solid var(--border); background: var(--surface, var(--bg)); font-size: 12px; }
+#tab-beside-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tab-beside-heading button { flex: none; font-size: 11px; }
+.tab-divider { position: absolute; z-index: 6; width: 7px; left: -4px; top: 0; bottom: 0; cursor: col-resize; touch-action: none; }
+.tab-divider:hover, .tab-divider:focus-visible { background: var(--accent); opacity: .65; }
+.tab-drop-beside::after { content: 'Open beside chat'; position: absolute; inset: 0 0 0 65%; display: grid; place-items: center; z-index: 8; background: var(--bg); border: 2px dashed var(--accent); color: var(--text); pointer-events: none; }
+.sidebar-switch { display: flex; gap: 3px; padding: 7px 10px; border-bottom: 1px solid var(--border); flex: none; }
+.sidebar-switch button { display: flex; align-items: center; justify-content: center; gap: 5px; flex: 1; min-width: 0; padding: 6px 4px; border: 0; border-radius: 5px; color: var(--muted); background: none; font-size: 11px; }
+.sidebar-switch .icon { width: 15px; height: 15px; }
+.sidebar-switch button:hover { background: var(--hover); color: var(--text); }
+.sidebar-switch button[aria-selected="true"] { background: var(--hover); color: var(--text-strong); }
+.sidebar-workspaces { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.sidebar-run { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; }
+.sidebar-run .sidebar-heading { justify-content: space-between; }
+.sidebar-run #run-tools { margin-left: auto; }
+.sidebar-git { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; border: 0; background: none; overflow: hidden; }
+.sidebar-git .git-content { flex: 1; overflow-y: auto; }
+.sidebar-git .git-toolbar { padding: 8px 12px; }
+.sidebar-git .git-commit { margin: 8px 12px; }
+@keyframes work-tab-pulse { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .work-tab[data-state="running"] .main-tab-state { animation: none; } }
+@media (max-width: 680px) { .main-work-area.has-beside { flex-direction: column; } .main-work-area.has-beside > .chat-stage { flex-basis: 50%; } .tab-beside { border-left: 0; border-top: 1px solid var(--border); } .tab-divider { display: none; } }

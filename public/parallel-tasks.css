@@ -9,29 +9,48 @@
 .task-list { flex: 1; min-height: 0; margin: 0; padding: 0 6px 6px; overflow: hidden auto; list-style: none; }
 .task-list[hidden] { display: none; }
 .task-list-empty { padding: 2px 8px 6px 28px; color: var(--faint); font-size: var(--font-ui-md); line-height: 1.45; }
-.task-row { display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: var(--font-ui-base); text-align: left; }
+.task-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: var(--font-ui-base); text-align: left; }
 .task-row:hover { background: var(--hover); color: var(--text); }
 .task-row.active { background: var(--list-active); color: var(--text-strong); }
 .task-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-row-side { flex: none; max-width: 42%; overflow: hidden; color: var(--faint); font-size: var(--font-ui-sm); text-overflow: ellipsis; white-space: nowrap; }
-.task-row-icon { flex: none; width: 14px; height: 14px; background: var(--faint); -webkit-mask: var(--icon-tasks) center / contain no-repeat; mask: var(--icon-tasks) center / contain no-repeat; }
-.task-row[data-status="running"] .task-row-icon { background: var(--link); }
-.task-row[data-status="complete"] .task-row-icon, .task-row[data-status="integrated"] .task-row-icon { background: var(--success); -webkit-mask-image: var(--icon-check); mask-image: var(--icon-check); }
-.task-row[data-status="failed"] .task-row-icon, .task-row[data-status="blocked"] .task-row-icon, .task-row[data-status="lost"] .task-row-icon { background: var(--danger); }
-.task-row[data-status="stopped"] .task-row-icon, .task-row[data-status="detached"] .task-row-icon { background: var(--warning); }
-.task-row[data-status="waiting"] .task-row-title { color: var(--faint); }
+.task-row.task-row-detailed { align-items: flex-start; padding: 6px 8px; color: var(--text); }
+.task-row-detailed :is(.task-row-icon, .task-row-main-icon) { margin-top: 2px; }
+.task-row-detailed .task-row-title { color: var(--text-strong); font-weight: 500; }
+.task-row.active .task-row-title { color: var(--text-strong); }
+.task-row-body { display: grid; gap: 1px; flex: 1; min-width: 0; }
+.task-row-head { display: flex; align-items: center; gap: 6px; min-width: 0; line-height: 18px; }
+.task-row-meta { display: block; min-width: 0; overflow: hidden; font-size: var(--font-ui-sm); font-weight: 400; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.task-row-state { color: var(--muted); font-weight: 500; }
+.task-row:is([data-state="working"], [data-state="review"]) .task-row-state { color: var(--link); }
+.task-row:is([data-state="approval"], [data-state="question"], [data-state="paused"]) .task-row-state { color: var(--warning); }
+.task-row-sub { color: var(--faint); font-weight: 400; }
+.task-row-folder { flex: none; max-width: 78px; height: 17px; padding: 0 5px; overflow: hidden; border-radius: 4px; background: var(--chip-bg); color: var(--muted); font-size: var(--font-ui-xs); font-weight: 400; line-height: 17px; text-overflow: ellipsis; white-space: nowrap; }
 .task-row-badge { flex: none; min-width: 16px; padding: 0 4px; border-radius: 8px; background: var(--warning); color: var(--bg); font-size: var(--font-ui-xs); font-weight: 700; line-height: 17px; text-align: center; }
 .task-row-review { flex: none; padding: 0 5px; border-radius: 8px; background: var(--chip-bg); color: var(--link); font-size: var(--font-ui-xs); font-weight: 600; line-height: 17px; }
+/* One icon set across workspace chat, standalone tasks and plan groups (#192). */
+.task-row-icon, .task-row-main-icon, .task-group-icon { flex: none; width: 14px; height: 14px; background: var(--faint); -webkit-mask: var(--icon-tasks) center / contain no-repeat; mask: var(--icon-tasks) center / contain no-repeat; }
+.task-row-main[data-state="idle"] .task-row-main-icon { background: var(--muted); -webkit-mask-image: var(--icon-chat); mask-image: var(--icon-chat); }
+.task-row-main.active[data-state="idle"] .task-row-main-icon { background: var(--link); }
+.task-row[data-state="working"] :is(.task-row-icon, .task-row-main-icon), .task-group-holder[data-status="running"] .task-group-icon { background: var(--link); -webkit-mask-image: var(--icon-working); mask-image: var(--icon-working); animation: task-spin .9s linear infinite; }
+.task-row[data-state="waiting"] .task-row-icon { background: var(--muted); -webkit-mask-image: var(--icon-clock); mask-image: var(--icon-clock); }
+.task-row[data-state="approval"] :is(.task-row-icon, .task-row-main-icon) { background: var(--warning); -webkit-mask-image: var(--icon-access); mask-image: var(--icon-access); }
+.task-row[data-state="question"] :is(.task-row-icon, .task-row-main-icon) { background: var(--warning); -webkit-mask-image: var(--icon-question); mask-image: var(--icon-question); }
+.task-row[data-state="paused"] .task-row-icon { background: var(--warning); -webkit-mask-image: var(--icon-clock); mask-image: var(--icon-clock); }
+.task-row[data-state="review"] .task-row-icon { background: var(--link); -webkit-mask-image: var(--icon-branch); mask-image: var(--icon-branch); }
+.task-row[data-state="finished"] .task-row-icon, .task-group-holder[data-status="done"] .task-group-icon { background: var(--success); -webkit-mask-image: var(--icon-check); mask-image: var(--icon-check); }
+.task-row[data-state="stopped"] .task-row-icon, .task-group-holder[data-status="stopped"] .task-group-icon { background: var(--warning); -webkit-mask-image: var(--icon-minus-circle); mask-image: var(--icon-minus-circle); }
+.task-row:is([data-status="cancelled"], [data-status="discarded"]) .task-row-icon { background: var(--faint); }
+.task-row[data-state="failed"] .task-row-icon, .task-group-holder[data-status="failed"] .task-group-icon { background: var(--danger); -webkit-mask-image: var(--icon-alert); mask-image: var(--icon-alert); }
+@keyframes task-spin { to { transform: rotate(360deg); } }
 /* The main conversation belongs to the whole workspace, so it reads differently from the tasks under it. */
 .task-row-holder:has(.task-row-main) { margin-bottom: 3px; padding-bottom: 3px; border-bottom: 1px solid var(--border); }
 .task-row-holder:has(.task-row-main):last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
 .task-row-main { color: var(--text); font-weight: 500; }
-.task-row-main-icon { flex: none; width: 14px; height: 14px; background: currentColor; color: var(--muted); -webkit-mask: var(--icon-agent) center / contain no-repeat; mask: var(--icon-agent) center / contain no-repeat; }
-.task-row-main.active .task-row-main-icon, .task-row-main[data-status="running"] .task-row-main-icon { color: var(--link); }
-.task-row-main .task-row-side { font-weight: 400; }
-.task-row[data-status="running"] :is(.task-row-icon, .task-row-main-icon) { animation: task-working 1.6s ease-in-out infinite; }
-@keyframes task-working { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .task-row[data-status="running"] :is(.task-row-icon, .task-row-main-icon) { animation: none; } }
+.task-earlier-holder { margin-top: 2px; }
+.task-earlier { display: flex; align-items: center; gap: 6px; width: 100%; height: 26px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: var(--faint); font-size: var(--font-ui-sm); text-align: left; }
+.task-earlier:hover { background: var(--hover); color: var(--text); }
+.task-earlier-chevron { flex: none; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; mask: var(--icon-chevron-right) center / contain no-repeat; transition: transform .12s; }
+.task-earlier[aria-expanded="true"] .task-earlier-chevron { transform: rotate(90deg); }
 .task-section.collapsed { flex: none; }
 @media (max-width: 700px) {
   .task-section { display: none; }
@@ -110,11 +129,6 @@ summary.task-merge-head { cursor: pointer; }
 .task-group:hover { background: var(--hover); }
 .task-group-chevron { flex: none; width: 12px; height: 12px; background: var(--faint); -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; mask: var(--icon-chevron-right) center / contain no-repeat; transition: transform .12s; }
 .task-group[aria-expanded="true"] .task-group-chevron { transform: rotate(90deg); }
-.task-group-icon { flex: none; width: 14px; height: 14px; background: var(--faint); -webkit-mask: var(--icon-tasks) center / contain no-repeat; mask: var(--icon-tasks) center / contain no-repeat; }
-.task-group-holder[data-status="running"] .task-group-icon { background: var(--link); animation: task-working 1.6s ease-in-out infinite; }
-.task-group-holder[data-status="done"] .task-group-icon { background: var(--success); -webkit-mask-image: var(--icon-check); mask-image: var(--icon-check); }
-.task-group-holder[data-status="failed"] .task-group-icon { background: var(--danger); }
-.task-group-holder[data-status="stopped"] .task-group-icon { background: var(--warning); }
 .task-group-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-group-side { flex: none; max-width: 48%; overflow: hidden; color: var(--faint); font-size: var(--font-ui-sm); font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .task-group-holder[data-status="failed"] .task-group-side { color: var(--danger); }
@@ -123,4 +137,7 @@ summary.task-merge-head { cursor: pointer; }
 .task-group-holder:is(:hover, :focus-within) .task-group-close { opacity: 1; }
 .task-group-total { grid-column: 1 / -1; padding: 0 8px 4px 40px; overflow: hidden; color: var(--faint); font-size: var(--font-ui-xs); text-overflow: ellipsis; white-space: nowrap; }
 .task-row-step .task-row { padding-left: 26px; }
-@media (prefers-reduced-motion: reduce) { .task-group-chevron { transition: none; } .task-group-holder[data-status="running"] .task-group-icon { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .task-group-chevron, .task-earlier-chevron { transition: none; }
+  .task-row[data-state="working"] :is(.task-row-icon, .task-row-main-icon), .task-group-holder[data-status="running"] .task-group-icon { animation: none; }
+}

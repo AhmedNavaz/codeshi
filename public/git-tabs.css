@@ -1,0 +1,18 @@
+/* Git changes share the work area with the chat, terminals and command output. */
+.git-diff-view { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; height: 100%; background: var(--bg); }
+.git-diff-view[hidden] { display: none; }
+.git-diff-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex: none; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.git-diff-head > div { min-width: 0; }
+.git-diff-head h2 { margin: 0; font: 600 13px/1.5 var(--mono); overflow-wrap: anywhere; }
+.git-diff-meta { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.git-diff-head > button { flex: none; }
+.git-commit-subject { padding: 0; border: 0; background: transparent; color: var(--text); text-align: left; font-size: 12px; font-weight: 600; }
+.git-commit-subject:hover { color: var(--link); }
+.git-commit-diff { padding: 12px; }
+.git-commit-body { margin: 0 0 14px; color: var(--muted); white-space: pre-wrap; font-size: 12px; }
+.git-commit-file { margin-bottom: 8px; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; }
+.git-commit-file > summary { padding: 10px; cursor: pointer; background: var(--bg); overflow-wrap: anywhere; }
+.git-commit-file > summary code { font-size: 12px; }
+.git-commit-file > summary .git-diff-meta { margin-left: 12px; }
+.git-commit-file > .diff-content { border-top: 1px solid var(--border); }
+.git-diff-view .diff-images { grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); }

@@ -89,7 +89,8 @@ test('stale preview approval and stale patch application never overwrite changed
 
 test('rejects traversal, private paths, symlinks, oversized files and malformed public schemas',{skip:noSymlinks},async t=>{
   const env=setup(t);fs.writeFileSync(path.join(env.owner,'app.js'),'original');
-  for(const relative of ['../x','/absolute','a/../../x','a\\x','a//x','.git/config','.env','.env.production','.data/a','.codex/auth.json','.claude/projects/a','key.pem','a/%2e%2e/x','C:/x'])assert.throws(()=>validateRelativePath(relative),{status:400});
+  for(const relative of ['../x','/absolute','a/../../x','a\\x','a//x','.git/config','.env','.env.local','.env.production','.env.example.local','.env.example.key','.data/a','.codex/auth.json','.claude/projects/a','key.pem','a/%2e%2e/x','C:/x'])assert.throws(()=>validateRelativePath(relative),{status:400});
+  for(const relative of ['.env.example','.env.sample','.env.template','.env.dist','.env.default','.env.defaults','.env.schema','.env.local.example','web/.env.example'])assert.equal(validateRelativePath(relative),relative);
   fs.symlinkSync(path.join(env.owner,'app.js'),path.join(env.owner,'link.js'));fs.symlinkSync(env.friend,path.join(env.owner,'outside'));fs.writeFileSync(path.join(env.owner,'binary.bin'),Buffer.from([0,1,2,3]));fs.writeFileSync(path.join(env.owner,'bad-utf8.txt'),Buffer.from([255]));fs.writeFileSync(path.join(env.owner,'big.txt'),'x'.repeat(MAX_FILE_BYTES+1));fs.writeFileSync(path.join(env.owner,'huge.bin'),Buffer.alloc(MAX_BINARY_BYTES+1));
   for(const file of ['binary.bin','bad-utf8.txt'])assert.equal(env.service.prepare(env.first.id,env.conversation.id,{mode:'source',files:[file]}).package.files[0].encoding,'base64');
   for(const file of ['link.js','outside/created.txt','huge.bin','big.txt'])assert.throws(()=>env.service.prepare(env.first.id,env.conversation.id,{mode:'source',files:[file]}),{status:400});

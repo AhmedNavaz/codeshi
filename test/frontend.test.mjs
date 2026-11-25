@@ -24,6 +24,7 @@ class FileReader {
 class UIEvent {
   constructor(type,properties={}){this.type=type;this.defaultPrevented=false;Object.assign(this,properties);}
   preventDefault(){this.defaultPrevented=true;}
+  stopPropagation(){this.propagationStopped=true;}
 }
 class Element extends Events {
   constructor(tag,document){super();this.tagName=tag.toUpperCase();this.document=document;this.childNodes=[];this.parentNode=null;this.attributes={};this.dataset={};this.style={setProperty(name,value){this[name]=String(value);},removeProperty(name){delete this[name];}};this.className='';this.id='';this.value='';this.disabled=false;this.hidden=false;this.checked=false;this.open=false;this.scrollTop=0;this.scrollHeight=100;this.clientHeight=500;this.classList={contains:name=>this.className.split(/\s+/).includes(name),add:name=>this.classList.toggle(name,true),remove:name=>this.classList.toggle(name,false),toggle:(name,on)=>{const set=new Set(this.className.split(/\s+/).filter(Boolean));if(on===undefined)on=!set.has(name);if(on)set.add(name);else set.delete(name);this.className=[...set].join(' ');return on;}};}
@@ -42,7 +43,7 @@ class Element extends Events {
   remove(){if(this.parentNode){this.parentNode.childNodes=this.parentNode.childNodes.filter(child=>child!==this);this.parentNode=null;}}
   setAttribute(key,value){this.attributes[key]=String(value);if(key==='id')this.id=String(value);if(key==='class')this.className=String(value);if(key.startsWith('data-'))this.dataset[key.slice(5)]=String(value);}
   getAttribute(key){return this.attributes[key]??null;}removeAttribute(key){delete this.attributes[key];}
-  matches(selector){if(selector===':popover-open')return this.popoverOpen===true;if(selector.startsWith('#'))return this.id===selector.slice(1);if(selector.startsWith('.'))return this.classList.contains(selector.slice(1));const attr=selector.match(/^(\w+)?\[([\w-]+)(?:="([^"]*)")?\]$/);if(attr)return (!attr[1]||this.tagName===attr[1].toUpperCase())&&(attr[2]==='open'?this.open:attr[3]===undefined?this.getAttribute(attr[2])!==null:this.getAttribute(attr[2])===attr[3]);return this.tagName===selector.toUpperCase();}
+  matches(selector){if(selector.includes(','))return selector.split(',').some(part=>this.matches(part.trim()));if(selector===':popover-open')return this.popoverOpen===true;if(selector.startsWith('#'))return this.id===selector.slice(1);if(selector.startsWith('.'))return this.classList.contains(selector.slice(1));const attr=selector.match(/^(\w+)?\[([\w-]+)(?:="([^"]*)")?\]$/);if(attr)return (!attr[1]||this.tagName===attr[1].toUpperCase())&&(attr[2]==='open'?this.open:attr[3]===undefined?this.getAttribute(attr[2])!==null:this.getAttribute(attr[2])===attr[3]);return this.tagName===selector.toUpperCase();}
   querySelectorAll(selector){const found=[];for(const child of this.children){if(child.matches(selector))found.push(child);found.push(...child.querySelectorAll(selector));}return found;}
   querySelector(selector){return this.querySelectorAll(selector)[0]||null;}
   closest(selector){for(let current=this;current;current=current.parentNode)if(current.matches(selector))return current;return selector==='.sidebar'?this.document.sidebar:null;}
@@ -68,6 +69,10 @@ function documentFixture(){
   for(const match of html.matchAll(/<aside id="(\w+-panel)"[^>]*>[\s\S]*?<div class="panel-tabs"[^>]*>([\s\S]*?)<\/div>/g)){const list=document.createElement('div');list.className='panel-tabs';list.setAttribute('role','tablist');for(const tab of match[2].matchAll(/<button class="panel-tab"[^>]*data-panel="(\w+)" aria-selected="(\w+)"/g)){const button=document.createElement('button');button.className='panel-tab';button.setAttribute('role','tab');button.setAttribute('data-panel',tab[1]);button.dataset.panel=tab[1];button.setAttribute('aria-selected',tab[2]);list.append(button);}document.getElementById(match[1]).append(list);}
   for(const id of ['send-button','stop-button','conversation-state'])document.getElementById(id).append(document.createElement('span'),document.createElement('span'));
   for(const id of ['save-project','save-folder'])document.getElementById(id).append(document.createTextNode('Save '),document.createElement('span'));
+  for(const id of ['sidebar-tab-workspaces','sidebar-tab-run','sidebar-tab-git'])document.getElementById('sidebar-switch').append(document.getElementById(id));
+  for(const id of ['main-tab-chat','main-tool-tabs','main-tab-new'])document.getElementById('main-tabs').append(document.getElementById(id));
+  for(const id of ['tab-divider','tab-beside-title','tab-unsplit','tab-secondary'])document.getElementById('tab-beside').append(document.getElementById(id));
+  for(const id of ['tab-primary','tab-beside'])document.getElementById('main-work-area').append(document.getElementById(id));
   return document;
 }
 const clone=value=>JSON.parse(JSON.stringify(value));
@@ -85,7 +90,7 @@ function realXterm(){
 }
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,experimentalUI=false,splitUI=false,questionsUI=false,alertsUI=false,githubUI=false,boardUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true,locale=null}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,cliUI=false,terminalUI=false,tabsUI=commandsUI||terminalUI||cliUI,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,experimentalUI=false,splitUI=false,questionsUI=false,alertsUI=false,githubUI=false,boardUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true,locale=null}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[],copiedTexts=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences),handoffPreferences={threshold:90,automatic:false};
   window.innerWidth=1280;window.innerHeight=800;
@@ -113,7 +118,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
         assert(projects.some(project=>project.id===request.projectId),'Project commands must name the current workspace.');
         let saved=commandStates.get(request.projectId); if(!saved){saved={commands:[],sessions:{}};commandStates.set(request.projectId,saved);}
         // A stand-in for the commands API: named commands, each with its latest session.
-        if(request.path==='/api/commands')return response(clone({commands:saved.commands,sessions:Object.fromEntries(Object.entries(saved.sessions).map(([id,session])=>[id,request.params.output===id?session:(({output,ansi,...rest})=>rest)(session)]))}));
+        if(request.path==='/api/commands')return response(clone({commands:saved.commands,sessions:Object.fromEntries(Object.entries(saved.sessions).map(([id,session])=>[id,(request.params.output===undefined||request.params.output===id)?session:(({output,ansi,...rest})=>rest)(session)]))}));
         if(request.path==='/api/commands/detect')return response({manager:'npm',suggestions:[{name:'dev',command:'npm run dev'},{name:'test',command:'npm run test',test:true}],message:'Nothing found here.'});
         const action=request.path.slice('/api/commands/'.length),body=request.body||{};
         if(action==='save'){
@@ -178,6 +183,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
       }
 
       if(request.path==='/api/conversation/export'){const redacted=request.params.redact!=='0';return response({package:{schema:'ai-relay.conversation',version:1,id:'export-one',workspace:{name:selected.name,folders:['frontend']},messages:clone(ensureChat(selected).messages).map(message=>({id:message.id,role:message.role,text:message.text})),digest:'exported'},stats:{messages:ensureChat(selected).messages.length,omitted:0,bytes:420,from:null,to:null,providers:[]},findings:{secrets:1,localPaths:0},redacted});}
+      if(request.path==='/api/budget')return response({policy:{},defaults:{},quota:{},task:null});
       if(request.path==='/api/status')return response({verificationCadence:preferences.verificationCadence || 'as-needed',workspace:selected.path,projectId:selected.id,project:clone(selected),providers:{codex:providerStatus('codex'),claude:providerStatus('claude'),gemini:providerStatus('gemini')},runningConversationId:canonical.get(selected.id)?.status==='running'?canonical.get(selected.id).id:null});
       if(request.path==='/api/conversation'){
         const rawChat = ensureChat(selected);
@@ -274,6 +280,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   const previewOpens=[],previewListeners=[],previewCloses=[];
   if(previewUI)window.relayDesktop=Object.assign(window.relayDesktop||{},{openPreview:async input=>{previewOpens.push(clone(input));return true;},closePreviews:async input=>{previewCloses.push(clone(input));return input.urls.length;},onPreviewPick:callback=>{previewListeners.push(callback);return ()=>{};}});
   vm.runInContext(fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),context,{filename:'public/app.js'});if(questionsUI)vm.runInContext(fs.readFileSync(new URL('../public/questions.js',import.meta.url),'utf8'),context,{filename:'public/questions.js'});if(workbench){vm.runInContext(fs.readFileSync(new URL('../public/settings.js',import.meta.url),'utf8'),context,{filename:'public/settings.js'});vm.runInContext(fs.readFileSync(new URL('../public/workbench.js',import.meta.url),'utf8'),context,{filename:'public/workbench.js'});}
+  if(tabsUI||commandsUI)for(const name of ['main-tabs','sidebar-tools'])vm.runInContext(fs.readFileSync(new URL(`../public/${name}.js`,import.meta.url),'utf8'),context,{filename:`public/${name}.js`});
   if(insights)vm.runInContext(fs.readFileSync(new URL('../public/insights.js',import.meta.url),'utf8'),context,{filename:'public/insights.js'});
   if(modelPickerUI)vm.runInContext(fs.readFileSync(new URL('../public/model-picker.js',import.meta.url),'utf8'),context,{filename:'public/model-picker.js'});
   if(layoutUI)vm.runInContext(fs.readFileSync(new URL('../public/layout.js',import.meta.url),'utf8'),context,{filename:'public/layout.js'});
@@ -284,7 +291,6 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(setup)vm.runInContext(fs.readFileSync(new URL('../public/setup.js',import.meta.url),'utf8'),context,{filename:'public/setup.js'});
   if(updatesUI)vm.runInContext(fs.readFileSync(new URL('../public/updates.js',import.meta.url),'utf8'),context,{filename:'public/updates.js'});
   if(localUI)vm.runInContext(fs.readFileSync(new URL('../public/local-models.js',import.meta.url),'utf8'),context,{filename:'public/local-models.js'});
-  if(commandsUI||terminalUI)vm.runInContext(fs.readFileSync(new URL('../public/bottom-panel.js',import.meta.url),'utf8'),context,{filename:'public/bottom-panel.js'});
   if(previewUI)vm.runInContext(fs.readFileSync(new URL('../public/preview.js',import.meta.url),'utf8'),context,{filename:'public/preview.js'});
   if(commandsUI)vm.runInContext(fs.readFileSync(new URL('../public/project-commands.js',import.meta.url),'utf8'),context,{filename:'public/project-commands.js'});
   if(filesUI)vm.runInContext(fs.readFileSync(new URL('../public/files.js',import.meta.url),'utf8'),context,{filename:'public/files.js'});
@@ -309,11 +315,12 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(update)vm.runInContext(fs.readFileSync(new URL('../public/updater.js',import.meta.url),'utf8'),context,{filename:'public/updater.js'});
   // A stand-in for xterm.js: it records what the page writes and lets a test type into it. With realTerminal, the page
   // gets the real xterm.js and its web links addon instead (see realXterm).
-  if(terminalUI){
+  if(terminalUI||cliUI){
     if(realTerminal){const xterm=realXterm();window.Terminal=class extends xterm.Terminal{constructor(options){super(options);terminals.push(this);}open(host){this.host=host;}};window.WebLinksAddon=xterm.WebLinksAddon;}
     else window.Terminal=class{constructor(options){this.options=options;this.written='';this.cols=80;this.rows=24;this.focused=0;terminals.push(this);}loadAddon(){}open(host){this.host=host;}onData(fn){this.type=fn;}onResize(fn){this.resized=fn;}write(data){this.written+=data;}reset(){this.written='';}focus(){this.focused++;}dispose(){this.disposed=true;}};
     window.FitAddon={FitAddon:class{activate(){}dispose(){}fit(){}}};
-    vm.runInContext(fs.readFileSync(new URL('../public/terminal.js',import.meta.url),'utf8'),context,{filename:'public/terminal.js'});
+    if(terminalUI)vm.runInContext(fs.readFileSync(new URL('../public/terminal.js',import.meta.url),'utf8'),context,{filename:'public/terminal.js'});
+    if(cliUI)vm.runInContext(fs.readFileSync(new URL('../public/cli-tab.js',import.meta.url),'utf8'),context,{filename:'public/cli-tab.js'});
   }
   // A stand-in for the system's speech synthesis: it records what would be spoken.
   if(voiceUI){
@@ -1993,10 +2000,19 @@ test('permission controls offer Ask for permission and Full auto-approval and en
 });
 
 
-test('Run is in the status bar; a command found in the folder is added in one click, and starting, stopping and hiding never touch the conversation',async()=>{
+// Command outputs have their own controls: pick the visible tab, or an explicitly named saved output.
+function commandView(ui, id = null, scope = ui.state().projectId) {
+  return ui.document.querySelectorAll('.command-tab-view').find(view => view.dataset.projectId === scope && (id ? view.dataset.commandId === id : !view.hidden));
+}
+function commandPart(ui, name, id = null, scope = ui.state().projectId) {
+  const view = commandView(ui, id, scope);
+  return view && (() => { const walk = element => element.dataset.commandPart === name ? element : element.children.map(walk).find(Boolean); return walk(view); })() || ui.$('command-' + name);
+}
+
+test('Run chooses commands in the sidebar and opens independent output tabs without changing the conversation',async()=>{
   const ui=await browser({commandsUI:true,desktop:true});
   ui.$('message-input').value='Keep coding while the server runs';ui.fire('message-input','input');
-  assert.equal(ui.$('bottom-panel').hidden,true);assert.equal(ui.$('status-run').hidden,false);
+  assert.equal(ui.$('bottom-panel'),null);assert.equal(ui.$('status-run').hidden,false);
   ui.$('status-run').click();await flush();await flush();
   assert.equal(ui.$('project-commands').hidden,false);assert.equal(ui.$('status-run').getAttribute('aria-pressed'),'true');
   assert.equal(ui.$('command-empty').hidden,false,'With no commands, Run offers what the folder defines.');
@@ -2013,26 +2029,26 @@ test('Run is in the status bar; a command found in the folder is added in one cl
   ui.$('command-suggestions').querySelectorAll('.command-chip')[0].click();ui.$('command-form').dispatchEvent(new UIEvent('submit'));await flush();await flush();
   const rows=()=>ui.$('command-list').querySelectorAll('.command-row');
   assert.deepEqual(rows().map(row=>row.dataset.commandId),['test','dev']);
-  assert.equal(ui.$('command-line').textContent,'npm run dev','The command just added is selected.');
+  assert.equal(commandPart(ui, 'line').textContent,'npm run dev','The command just added is selected.');
   assert.deepEqual(ui.$('command-list').querySelectorAll('.run-folder-name').map(node=>node.textContent),['Frontend'],'Commands are listed under the folder they run in.');
-  assert.deepEqual([ui.$('command-place').textContent,ui.$('command-place').hidden],['Frontend',false],'The output says where the command runs.');
+  assert.deepEqual([commandPart(ui, 'place').textContent,commandPart(ui, 'place').hidden],['Frontend',false],'The output says where the command runs.');
   assert(rows()[0].querySelector('.command-test-mark'),'The command used for checks is marked.');
   rows()[0].querySelector('.command-pick').click();await flush();await flush();
-  assert.equal(ui.$('command-line').textContent,'npm run test');
+  assert.equal(commandPart(ui, 'line').textContent,'npm run test');
   rows()[1].querySelector('.command-pick').click();await flush();await flush();
-  assert.equal(ui.$('command-line').textContent,'npm run dev');assert.equal(ui.$('command-state').textContent,'Not started');
-  ui.$('command-start').click();ui.$('command-start').click();await flush();await flush();
+  assert.equal(commandPart(ui, 'line').textContent,'npm run dev');assert.equal(commandPart(ui, 'state').textContent,'Not started');
+  commandPart(ui, 'start').click();commandPart(ui, 'start').click();await flush();await flush();
   assert.equal(ui.requests.filter(request=>request.path==='/api/commands/start').length,1,'A double click starts it once.');
-  assert.match(ui.$('command-state').textContent,/^Running · \d+s$/);assert.equal(ui.$('command-start').hidden,true);assert.equal(ui.$('command-stop').hidden,false);assert.equal(ui.$('command-restart').hidden,false);
-  assert.equal(ui.$('command-output').querySelector('.ansi-green').textContent,'ready','Output keeps its colours.');
+  assert.match(commandPart(ui, 'state').textContent,/^Running · \d+s$/);assert.equal(commandPart(ui, 'start').hidden,true);assert.equal(commandPart(ui, 'stop').hidden,false);assert.equal(commandPart(ui, 'restart').hidden,false);
+  assert.equal(commandPart(ui, 'output').querySelector('.ansi-green').textContent,'ready','Output keeps its colours.');
   assert.equal(ui.$('run-tab-count').textContent,'1');assert.equal(ui.$('status-run-state').textContent,'1');assert.equal(ui.$('status-run-state').dataset.state,'running');
-  ui.$('command-links').children[0].click();await flush();assert(ui.externalLinks.includes('http://localhost:3000/'));
-  ui.$('status-run').click();assert.equal(ui.$('bottom-panel').hidden,true,'Clicking Run again hides the panel.');
+  commandPart(ui, 'links').children[0].click();await flush();assert(ui.externalLinks.includes('http://localhost:3000/'));
+  ui.$('status-run').click();assert.equal(ui.window.relaySidebar.active(),'workspaces','Clicking Run again returns to workspaces.');
   assert.equal(ui.requests.filter(request=>request.path.endsWith('/stop')).length,0,'Hiding leaves commands running.');
   assert.equal(ui.$('status-run-state').textContent,'1','The status bar still says what runs.');
   ui.$('status-run').click();await flush();await flush();
-  ui.$('command-stop').click();await flush();await flush();assert.equal(ui.$('command-state').textContent,'Stopped');assert.equal(ui.$('command-start').hidden,false);
-  ui.$('command-clear').click();await flush();await flush();assert.equal(ui.$('command-state').textContent,'Not started');
+  commandPart(ui, 'stop').click();await flush();await flush();assert.equal(commandPart(ui, 'state').textContent,'Stopped');assert.equal(commandPart(ui, 'start').hidden,false);
+  commandPart(ui, 'clear').click();await flush();await flush();assert.equal(commandPart(ui, 'state').textContent,'Not started');
   assert.equal(ui.$('message-input').value,'Keep coding while the server runs');
   assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0);
 });
@@ -2042,10 +2058,10 @@ test('a running app opens in the preview from Run, and a pick goes into the mess
   const attachments=[];ui.setIntercept((request,next)=>{if(request.path==='/api/attachments'&&request.method==='POST'){attachments.push(request.body);return response({id:'att-1',name:request.body.name,kind:'image',mime:'image/png',bytes:120});}return next();});
   ui.$('status-run').click();await flush();await flush();
   ui.$('command-quick').querySelectorAll('.command-chip')[0].click();await flush();await flush();
-  assert.equal(ui.$('command-preview').hidden,true,'A command that isn’t running has nothing to preview.');
-  ui.$('command-start').click();await flush();await flush();
-  assert.equal(ui.$('command-preview').hidden,false,'A running app with a local address can be previewed.');
-  ui.$('command-preview').click();await flush();
+  assert.equal(commandPart(ui, 'preview').hidden,true,'A command that isn’t running has nothing to preview.');
+  commandPart(ui, 'start').click();await flush();await flush();
+  assert.equal(commandPart(ui, 'preview').hidden,false,'A running app with a local address can be previewed.');
+  commandPart(ui, 'preview').click();await flush();
   assert.deepEqual(ui.previewOpens,[{projectId:'project-one',url:'http://localhost:3000/'}]);
   assert.equal(ui.window.relayCommands.localURL(),'http://localhost:3000/');
   ui.$('message-input').value='Make the promo field wider';ui.fire('message-input','input');
@@ -2073,24 +2089,24 @@ test('commands are added and edited in a short form, stay with their workspace, 
   ui.$('command-name').value='web';ui.$('command-text').value='npm run dev -- --port 3000';ui.$('command-test').checked=false;
   ui.$('command-form').dispatchEvent(new UIEvent('submit'));await flush();await flush();
   assert.deepEqual(ui.requests.filter(request=>request.path==='/api/commands/save').at(-1).body,{name:'web',folderId:'frontend',directory:'',command:'npm run dev -- --port 3000',test:false});
-  assert.equal(ui.$('command-form').hidden,true);assert.equal(ui.$('command-line').textContent,'npm run dev -- --port 3000');
-  ui.$('command-edit').click();await flush();
+  assert.equal(ui.$('command-form').hidden,true);assert.equal(commandPart(ui, 'line').textContent,'npm run dev -- --port 3000');
+  commandPart(ui, 'edit').click();await flush();
   assert.equal(ui.$('command-form-title').textContent,'Edit web');assert.equal(ui.$('command-remove').hidden,false);assert.equal(ui.$('command-text').value,'npm run dev -- --port 3000');
   ui.$('command-cancel').click();await flush();assert.equal(ui.$('command-form').hidden,true);
 
   await ui.switchProject('project-two');await flush();await flush();
   assert.equal(ui.$('command-empty').hidden,false,'Another workspace has its own commands.');
   await ui.switchProject('project-one');await flush();await flush();
-  assert.equal(ui.$('command-line').textContent,'npm run dev -- --port 3000');
+  assert.equal(commandPart(ui, 'line').textContent,'npm run dev -- --port 3000');
 
   // A failed command offers to put its failure in the message box, where it waits to be read and sent.
   ui.setIntercept((request,next)=>request.path==='/api/commands'?response({commands:[{id:'web',name:'web',folderId:'frontend',directory:'',command:'npm test'}],sessions:{web:{id:'s1',commandId:'web',status:'failed',command:'npm test',cwd:'/workspace/example/frontend',output:'<script>untrusted</script>\nAssertionError: expected 100 to equal 90',ansi:'<script>untrusted</script>\nAssertionError: expected 100 to equal 90',exitCode:1,urls:['javascript:alert(1)','http://evil.example','http://user:pass@localhost:42','http://localhost:42']}}}):next());
   await ui.window.relayCommands.refresh();await flush();
-  assert.equal(ui.$('command-state').textContent,'Failed · exit 1');assert.equal(ui.$('command-fix').hidden,false);
-  assert.match(ui.$('command-output').textContent,/<script>untrusted<\/script>/,'Output is literal text.');assert.equal(ui.$('command-output').querySelector('script'),null);
-  assert.equal(ui.$('command-links').children.length,1,'Only local links without credentials can be opened.');
+  assert.equal(commandPart(ui, 'state').textContent,'Failed · exit 1');assert.equal(commandPart(ui, 'fix').hidden,false);
+  assert.match(commandPart(ui, 'output').textContent,/<script>untrusted<\/script>/,'Output is literal text.');assert.equal(commandPart(ui, 'output').querySelector('script'),null);
+  assert.equal(commandPart(ui, 'links').children.length,1,'Only local links without credentials can be opened.');
   assert.equal(ui.$('status-run-state').dataset.state,'failed');
-  ui.$('message-input').value='';ui.$('command-fix').click();
+  ui.$('message-input').value='';commandPart(ui, 'fix').click();
   assert.match(ui.$('message-input').value,/^The web command failed with exit code 1\. Find the cause and fix it\.\n\nCommand: npm test \(in Frontend\)\n\nEnd of its output:\n```\n<script>untrusted<\/script>\nAssertionError/);
   assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0,'Nothing is sent.');
 });
@@ -2144,14 +2160,13 @@ test('the side panel tabs open their own panel, remember the choice, and old lin
   const ui = await browser({ insights: true, agentsUI: true, layoutUI: true, rewindUI: true, wide: true });
   await flush();
   assert.equal(ui.$('agents-panel').hidden, false, 'Agents opens first.');
+  assert.equal(ui.$('tasks-panel'), null, 'The Tasks side panel is no longer part of the interface (#190).');
   const show = ui.window.relayUI.showSidePanel;
   show('brief'); await flush();
   assert.deepEqual([ui.$('brief-panel').hidden, ui.$('agents-panel').hidden, ui.$('git-panel').hidden], [false, true, true], 'One panel at a time.');
   assert.equal(ui.storage.get('throughline:side-panel'), 'brief');
-  show('tasks'); await flush();
-  assert.deepEqual([ui.$('tasks-panel').hidden, ui.$('brief-panel').hidden], [false, true]);
   show('git'); await flush();
-  assert.deepEqual([ui.$('git-panel').hidden, ui.$('tasks-panel').hidden], [false, true]);
+  assert.deepEqual([ui.$('git-panel').hidden, ui.$('brief-panel').hidden], [false, true]);
   show('timeline'); await flush();
   assert.deepEqual([ui.$('timeline-panel').hidden, ui.$('git-panel').hidden], [false, true]);
   assert.equal(ui.storage.get('throughline:side-panel'), 'timeline');
@@ -2166,47 +2181,43 @@ test('the side panel tabs open their own panel, remember the choice, and old lin
   assert.equal(ui.$('brief-panel').hidden, true);
   ui.$('toggle-side-panel').click(); await flush();
   assert.equal(ui.$('brief-panel').hidden, false, 'The layout button brings back the panel last open.');
-  const remembered = await browser({ insights: true, agentsUI: true, layoutUI: true, wide: true, stored: { 'throughline:side-panel': 'tasks' } }); await flush();
-  assert.deepEqual([remembered.$('tasks-panel').hidden, remembered.$('agents-panel').hidden], [false, true], 'A workspace reopens on the panel last chosen.');
+  const remembered = await browser({ insights: true, agentsUI: true, layoutUI: true, wide: true, stored: { 'throughline:side-panel': 'brief' } }); await flush();
+  assert.deepEqual([remembered.$('brief-panel').hidden, remembered.$('agents-panel').hidden], [false, true], 'A workspace reopens on the panel last chosen.');
+  const legacyTasks = await browser({ insights: true, agentsUI: true, layoutUI: true, wide: true, stored: { 'throughline:side-panel': 'tasks' } }); await flush();
+  assert.equal(legacyTasks.$('agents-panel').hidden, false, 'A saved preference for the removed Tasks panel falls back to Agents.');
 });
 
-test('the Tasks panel shows the current task with its agents, numbers and tests, the tasks before it, and never shows unknown as zero', async () => {
+test('finished task time, usage and test results show folded in run details, and Settings › General exports task usage without prompts (#190)', async () => {
   const { ledgerTask } = panelFixture();
-  ledgerTask.roles = {
-    builder: { runs: 1, workingMs: 145000, usage: { ...ledgerTask.usage, runs: 1 } },
-    assessment: { runs: 1, workingMs: 5000, usage: emptyUsage() },
-  };
-  const ledger = prompts => ({ runs: [], quotaObservations: [], tasks: [
-    { id: 'old', ...(prompts ? { prompt: 'Fix the header' } : {}), agents: { gemini: {} }, workingMs: 5000, runs: 1, handoffs: 0, retries: 0, reviews: 0, status: 'complete', verification: 'unverified', usage: emptyUsage() },
-    { ...ledgerTask, ...(prompts ? {} : { prompt: undefined }) },
-  ] });
-  const ui = await browser({ insights: true, agentsUI: true, wide: true });
+  const ui = await browser({ insights: true, agentsUI: true, workbench: true, wide: true });
   const asked = [];
   ui.setIntercept((request, next) => {
-    if (request.path === '/api/ledger') { asked.push(request.params.prompts); return response(ledger(request.params.prompts === '1')); }
-    if (request.path === '/api/budget') return response({ policy: {}, defaults: {}, quota: {}, task: null });
+    if (request.path === '/api/ledger') { asked.push(request.params.prompts); return response({ runs: [], quotaObservations: [], tasks: [ledgerTask] }); }
     return next();
   });
-  await ui.window.relayUI.refresh(); ui.window.relayTasks.open(); await flush(); ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
-  const card = ui.$('task-card');
-  assert.equal(card.hidden, false);
-  assert.equal(ui.$('tasks-empty').hidden, true);
-  assert.equal(card.querySelector('.task-prompt').textContent, 'Add promo codes to checkout');
-  assert.deepEqual(card.querySelectorAll('.status-pill').map(item => item.textContent), ['Finished', 'Tests passed']);
-  assert.deepEqual(card.querySelectorAll('.message-avatar').map(item => item.className), ['message-avatar claude', 'message-avatar codex']);
-  assert.deepEqual(card.querySelectorAll('.stat').map(tile => tile.querySelector('strong').textContent), ['2m 30s', '1.3k', '2']);
-  assert.match(card.querySelectorAll('.stat')[1].title, /1 of 2 runs reported/);
-  assert.match(card.textContent, /Routing assessment: 1 run · 5s · Usage not reported/);
-  assert.match(card.textContent, /These calls are included in the total/);
-  assert.equal(card.querySelector('.task-limits'), null, 'No limits set, so no bars.');
-  const earlier = ui.$('tasks-list').children;
-  assert.equal(earlier.length, 1);
-  assert.match(earlier[0].textContent, /Fix the header/);
-  assert.match(earlier[0].textContent, /No tests run/);
-  assert.match(earlier[0].textContent, /Usage not reported/);
-  assert.doesNotMatch(earlier[0].textContent, /\b0 (input|output)/);
-  assert.equal(ui.$('tasks-export').hidden, false);
-  assert.equal(asked.at(-1), '1');
+  const c = ui.canonical.get('project-one');
+  const t0 = new Date(Date.now() - 150000).toISOString(), t1 = new Date(Date.now() - 5000).toISOString(), t2 = new Date().toISOString();
+  c.status = 'complete';
+  c.runs = [
+    { id: 'r1', taskId: 'task-1', provider: 'claude', status: 'complete', startedAt: t0, endedAt: t1, elapsedMs: 145000, usageMeasured: { input: 1200, output: 50, cacheRead: 300, cacheWrite: null } },
+    { id: 'r2', taskId: 'task-1', provider: 'codex', status: 'complete', startedAt: t1, endedAt: t2, elapsedMs: 5000, check: { status: 'passed', command: 'npm test' } },
+  ];
+  c.lastRun = c.runs[1];
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('run-details-disclosure').open, false, 'Finished task details stay folded by default.');
+  assert.equal(ui.$('run-details-disclosure').classList.contains('empty'), false);
+  const metrics = ui.$('run-metrics').textContent;
+  assert.match(metrics, /Tests passed \(npm test\)/);
+  assert.match(metrics, /Task \(2 runs\): 2m 30s · 1,250 new tokens \(1 of 2 runs reported\) · tests passed/);
+  assert.doesNotMatch(metrics, /\b0 (input|output|new tokens)/);
+
+  // Export without prompts lives in Settings › General.
+  await ui.window.relaySettings.open('general'); await flush();
+  const exportBtn = ui.$('settings-export-usage');
+  assert.ok(exportBtn && !exportBtn.disabled);
+  exportBtn.click(); await flush();
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0], undefined, 'Export without prompts never asks for prompts.');
 });
 
 test('the Brief panel says what the next agent gets, opens the full brief, and keeps a note for it', async () => {
@@ -2322,7 +2333,7 @@ test('tasks show as threads: each opens its own conversation, says how it runs, 
   await ui.window.relayUI.refresh(); await flush();
   const row = ui.$('task-list'), tabs = () => row.children.map(item => item.children[0]);
   assert.equal(ui.$('task-section').hidden, false);
-  assert.deepEqual(tabs().map(tab => tab.children.map(item => item.textContent).filter(Boolean).join(' / ')), ['Workspace chat / Whole workspace', 'Add promo codes / 2', 'Fix the tray / Review', 'Update the docs / docs']);
+  assert.deepEqual(tabs().map(tab => [tab.querySelector('.task-row-title')?.textContent, tab.querySelector('.task-row-folder')?.textContent, (tab.querySelector('.task-row-badge') || tab.querySelector('.task-row-review'))?.textContent, tab.querySelector('.task-row-state')?.textContent].filter(Boolean).join(' / ')), ['Workspace chat', 'Add promo codes / website / 2 / 2 approvals', 'Fix the tray / desktop / Review / Ready to review', 'Update the docs / docs / Paused · ready to start']);
   assert.equal(ui.$('task-banner').hidden, true, 'Main needs no banner.');
   tabs()[1].click(); await flush();
   assert.equal(ui.state().taskId, running.id); assert.equal(asked.at(-1), running.id);
@@ -2551,26 +2562,19 @@ test('skills show as a list with switches, and Add skills opens everything found
   assert.equal(ui.$('skills-add-folder').hidden, false, 'On the desktop, a folder can be added.');
 });
 
-test('task limits show as bars on the current task, are set in a dialog, and a refused run offers to allow more', async () => {
-  const ui = await browser({ insights: true, agentsUI: true, wide: true, setup: true }), { ledgerTask } = panelFixture();
+test('task limits open from Settings › Routing & handoffs, edit limits and model restrictions in the dialog, and support extend and reset', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, workbench: true, wide: true, setup: true });
   const limits = { maxWorkingMinutes: 30, maxTokens: 5000, maxSpendUSD: null, maxHandoffs: 4, maxRetries: 3, maxReviews: 5, maxRepeatedFailures: 5, maxConcurrent: 2 };
-  let view = { policy: { ...limits, allowedProviders: null, allowedModels: null }, defaults: {}, quota: {}, task: { taskId: 't1', limits, runs: 2, retries: 0, reviews: 0, handoffs: 1, workingMs: 120000, tokens: 6200, cacheRead: 900, spendUSD: 0, runsWithoutUsage: 1, active: 0, stopped: null, failures: [{ what: 'npm test', count: 3, kind: 'command' }], exceeded: { limit: 'maxTokens', message: 'This task has used 6,200 tokens, over its limit of 5,000.' } } };
+  const view = { policy: { ...limits, allowedProviders: null, allowedModels: null }, defaults: {}, quota: {}, task: null };
   const posted = [];
   ui.setIntercept((request, next) => {
     if (request.path === '/api/budget') return response(view);
-    if (request.path === '/api/ledger') return response({ runs: [], quotaObservations: [], tasks: [ledgerTask] });
     if (/\/budget$/.test(request.path)) { posted.push(request.body); return response(view); }
     return next();
   });
-  await ui.window.relayUI.refresh(); ui.window.relayTasks.open(); await flush(); ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
-  const card = ui.$('task-card'), bars = card.querySelectorAll('.limit-row');
-  assert.deepEqual(bars.map(row => row.querySelector('.limit-value').textContent), ['2 of 30 min', '6.2k of 5k', '1 of 4', '0 of 3']);
-  assert.deepEqual(bars.map(row => row.className), ['limit-row', 'limit-row over', 'limit-row', 'limit-row']);
-  assert.match(card.textContent, /1 run reported no tokens, so the total is lower than the real one/);
-  assert.match(card.querySelector('.task-note').textContent, /Went wrong 3 of 5 times: npm test/);
-  card.querySelector('.limits-reached').querySelector('button').click(); await flush();
-  assert.deepEqual(posted.at(-1), { action: 'extend', taskId: 't1', limit: 'maxTokens' });
-  ui.$('limits-open').click(); await flush();
+  await ui.window.relayUI.refresh();
+  await ui.window.relaySettings.open('routing'); await flush();
+  ui.$('settings-task-limits').click(); await flush();
   assert.equal(ui.$('limits-dialog').open, true);
   assert.equal(ui.$('limit-maxTokens').value, 5000);
   assert.equal(ui.$('limit-models-claude').value, '');
@@ -2584,27 +2588,26 @@ test('task limits show as bars on the current task, are set in a dialog, and a r
   assert.deepEqual([...saved.policy.allowedProviders].sort(), ['claude', 'codex', 'local']);
   assert.deepEqual(JSON.parse(JSON.stringify(saved.policy.allowedModels)), { claude: ['claude-sonnet', 'claude-haiku'], local: ['local-model'] });
   assert.equal(ui.$('limits-dialog').open, false);
+
+  await ui.window.relayLimits.extend('t1', 'maxTokens');
+  assert.deepEqual(posted.at(-1), { action: 'extend', taskId: 't1', limit: 'maxTokens' });
+  await ui.window.relayLimits.reset('t1');
+  assert.deepEqual(posted.at(-1), { action: 'reset', taskId: 't1' });
 });
 
-test('task budget reports unknown allowance, enforcement and overshoot without offering a misleading extension', async () => {
-  const ui = await browser({ insights: true, agentsUI: true, wide: true, setup: true }), { ledgerTask } = panelFixture();
+test('task limits dialog loads allowedModels and clearing restrictions returns to all models', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, workbench: true, wide: true, setup: true });
   const limits = { maxWorkingMinutes: null, maxTokens: 5000, maxSpendUSD: 1, maxHandoffs: 4, maxRetries: 3 };
-  const view = { policy: { ...limits, allowedModels: { codex: ['chosen-model'] } }, task: { taskId: 't1', limits, tokens: 6000, spendUSD: 1.25, workingMs: 0, handoffs: 0, retries: 0, runsWithPartialUsage: 1, runsWithoutCost: 1, enforcement: { spendCaps: { native: 1, reported: 2 }, activeSpendCaps: [] }, overages: { tokens: 1000, spendUSD: 0.25, workingMs: 0 }, exceeded: { limit: 'spendUsageUnknown', message: 'The remaining spending allowance is unknown.' } } };
+  const view = { policy: { ...limits, allowedModels: { codex: ['chosen-model'] } }, task: null };
   const posted = [];
   ui.setIntercept((request, next) => {
     if (request.path === '/api/budget') return response(view);
-    if (request.path === '/api/ledger') return response({ runs: [], tasks: [ledgerTask] });
     if (/\/budget$/.test(request.path)) { posted.push(request.body); return response(view); }
     return next();
   });
-  await ui.window.relayUI.refresh(); ui.window.relayTasks.open(); await flush();
-  const card = ui.$('task-card');
-  assert.match(card.textContent, /partial tokens/);
-  assert.match(card.textContent, /spend is a lower bound/);
-  assert.match(card.textContent, /1 run with a native adapter cap, 2 checked through reported usage/);
-  assert.match(card.textContent, /Reported over limit: 1,000 tokens · \$0.2500 API spend/);
-  const action = card.querySelector('.limits-reached').querySelector('button');
-  assert.equal(action.textContent, 'Review limits'); action.click(); await flush();
+  await ui.window.relayUI.refresh();
+  await ui.window.relaySettings.open('routing'); await flush();
+  ui.$('settings-task-limits').click(); await flush();
   assert.equal(ui.$('limits-dialog').open, true); assert.equal(posted.length, 0);
   assert.equal(ui.$('limit-models-codex').value, 'chosen-model');
   ui.$('limit-models-codex').value = '';
@@ -2750,11 +2753,11 @@ test('while the mouse moves, a small grip shows on each divider that can be drag
 
 test('a resize drag holds its cursor with one element, not a rule on every element, and skips turns out of view', async () => {
   const ui = await browser({ setup: true, layoutUI: true });
-  const handle = ui.$('bottom-panel').querySelector('.resize-handle');
+  const handle = ui.document.sidebar.querySelector('.resize-handle');
   assert(handle);
   handle.dispatchEvent(new UIEvent('pointerdown'));
   assert.equal(ui.document.querySelectorAll('.resize-shield').length, 1);
-  assert(ui.document.querySelector('.resize-shield').classList.contains('rows'));
+  assert(ui.document.querySelector('.resize-shield').classList.contains('columns'));
   handle.dispatchEvent(new UIEvent('pointerup'));
   assert.equal(ui.document.querySelectorAll('.resize-shield').length, 0);
   const css = fs.readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
@@ -3859,12 +3862,12 @@ test('routing assessment keeps Stop available while Send waits and preserves the
   assert.equal(ui.requests.filter(request => request.path.endsWith('/messages')).length, 1);
 });
 
-test('the sidebar, side panel and bottom panel resize with keyboard handles; the old Files divider and its saved height are removed',async()=>{
+test('the sidebar and side panel resize with keyboard handles; the old Files and bottom-panel saved heights are removed',async()=>{
   const ui=await browser({layoutUI:true,stored:{'throughline:layout':JSON.stringify({inspector:999,commands:300,workspaces:500})}});
   const root=ui.document.documentElement,handles=ui.document.querySelectorAll('.resize-handle');
-  assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar','Resize the terminal and Run panel']);
+  assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar']);
   assert.equal(JSON.parse(ui.storage.get('throughline:layout')).workspaces,undefined,'An old divider height cannot push tasks down.');
-  assert.equal(root.style['--inspector-width'],'720px','Saved sizes come back, within their limits.');assert.equal(ui.$('bottom-panel').style.height,'300px','The Run panel’s height carries over to the shared panel.');
+  assert.equal(root.style['--inspector-width'],'720px','Saved sizes come back, within their limits.');assert.equal(ui.$('bottom-panel'),null,'The bottom panel is gone (#193).');
   assert.deepEqual(Object.keys(JSON.parse(ui.storage.get('throughline:layout')||'{}')).filter(key=>['terminal','commands'].includes(key)),[]);
   const sidebar=handles.find(handle=>handle.getAttribute('aria-label')==='Resize the sidebar');assert.equal(sidebar.getAttribute('role'),'separator');assert.equal(sidebar.tabIndex,0);
   sidebar.dispatchEvent(new UIEvent('keydown',{key:'ArrowRight',preventDefault(){}}));
@@ -3887,10 +3890,10 @@ test('layout buttons at the top right show and hide the sidebar, the Run panel a
   assert(!shell.classList.contains('sidebar-collapsed'),'The keyboard shortcut shows it again.');assert.equal(ui.storage.get('throughline:sidebar'),'shown');
   ui.$('toggle-side-panel').click();await flush();
   assert.equal(ui.$('agents-panel').hidden,true);assert.equal(pressed('toggle-side-panel'),'false','Hidden panels leave no buttons in the header.');
-  ui.$('git-panel').querySelectorAll('.panel-tab');ui.$('open-git').click();await flush();
-  assert.equal(ui.$('git-panel').hidden,false);ui.$('toggle-side-panel').click();await flush();assert.equal(ui.$('git-panel').hidden,true);
+  ui.window.relayBrief.open();await flush();
+  assert.equal(ui.$('brief-panel').hidden,false);ui.$('toggle-side-panel').click();await flush();assert.equal(ui.$('brief-panel').hidden,true);
   ui.$('toggle-side-panel').click();await flush();
-  assert.equal(ui.$('git-panel').hidden,false,'The side panel reopens on the tab last used.');assert.equal(pressed('toggle-side-panel'),'true');
+  assert.equal(ui.$('brief-panel').hidden,false,'The side panel reopens on the tab last used.');assert.equal(pressed('toggle-side-panel'),'true');
   const again=await browser({layoutUI:true,stored:{'throughline:sidebar':'hidden'}});
   assert(again.$('app-shell').classList.contains('sidebar-collapsed'),'A hidden sidebar stays hidden next time.');assert.equal(again.$('toggle-sidebar').getAttribute('aria-pressed'),'false');
 });
@@ -4130,8 +4133,8 @@ test('with nothing staged, Commit commits every change listed: it stages exactly
 });
 
 
-test('the terminal opens shells as tabs named after their folders, splits a tab into panes, and keeps each workspace’s shells to themselves', async () => {
-  const ui = await browser({ terminalUI: true, moreProjects: true });
+test('the terminal opens shells as main tabs named after their folders, splits a tab into panes, and keeps each workspace’s shells to themselves', async () => {
+  const ui = await browser({ terminalUI: true, commandsUI: true, moreProjects: true });
   const lists = new Map(), posts = [], names = { backend: 'Backend', api: 'API', frontend: 'Frontend' }; let counter = 0;
   ui.setIntercept((request, next) => {
     if (!request.path.startsWith('/api/terminal')) return next();
@@ -4155,17 +4158,18 @@ test('the terminal opens shells as tabs named after their folders, splits a tab 
   });
   const streams = () => ui.eventSources.filter(source => source.url.startsWith('/api/terminal/stream'));
   const send = (stream, type, data) => stream.dispatchEvent(new UIEvent(type, { data: JSON.stringify(data) }));
-  const tabNames = () => ui.$('terminal-tabs').querySelectorAll('.terminal-tab-name').map(node => node.textContent);
-  const selected = () => ui.$('terminal-tabs').querySelectorAll('.terminal-tab-pick').map(button => button.getAttribute('aria-selected'));
+  const visibleRows = () => ui.$('main-tool-tabs').querySelectorAll('.work-tab').filter(row => !row.hidden);
+  const tabNames = () => visibleRows().map(row => row.querySelector('.main-tab-label').textContent);
+  const selected = () => visibleRows().map(row => row.querySelector('.main-tab').getAttribute('aria-selected'));
+  const activeAction = name => ui.$('tab-primary').querySelectorAll('button').find(button => button.dataset.terminalAction === name);
+  const activeViews = () => ui.$('tab-primary').querySelector('.terminal-views');
 
-  // A workspace with several folders asks which one the shell starts in. Terminal is in the status bar.
+  // A workspace with several folders asks which one the shell starts in, as a main tab beside Chat.
   ui.$('status-terminal').click(); await flush();
-  assert.equal(ui.$('terminal-panel').hidden, false); assert.equal(ui.$('bottom-panel').hidden, false);
+  assert.equal(ui.$('main-tabs').hidden, false); assert.equal(ui.$('chat-stage').hidden, true); assert.equal(ui.$('tab-primary').hidden, false);
   assert.equal(ui.$('status-terminal').getAttribute('aria-pressed'), 'true');
-  assert.equal(ui.$('bottom-tab-terminal').getAttribute('aria-selected'), 'true');
-  assert.deepEqual([ui.$('bottom-tab-terminal').tabIndex, ui.$('bottom-tab-run').tabIndex], [0, -1], 'The strip is one stop in the Tab order (#26).');
-  assert.equal(ui.$('terminal-start').hidden, false);
-  const folders = ui.$('terminal-folders').querySelectorAll('button');
+  assert.deepEqual(tabNames(), ['New terminal']);
+  const folders = ui.$('tab-primary').querySelectorAll('.terminal-folder');
   assert.deepEqual(folders.map(button => button.textContent), ['Frontend', 'Backend'], 'Each folder is a button that opens the shell there.');
   folders[1].click(); await flush();
   assert.deepEqual(posts[0], ['start', 'project-one', { folderId: 'backend', cols: 100, rows: 24 }]);
@@ -4175,84 +4179,83 @@ test('the terminal opens shells as tabs named after their folders, splits a tab 
   assert.equal(first.written, 'welcome\r\n$ ');
   first.type('ls\r'); await flush();
   assert.deepEqual(posts.at(-1), ['input', 'project-one', { id: 'project-one-shell-1', data: 'ls\r' }]);
-  assert.deepEqual(tabNames(), ['Backend'], 'The shell is a tab named after its folder.');
-  assert.equal(ui.$('terminal-tabs').hidden, false, 'The list of shells shows from the first one, so its folder is always in view.');
-  assert.equal(ui.$('terminal-tabs').querySelectorAll('.terminal-tab-pick')[0].title, 'zsh in /workspace/backend');
-  assert.equal(ui.$('terminal-start').hidden, true);
+  assert.deepEqual(tabNames(), ['Backend'], 'The shell is a main tab named after its folder.');
+  assert.equal(visibleRows()[0].dataset.state, 'running');
 
-  // + offers the workspace's folders and opens another shell in a tab of its own; only the open tab shows.
-  ui.$('terminal-new').click(); await flush();
-  assert.equal(ui.$('terminal-new').getAttribute('aria-expanded'), 'true');
-  assert.deepEqual(ui.$('terminal-new-menu').querySelectorAll('.terminal-menu-name').map(node => node.textContent), ['Frontend', 'Backend']);
-  ui.$('terminal-new-menu').querySelectorAll('button')[0].click(); await flush();
+  // + in the main tab strip offers the workspace's folders and opens another shell in a tab of its own.
+  ui.$('main-tab-new').click(); await flush();
+  assert.deepEqual(tabNames(), ['Backend', 'New terminal']);
+  ui.$('tab-primary').querySelectorAll('.terminal-folder')[0].click(); await flush();
   assert.deepEqual(posts.at(-1), ['start', 'project-one', { folderId: 'frontend', cols: 80, rows: 24 }]);
-  assert.equal(ui.$('terminal-new-menu').hidden, true);
   assert.deepEqual([tabNames(), selected()], [['Backend', 'Frontend'], ['false', 'true']]);
   const frontend = ui.terminals[1];
-  assert.deepEqual([first.host.hidden, frontend.host.hidden], [true, false]);
-  // The arrow keys move between the listed shells, and Tab reaches only the open one's row.
-  const arrow = key => { const event = new UIEvent('keydown', { key }); ui.$('terminal-tabs').dispatchEvent(event); return event.defaultPrevented; };
-  assert.equal(arrow('ArrowUp'), true);
-  assert.deepEqual([selected(), first.host.hidden, frontend.host.hidden], [['true', 'false'], false, true]);
-  assert.equal(ui.document.activeElement, ui.$('terminal-tabs').querySelectorAll('.terminal-tab-pick')[0], 'Focus follows the row the arrows chose.');
-  assert.deepEqual(ui.$('terminal-tabs').querySelectorAll('.terminal-tab-pick').map(button => button.tabIndex), [0, -1]);
-  arrow('ArrowDown'); assert.deepEqual(selected(), ['false', 'true']);
-  arrow('ArrowDown'); assert.deepEqual(selected(), ['true', 'false'], 'The arrows wrap around.');
+  assert.equal(ui.$('tab-primary').contains(frontend.host), true);
+  assert.equal(ui.$('tab-parking').contains(first.host), true);
+
+  // The arrow keys move across Chat and the open tabs in #main-tabs, keeping one Tab stop.
+  const arrow = key => { const event = new UIEvent('keydown', { key }); ui.$('main-tabs').dispatchEvent(event); return event.defaultPrevented; };
+  assert.equal(arrow('ArrowLeft'), true);
+  assert.deepEqual([selected(), ui.$('tab-primary').contains(first.host)], [['true', 'false'], true]);
+  assert.equal(ui.document.activeElement, visibleRows()[0].querySelector('.main-tab'), 'Focus follows the tab the arrows chose.');
+  assert.deepEqual([ui.$('main-tab-chat').tabIndex, ...visibleRows().map(row => row.querySelector('.main-tab').tabIndex)], [-1, 0, -1]);
+  arrow('Home'); assert.equal(ui.$('main-tab-chat').getAttribute('aria-selected'), 'true');
   arrow('End'); assert.deepEqual(selected(), ['false', 'true']);
   assert.equal(arrow('a'), false, 'Other keys are left alone.');
+
   // Split puts a second shell in the same folder beside it, and input goes only to the pane it was typed in.
-  ui.$('terminal-split').click(); await flush();
+  activeAction('split').click(); await flush();
   assert.deepEqual(posts.at(-1), ['start', 'project-one', { folderId: 'frontend', cols: 80, rows: 24, split: { of: 'project-one-shell-2', direction: 'right' } }]);
   const beside = ui.terminals[2];
   assert.deepEqual(tabNames(), ['Backend', 'Frontend'], 'The split shell joins the open tab.');
-  assert.deepEqual([ui.$('terminal-views').dataset.split, frontend.host.hidden, beside.host.hidden, beside.host.dataset.pane], ['right', false, false, '1']);
-  assert.equal(ui.$('terminal-split').disabled, true, 'A tab holds two panes.');
+  assert.deepEqual([activeViews().dataset.split, frontend.host.hidden, beside.host.hidden, beside.host.dataset.pane], ['right', false, false, '1']);
+  assert.equal(activeAction('split').disabled, true, 'A tab holds two panes.');
   beside.type('npm run dev\r'); await flush();
   assert.deepEqual(posts.at(-1), ['input', 'project-one', { id: 'project-one-shell-3', data: 'npm run dev\r' }]);
-  // End acts on the pane in use; the other pane stays as the tab's only one.
-  ui.$('terminal-end').click(); await flush();
+  // End pane acts on the pane in use; the other pane stays as the tab's only one.
+  activeAction('end').click(); await flush();
   assert.deepEqual(posts.at(-1), ['stop', 'project-one', { id: 'project-one-shell-3' }]);
-  assert.deepEqual([beside.disposed, ui.$('terminal-views').dataset.split, frontend.host.hidden], [true, '', false]);
-  // Closing a tab ends its shell, and the tab beside it opens.
-  ui.$('terminal-tabs').querySelectorAll('.terminal-tab-close')[1].click(); await flush();
+  assert.deepEqual([beside.disposed, activeViews().dataset.split, frontend.host.hidden], [true, '', false]);
+  // Closing a tab ends its shell, and returns cleanly.
+  visibleRows()[1].querySelectorAll('.tab-action')[1].click(); await flush();
   assert.deepEqual(posts.at(-1), ['stop', 'project-one', { id: 'project-one-shell-2' }]);
-  assert.deepEqual([tabNames(), first.host.hidden, frontend.disposed], [['Backend'], false, true]);
+  assert.deepEqual([tabNames(), frontend.disposed], [['Backend'], true]);
 
   // Another workspace gets its own shells, and the first one's input still goes to the first workspace.
   await ui.switchProject('project-two'); await flush();
+  assert.deepEqual(tabNames(), [], 'Other workspace starts on Chat without the first workspace’s tabs.');
+  ui.$('main-tab-new').click(); await flush();
   assert.deepEqual(posts.at(-1).slice(0, 2), ['start', 'project-two'], 'A single-folder workspace opens its shell at once.');
   const second = ui.terminals.at(-1), secondId = posts.length && lists.get('project-two')[0].id;
-  assert.equal(first.host.hidden, true); assert.equal(second.host.hidden, false);
+  assert.equal(ui.$('tab-primary').contains(second.host), true);
+  assert.equal(ui.$('tab-parking').contains(first.host), true);
   first.type('pwd\r'); await flush();
   assert.deepEqual(posts.at(-1), ['input', 'project-one', { id: 'project-one-shell-1', data: 'pwd\r' }]);
 
-  // Hiding the panel, or switching to Run, leaves the shells running; the menu command shows the terminal again.
-  ui.$('bottom-hide').click(); await flush();
-  assert.equal(ui.$('terminal-panel').hidden, true); assert.equal(ui.$('bottom-panel').hidden, true);
-  assert.deepEqual(JSON.parse(ui.storage.get('throughline:panel')), { open: false, tool: 'terminal' });
-  assert.equal(ui.$('status-terminal').hidden, false, 'Terminal stays in the status bar while the panel is hidden.');
+  // Switching back to Chat, or opening Run in the sidebar, leaves shells running; the menu command toggles the terminal.
+  ui.$('main-tab-chat').click(); await flush();
+  assert.equal(ui.$('chat-stage').hidden, false); assert.equal(ui.$('tab-primary').hidden, true);
+  assert.equal(ui.$('status-terminal').getAttribute('aria-pressed'), 'false');
   ui.window.relayUI.commands.terminal(); await flush();
-  assert.equal(ui.$('terminal-panel').hidden, false);
-  assert.equal(second.host.hidden, false);
-  ui.$('bottom-tab-run').click(); await flush();
-  assert.equal(ui.$('terminal-panel').hidden, true); assert.equal(second.host.hidden, true);
-  ui.$('bottom-tab-terminal').click(); await flush();
-  assert.equal(second.host.hidden, false);
+  assert.equal(ui.$('tab-primary').hidden, false); assert.equal(ui.$('tab-primary').contains(second.host), true);
+  assert.equal(ui.$('status-terminal').getAttribute('aria-pressed'), 'true');
+  ui.$('sidebar-tab-run').click(); await flush();
+  assert.equal(ui.$('sidebar-run').hidden, false);
   assert(!posts.some(([name, id]) => name === 'stop' && id === 'project-two'));
 
-  // Ending a shell stops it; an exited shell keeps its output and offers a new session in its own tab.
-  ui.$('terminal-end').click(); await flush();
+  // Ending a shell stops it; an exited shell keeps its output, marks failure on non-zero exit, and offers Start again in its own tab.
+  activeAction('end').click(); await flush();
   assert.deepEqual(posts.at(-1), ['stop', 'project-two', { id: secondId }]);
   assert.equal(second.disposed, true);
   await ui.switchProject('project-one'); await flush();
-  assert.equal(first.host.hidden, false, 'The first workspace’s shell returns as it was.');
+  visibleRows()[0].querySelector('.main-tab').click(); await flush();
+  assert.equal(ui.$('tab-primary').contains(first.host), true, 'The first workspace’s shell returns as it was.');
   send(firstStream, 'exit', { ...lists.get('project-one')[0], status: 'exited', exitCode: 1 });
   assert.equal(firstStream.closed, true);
   assert.match(first.written, /\[The shell exited with code 1\. Its output stays until you close this tab or start a new session\.\]/, 'The exit is said once, in the terminal.');
-  assert.equal(ui.$('terminal-message').hidden, true);
-  assert.equal(ui.$('terminal-tabs').querySelectorAll('.terminal-tab')[0].dataset.state, 'ended');
-  assert.equal(ui.$('terminal-restart').hidden, false); assert.equal(ui.$('terminal-end').hidden, true);
-  ui.$('terminal-restart').click(); await flush();
+  assert.equal(ui.$('tab-primary').querySelector('.terminal-message').hidden, true);
+  assert.equal(visibleRows()[0].dataset.state, 'failed');
+  assert.equal(activeAction('restart').hidden, false); assert.equal(activeAction('end').hidden, true);
+  activeAction('restart').click(); await flush();
   assert.deepEqual(posts.at(-1), ['start', 'project-one', { folderId: 'backend', cols: 80, rows: 24, replace: 'project-one-shell-1' }]);
   assert.deepEqual([tabNames(), first.disposed], [['Backend'], true], 'The new shell takes the ended one’s tab.');
 });
@@ -4260,23 +4263,23 @@ test('the terminal opens shells as tabs named after their folders, splits a tab 
 // A shell in the real xterm.js: a test prints to it, finds the links a pointer over a row would find (addresses the web
 // links addon spots, and links a program marked up itself with OSC 8), and clicks them as xterm does.
 async function realShell(options = {}) {
-  const ui = await browser({ terminalUI: true, realTerminal: true, ...options }), inputs = [];
+  const ui = await browser({ terminalUI: true, realTerminal: true, ...options }), inputs = [], sessions = [];
   ui.setIntercept((request, next) => {
     if (!request.path.startsWith('/api/terminal')) return next();
-    if (request.path === '/api/terminal') return response({ sessions: [], shell: 'zsh' });
+    if (request.path === '/api/terminal') return response({ sessions: clone(sessions), shell: 'zsh' });
     if (request.path === '/api/terminal/input') inputs.push(request.body.data);
-    if (request.path === '/api/terminal/start') return response({ id: 'shell-1', projectId: 'project-one', folderId: 'frontend', folderName: 'Frontend', cwd: '/workspace/example/frontend', shell: '/bin/zsh', status: 'running', exitCode: null, signal: null, error: null, startedAt: '2026-11-06T00:00:00.000Z', endedAt: null, cols: request.body.cols, rows: request.body.rows, tabId: 'shell-1', pane: 0, split: null, order: 1 }, 201);
+    if (request.path === '/api/terminal/start') { const started = { id: 'shell-1', projectId: 'project-one', folderId: 'frontend', folderName: 'Frontend', cwd: '/workspace/example/frontend', shell: '/bin/zsh', status: 'running', exitCode: null, signal: null, error: null, startedAt: '2026-11-06T00:00:00.000Z', endedAt: null, cols: request.body.cols, rows: request.body.rows, tabId: 'shell-1', pane: 0, split: null, order: 1 }; sessions.push(started); return response(started, 201); }
     return response({ written: 1 });
   });
   ui.$('status-terminal').click(); await flush();
-  ui.$('terminal-folders').querySelectorAll('button')[0].click(); await flush();
+  ui.$('tab-primary').querySelectorAll('.terminal-folder')[0].click(); await flush();
   const [term] = ui.terminals, stream = ui.eventSources.find(source => source.url.startsWith('/api/terminal/stream'));
   const print = text => { stream.dispatchEvent(new UIEvent('data', { data: JSON.stringify({ data: text }) })); return new Promise(resolve => term.write('', resolve)); };
   const row = text => { const buffer = term.buffer.active; for (let y = 0; y < buffer.length; y++) if (buffer.getLine(y).translateToString(true).includes(text)) return y + 1; throw new Error(`Nothing printed ${text}`); };
   // xterm asks each of its link providers about the row under the pointer; rows count from 1.
   const links = (text, below = 0) => [...term._core._linkProviderService.linkProviders].flatMap(provider => { let found = []; provider.provideLinks(row(text) + below, list => { found = list || []; }); return found; });
   const click = async (link, button = 0) => { link.activate(new UIEvent('mouseup', { button }), link.text); await flush(); };
-  const notice = () => ui.$('terminal-message').hidden ? '' : ui.$('terminal-message').textContent;
+  const notice = () => { const node = ui.$('tab-primary').querySelector('.terminal-message') || ui.$('terminal-message'); return !node || node.hidden ? '' : node.textContent; };
   return { ui, term, inputs, print, row, links, click, notice };
 }
 
@@ -4344,7 +4347,7 @@ test('links in the terminal open in the browser through the desktop app, also wh
 
 test('Add to message puts the terminal selection, or the screen, in the message box as a code block, shortened and with secrets pointed out', async () => {
   const { ui, term, inputs, print } = await realShell();
-  const input = ui.$('message-input'), button = ui.$('terminal-capture'), said = () => ui.$('notice-text')?.textContent || ui.$('notice').textContent;
+  const input = ui.$('message-input'), button = ui.$('tab-primary').querySelectorAll('button').find(item => item.dataset.terminalAction === 'capture'), said = () => ui.$('notice-text')?.textContent || ui.$('notice').textContent;
   assert.equal(button.hidden, false);
   assert.match(button.title, /^Add the terminal screen to your message/);
   await print('$ npm test\r\nFAIL test/a.test.mjs\r\n  expected 1, got 2\r\n');
@@ -4358,7 +4361,7 @@ test('Add to message puts the terminal selection, or the screen, in the message 
   // selection of its own; this stands in for one.
   let selection = 'FAIL test/a.test.mjs';
   term.hasSelection = () => Boolean(selection); term.getSelection = () => selection;
-  ui.$('terminal-tabs').querySelector('.terminal-tab-pick').click();
+  await ui.window.relayTerminal.open(); await flush();
   assert.match(button.title, /^Add the selection to your message/);
   input.value = '';
   button.click(); await flush();
@@ -5223,9 +5226,9 @@ test('with several folders, Run lists each command under the folder it runs in, 
   assert.deepEqual(list.querySelectorAll('.command-where').map(node => node.textContent), ['packages/ui'], 'A command in a subdirectory says which.');
   // The output bar says where the selected command runs, with its full path on hover.
   list.querySelectorAll('.command-row').find(row => row.dataset.commandId === 'ui').querySelector('.command-pick').click(); await flush(); await flush();
-  assert.deepEqual([ui.$('command-place').textContent, ui.$('command-place').title], ['Frontend/packages/ui', 'Runs in /workspace/example/frontend/packages/ui']);
+  assert.deepEqual([commandPart(ui, 'place').textContent, commandPart(ui, 'place').title], ['Frontend/packages/ui', 'Runs in /workspace/example/frontend/packages/ui']);
   list.querySelectorAll('.command-row').find(row => row.dataset.commandId === 'api').querySelector('.command-pick').click(); await flush(); await flush();
-  assert.equal(ui.$('command-place').textContent, 'Backend');
+  assert.equal(commandPart(ui, 'place').textContent, 'Backend');
   // + on a folder's heading opens the form for a command in that folder.
   list.querySelectorAll('.run-folder')[1].querySelector('.run-folder-add').click(); await flush();
   assert.deepEqual([ui.$('command-form').hidden, ui.$('command-folder').value, ui.$('command-form-title').textContent], [false, 'backend', 'Add a command']);
@@ -5338,9 +5341,9 @@ test('Settings puts each subject on its own page, switches the view from General
   const page = name => ui.$('settings-content').querySelectorAll('.settings-page').find(section => section.dataset.page === name);
   const labels = name => page(name).querySelectorAll('.settings-row-label').map(label => label.textContent);
   await ui.window.relaySettings.open('general'); await flush();
-  assert.deepEqual(labels('general').slice(0, 2), ['View', 'Keep awake']);
+  assert.deepEqual(labels('general'), ['View', 'Export task usage', 'Keep awake']);
   assert.deepEqual(labels('appearance'), ['Theme', 'Text size']);
-  assert.deepEqual(labels('routing'), ['Offer a handoff near a usage limit', 'Hand off automatically', 'Context limit', 'Custom context limit']);
+  assert.deepEqual(labels('routing'), ['Offer a handoff near a usage limit', 'Hand off automatically', 'Context limit', 'Custom context limit', 'Task limits']);
   assert.deepEqual(labels('testing'), ['Testing cadence']);
   assert.equal(labels('general').includes('Theme'), false, 'General no longer holds the theme.');
   // A screen reader names each switch and list by its label and reads the description after it (#26).
@@ -5702,7 +5705,7 @@ test('Flow’s workspace name opens the workspace menu, and switching keeps Flow
 test('switching workspace in Flow or the Plan shows that workspace, not the side panel last used in Normal as a sheet', async () => {
   // The side panel a docked Normal view reopens for each workspace. Flow and the Plan show an open panel as a sheet,
   // so reopening it there covered the chat with Your changes, Your tasks, Workspace context or Your timeline.
-  for (const panel of ['git', 'tasks', 'brief', 'timeline']) {
+  for (const panel of ['git', 'brief', 'timeline']) {
     const ui = await flowBrowser({ moreProjects: true, wide: true, boardUI: true, stored: { 'throughline:side-panel': panel } });
     assert.equal(ui.$(`${panel}-panel`).hidden, false, `Normal reopens ${panel}, the side panel last chosen.`);
     assert.equal(ui.window.relayFlow.enter(), true); await flush(); await flush();
@@ -5733,7 +5736,7 @@ test('Flow mode shows only the chat and its cards, and leaving brings the layout
   assert.equal(ui.$('agents-panel').hidden, true, 'The side panel steps aside.');
   assert.equal(ui.$('flow-left').hidden, false); assert.equal(ui.$('flow-right').hidden, false); assert.equal(ui.$('flow-strip').hidden, true, 'A wide window keeps the cards at the sides.');
   assert.deepEqual(ui.$('flow-left').children.map(card => card.id), ['flow-left-cards', 'flow-space'], 'The cards scroll in their own area and the utility section stays at the foot.');
-  assert.deepEqual(ui.$('flow-left').children[0].children.map(card => card.id), ['flow-card-next', 'flow-card-tasks', 'flow-card-plans', 'flow-card-results']);
+  assert.deepEqual(ui.$('flow-left').children[0].children.map(card => card.id), ['flow-card-next', 'flow-card-tasks', 'flow-card-plans']);
   assert.deepEqual(ui.$('flow-right').children.map(card => card.id), ['flow-right-cards', 'flow-connect']);
   assert.deepEqual(ui.$('flow-right').children[0].children.map(card => card.id), ['flow-card-working', 'flow-card-happened', 'flow-card-files', 'flow-card-preview']);
   assert.equal(ui.$('toggle-flow').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('flow-status').hidden, false); assert.equal(ui.$('flow-status-text').textContent, 'Ready');
@@ -6001,7 +6004,7 @@ test('a narrow window keeps the Flow cards out of the chat as chips, and one ope
   // Every media query matches here, so the window counts as narrow: chips under the header, no side columns.
   assert.equal(ui.$('flow-left').hidden, true); assert.equal(ui.$('flow-strip').hidden, false);
   const chips = () => ui.$('flow-strip').querySelectorAll('.flow-chip').map(chip => chip.textContent);
-  assert.deepEqual(chips(), ['1 queued message', 'Tasks', 'Plans', 'Ultra results', 'Ultra', 'What happened', 'Files', 'Run and review your project', 'Your space'], 'Every card has a chip, with preferences available separately.');
+  assert.deepEqual(chips(), ['1 queued message', 'Tasks', 'Plans', 'Ultra', 'What happened', 'Files', 'Run and review your project', 'Your space'], 'Every card has a chip, with preferences available separately.');
   ui.$('flow-strip').querySelectorAll('.flow-chip')[0].click(); await flush();
   assert.equal(ui.$('flow-peek').hidden, false); assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-next'); assert.equal(ui.document.activeElement, ui.$('flow-peek-close'));
   assert.equal(ui.$('flow-strip').querySelectorAll('.flow-chip')[0].getAttribute('aria-pressed'), 'true');
@@ -6010,10 +6013,10 @@ test('a narrow window keeps the Flow cards out of the chat as chips, and one ope
   ui.document.dispatchEvent(new UIEvent('keydown', { key: 'Escape' })); await flush();
   assert.equal(ui.$('flow-peek').hidden, true); assert.equal(ui.$('flow-right').children[0].children.map(card => card.id).join(','), 'flow-card-working,flow-card-happened,flow-card-files,flow-card-preview', 'The cards go back to their sides.'); assert.equal(ui.$('flow-right').children[1].id, 'flow-connect');
   assert.equal(ui.$('flow-card-working').querySelectorAll('button').some(item => /hide/i.test(item.getAttribute('aria-label') || '')), false, 'Cards have no close button.');
-  assert.equal(ui.window.relayFlow.cards().length, 8);
+  assert.equal(ui.window.relayFlow.cards().length, 7);
 });
 
-test('Smart results show observed use, compare with manual tasks only when the evidence allows, and list the tasks behind it (#139)', async () => {
+test('Smart results are off by default, kept out of Flow, and open in a dialog from Settings › Experimental when enabled (#139, #190)', async () => {
   const at = minute => new Date(Date.UTC(2026, 10, 5) + minute * 60000).toISOString();
   const task = (n, group, seconds) => ({ id: `task-${n}`, startedAt: at(n), endedAt: at(n + 1), status: 'complete', verification: 'passed', routing: group === 'manual' ? null : { mode: group, policy: 1 }, taskClass: { kind: 'change', size: 'standard' }, contextPolicy: 'task',
     models: [{ provider: 'codex', model: 'gpt-5', effort: 'low', role: 'builder' }], billing: ['subscription'], apiEstimateUSD: { total: null, runs: 0, billedRuns: 0 }, workingMs: seconds * 1000,
@@ -6022,34 +6025,50 @@ test('Smart results show observed use, compare with manual tasks only when the e
   const few = smartResults([task(1, 'smart', 60)], { now, days: null });
   const enough = smartResults([...Array.from({ length: 12 }, (_, index) => task(index, 'manual', 300)), ...Array.from({ length: 12 }, (_, index) => task(50 + index, 'smart', 200))], { now, days: null });
   let report = few;
+  let experimental = { remote: true, plan: true, review: true, smartResults: false, tasks: true };
   const asked = [];
-  const ui = await flowBrowser({ desktop: true, desktopControls: true });
+  const ui = await flowBrowser({ desktop: true, desktopControls: true, experimentalUI: true, workbench: true });
   ui.setIntercept((request, next) => {
+    if (request.path === '/api/preferences' && request.method === 'GET') return response({ experimental });
+    if (request.path === '/api/preferences' && request.method === 'POST') { experimental = { ...experimental, ...request.body.experimental }; return response({ experimental }); }
     if (request.path === '/api/results') { asked.push({ ...request.params }); return response(report); }
-    if (request.path === '/api/ledger') return response({ runs: [], quotaObservations: [], tasks: [] });
-    if (request.path === '/api/budget') return response({ policy: {}, defaults: {}, quota: {}, task: null });
     return next();
   });
-  ui.window.relayFlow.enter(); await flush(); await ui.window.relaySmartResults.refresh(); await flush();
-  const card = () => ui.$('flow-card-results').textContent.replace(/\s+/g, ' ');
-  assert.match(card(), /Smart results/);
-  assert.match(card(), /1 task · 1 verified by tests/);
-  assert.match(card(), /Not enough comparable data yet/, 'No percentage for a new user.');
-  assert.equal(asked.at(-1).prompts, undefined, 'The card never asks for requests.');
+  await ui.window.relayExperimental.reload(); await flush();
+
+  // Off by default: not in Flow, not fetched on Flow entry, and View Smart results is hidden in Settings.
+  assert.equal(ui.window.relayExperimental.enabled('smartResults'), false);
+  assert.equal(ui.$('flow-card-results'), null);
+  ui.window.relayFlow.enter(); await flush();
+  assert.equal(asked.length, 0, 'Nothing is fetched while Smart results is off.');
+  ui.window.relayFlow.leave(); await flush();
+
+  await ui.window.relaySettings.open('experimental'); await flush();
+  assert.equal(ui.$('settings-experimental-smartResults').checked, false);
+  assert.equal(ui.$('settings-smart-results-row').hidden, true);
+  assert.equal(ui.window.relaySmartResults.open(), false);
+  assert.match(ui.$('notice-text').textContent, /Settings › Experimental/);
+
+  // Enable Smart results: the Settings row shows and opens the Smart results dialog.
+  await ui.window.relayExperimental.set('smartResults', true); await flush();
+  assert.equal(ui.$('settings-experimental-smartResults').checked, true);
+  assert.equal(ui.$('settings-smart-results-row').hidden, false);
+  assert.equal(ui.$('settings-open-smart-results').disabled, false);
+
+  ui.$('settings-open-smart-results').click(); await flush();
+  assert.equal(ui.$('results-dialog').open, true);
+  const body = () => ui.$('results-dialog-body').textContent.replace(/\s+/g, ' ');
+  assert.match(body(), /Not enough comparable data yet/, 'No percentage for a new user.');
+  assert.equal(asked.at(-1).prompts, undefined, 'The report never asks for requests.');
 
   report = enough; await ui.window.relaySmartResults.refresh(); await flush();
-  assert.match(card(), /About 33% less working time per verified task than your manual tasks \(90% range: 33% less\)/);
+  assert.match(body(), /About 33% less working time per verified task than your manual tasks \(90% range: 33% less\)/);
+  assert.match(body(), /Working time: 3m 20s per verified task, against 5m 0s by hand · 33% less/);
+  assert.match(body(), /By hand 1h 0m − Smart 40m 0s = 20m 0s, 33\.3% of the manual total/, 'The arithmetic can be checked by hand.');
+  assert.match(body(), /never counted here/, 'Plan allowance stays out.');
 
-  ui.$('flow-card-results').querySelectorAll('button').find(button => button.textContent === 'Details').click(); await flush();
-  assert.equal(ui.$('tasks-panel').hidden, false, 'Details opens the Tasks panel, which Flow shows as its sheet.');
-  const section = () => ui.$('tasks-results-body').textContent.replace(/\s+/g, ' ');
-  assert.equal(ui.$('tasks-results').hidden, false);
-  assert.match(section(), /Working time: 3m 20s per verified task, against 5m 0s by hand · 33% less/);
-  assert.match(section(), /By hand 1h 0m − Smart 40m 0s = 20m 0s, 33\.3% of the manual total/, 'The arithmetic can be checked by hand.');
-  assert.match(section(), /never counted here/, 'Plan allowance stays out.');
-
-  ui.$('tasks-results-body').querySelectorAll('button').find(button => /^Show the 24 tasks$/.test(button.textContent)).click(); await flush();
-  ui.$('tasks-results-body').querySelectorAll('button').find(button => button.textContent === 'Leave out').click(); await flush();
+  ui.$('results-dialog-body').querySelectorAll('button').find(button => /^Show the 24 tasks$/.test(button.textContent)).click(); await flush();
+  ui.$('results-dialog-body').querySelectorAll('button').find(button => button.textContent === 'Leave out').click(); await flush();
   assert.equal(asked.at(-1).exclude, enough.tasks[0].id, 'A task left out is sent with the next request, so the server recomputes without it.');
 });
 
@@ -6058,40 +6077,40 @@ test('Smart results ask for the selected workspace, and a failure is said with a
   const report = smartResults([{ id: 'task-1', startedAt: at(1), endedAt: at(2), status: 'complete', verification: 'passed', routing: { mode: 'smart', policy: 1 }, taskClass: { kind: 'change', size: 'standard' }, contextPolicy: 'task',
     models: [{ provider: 'codex', model: 'gpt-5', effort: 'low', role: 'builder' }], billing: ['subscription'], apiEstimateUSD: { total: null, runs: 0, billedRuns: 0 }, workingMs: 60000,
     usage: { runs: 1, reportedBy: { input: 1, output: 1 }, input: 1000, output: 100, cacheWrite: null, partialRuns: 0, runsWithTokens: 1 }, runs: 1, retries: 0, interventions: 0, firstAttemptSuccess: true }], { now: Date.parse(at(200)), days: null });
-  let down = false;
+  let down = false, experimental = { remote: true, plan: true, review: true, smartResults: true, tasks: true };
   const asked = [];
-  const ui = await flowBrowser({ desktop: true, desktopControls: true });
+  const ui = await flowBrowser({ desktop: true, desktopControls: true, experimentalUI: true });
   ui.setIntercept((request, next) => {
+    if (request.path === '/api/preferences' && request.method === 'GET') return response({ experimental });
     // Like the server with more than one workspace: no projectId, no answer.
     if (request.path === '/api/results') { asked.push({ ...request.params }); return down ? response({ error: 'The task ledger could not be read.' }, 500) : request.params.projectId ? response(report) : response({ error: 'Select a project workspace first.' }, 400); }
-    if (request.path === '/api/ledger') return response({ runs: [], quotaObservations: [], tasks: [] });
-    if (request.path === '/api/budget') return response({ policy: {}, defaults: {}, quota: {}, task: null });
     return next();
   });
-  const card = () => ui.$('flow-card-results').textContent.replace(/\s+/g, ' ');
-  ui.window.relayFlow.enter(); await flush(); await ui.window.relaySmartResults.refresh(); await flush();
+  await ui.window.relayExperimental.reload(); await flush();
+  const body = () => ui.$('results-dialog-body').textContent.replace(/\s+/g, ' ');
+  assert.equal(ui.window.relaySmartResults.open(), true); await flush();
   assert.equal(asked.at(-1).projectId, 'project-one', 'The selected workspace is named, so the server never has to guess.');
-  assert.match(card(), /1 task · 1 verified by tests/);
-  assert.doesNotMatch(card(), /Reading your saved tasks/);
+  assert.match(body(), /1 task/);
+  assert.doesNotMatch(body(), /Reading your saved tasks/);
 
   // A fresh window whose first read fails says so, and Try again reads again.
   down = true;
-  const fresh = await flowBrowser({ desktop: true, desktopControls: true });
+  const fresh = await flowBrowser({ desktop: true, desktopControls: true, experimentalUI: true });
   fresh.setIntercept((request, next) => {
+    if (request.path === '/api/preferences' && request.method === 'GET') return response({ experimental });
     if (request.path === '/api/results') { asked.push({ ...request.params }); return down ? response({ error: 'The task ledger could not be read.' }, 500) : response(report); }
-    if (request.path === '/api/ledger') return response({ runs: [], quotaObservations: [], tasks: [] });
-    if (request.path === '/api/budget') return response({ policy: {}, defaults: {}, quota: {}, task: null });
     return next();
   });
-  const freshCard = () => fresh.$('flow-card-results').textContent.replace(/\s+/g, ' ');
-  fresh.window.relayFlow.enter(); await flush(); await fresh.window.relaySmartResults.refresh(); await flush();
-  assert.match(freshCard(), /Smart results couldn’t be read: The task ledger could not be read\./);
+  await fresh.window.relayExperimental.reload(); await flush();
+  const freshBody = () => fresh.$('results-dialog-body').textContent.replace(/\s+/g, ' ');
+  assert.equal(fresh.window.relaySmartResults.open(), true); await flush();
+  assert.match(freshBody(), /Smart results couldn’t be read: The task ledger could not be read\./);
   const before = asked.length;
   await flush(); await flush();
   assert.equal(asked.length, before, 'A failure is not asked again in a loop.');
   down = false;
-  fresh.$('flow-card-results').querySelectorAll('button').find(button => button.textContent === 'Try again').click(); await flush(); await flush();
-  assert.match(freshCard(), /1 task · 1 verified by tests/);
+  fresh.$('results-dialog-body').querySelectorAll('button').find(button => button.textContent === 'Try again').click(); await flush(); await flush();
+  assert.match(freshBody(), /1 task/);
 });
 
 test('Flow details use a dismissible sheet and restore the workbench when leaving', async () => {
@@ -7345,15 +7364,21 @@ test('Tasks side by side shows workspace tasks, approvals, copy state, start/rev
   mainRow().querySelector('button').click(); await flush();
   assert.equal(ui.state().taskId, null);
 
-  row(merged.id).querySelectorAll('button').find(b => b.textContent === 'Close').click(); await flush();
+  // Close only takes a task off the list for good, so the button says so and asks first.
+  const removeButton = () => row(merged.id).querySelectorAll('button').find(b => b.textContent === 'Remove from list');
+  let removeAsked = []; ui.window.confirm = text => { removeAsked.push(text); return false; };
+  removeButton().click(); await flush();
+  assert.equal(removeAsked.length, 1); assert.match(removeAsked[0], /from the task list\?[\s\S]*won’t be able to open its chat again/);
+  assert(!calls.some(c => c.id === merged.id && c.action === 'close'), 'Saying no keeps the task.');
+  ui.window.confirm = text => { removeAsked.push(text); return true; };
+  removeButton().click(); await flush();
   assert(calls.some(c => c.id === merged.id && c.action === 'close'));
   assert.equal(row(merged.id), undefined);
 
-  // Tasks & limits opens Your tasks sheet in Flow.
-  card.querySelectorAll('button').find(b => b.textContent === 'Tasks & limits').click(); await flush();
-  assert.equal(ui.$('flow-detail').open, true);
-  assert.equal(ui.$('flow-detail-title').textContent, 'Your tasks');
-  ui.$('flow-detail-close').click(); await flush();
+  // Task limits opens the task limits dialog.
+  card.querySelectorAll('button').find(b => b.textContent === 'Task limits').click(); await flush();
+  assert.equal(ui.$('limits-dialog').open, true);
+  ui.$('limits-cancel').click(); await flush();
 });
 
 test('Tasks side by side chip updates with task state and closes peek on selection in a narrow window (#88, #107)', async () => {
@@ -8006,6 +8031,12 @@ test('a plan’s group shows its progress, folds with its total once it ends and
   assert.equal(group().querySelector('.task-group-total').textContent, '2 steps · 12m 30s · 340k new tokens');
   group().querySelector('.task-group').click(); await flush();
   assert.equal(steps(), 2, 'A click opens it again.');
+  assert.equal(group().querySelector('.task-group-close').title, 'Remove plan from list');
+  const sentBefore = actions.length; let planAsked = []; ui.window.confirm = text => { planAsked.push(text); return false; };
+  group().querySelector('.task-group-close').click(); await flush();
+  assert.match(planAsked[0], /^Remove the plan “Checkout rewrite” and its 2 steps from the task list\?/);
+  assert.equal(actions.length, sentBefore, 'Saying no keeps the plan.');
+  ui.window.confirm = () => true;
   group().querySelector('.task-group-close').click(); await flush();
   assert.deepEqual([actions.at(-1).action, actions.at(-1).id], ['close', plan.id]);
 
@@ -8077,7 +8108,7 @@ test('Settings, the composer and the model picker use the interface language, an
   await ui.window.relaySettings.open('general'); await flush();
   const page = name => ui.$('settings-content').querySelectorAll('.settings-page').find(section => section.dataset.page === name);
   const labels = name => page(name).querySelectorAll('.settings-row-label').map(label => label.textContent);
-  assert.deepEqual(labels('general'), ['Vista', 'Mantener activo', 'Idioma'], 'A text without a translation stays English.');
+  assert.deepEqual(labels('general'), ['Vista', 'Export task usage', 'Mantener activo', 'Idioma'], 'A text without a translation stays English.');
   assert(page('alerts').querySelectorAll('h3').some(heading => heading.textContent === 'Cuando pasa algo'), 'Pages other modules draw are translated too.');
   // Following the computer names the language that gives; each language is listed by its own name.
   const select = ui.$('settings-language');
@@ -8921,15 +8952,15 @@ test('the side panel tabs keep one Tab stop, move with the arrow keys and keep f
   const ui=await browser({layoutUI:true,insights:true,agentsUI:true,wide:true});await flush();
   ui.window.relayAgents.open();await flush();
   const tab=(panel,name)=>ui.$(panel+'-panel').querySelectorAll('.panel-tab').find(item=>item.dataset.panel===name);
-  assert.deepEqual(ui.$('agents-panel').querySelectorAll('.panel-tab').map(item=>item.tabIndex),[0,-1,-1,-1,-1],'Only the tab showing is in the Tab order.');
-  tab('agents','git').focus();tab('agents','git').click();await flush();
-  assert.equal(ui.$('git-panel').hidden,false);
-  assert.equal(ui.document.activeElement,tab('git','git'),'Focus moves to the same tab in the panel now showing, not to the page.');
-  const home=new UIEvent('keydown',{key:'Home'});tab('git','git').dispatchEvent(home);await flush();
+  assert.deepEqual(ui.$('agents-panel').querySelectorAll('.panel-tab').map(item=>item.tabIndex),[0,-1,-1],'Only the tab showing is in the Tab order.');
+  tab('agents','brief').focus();tab('agents','brief').click();await flush();
+  assert.equal(ui.$('brief-panel').hidden,false);
+  assert.equal(ui.document.activeElement,tab('brief','brief'),'Focus moves to the same tab in the panel now showing, not to the page.');
+  const home=new UIEvent('keydown',{key:'Home'});tab('brief','brief').dispatchEvent(home);await flush();
   assert.equal(home.defaultPrevented,true);assert.equal(ui.$('agents-panel').hidden,false);assert.equal(ui.document.activeElement,tab('agents','agents'));
   const left=new UIEvent('keydown',{key:'ArrowLeft'});tab('agents','agents').dispatchEvent(left);await flush();
   assert.equal(left.defaultPrevented,true,'The arrow keys wrap around the row.');
-  tab('agents','git').click();await flush();
+  tab('agents','brief').click();await flush();
   assert.equal(ui.document.activeElement,tab('agents','agents'),'A click with the mouse leaves focus where it was.');
 });
 
@@ -10018,34 +10049,31 @@ test('Flow split-into-parts managed tasks stay out of Plan row, Task lanes, and 
   assert.equal(ui.state().taskId, null);
 });
 
-test('Smart results preserves Experimental subtitle on mode updates and resets across workspace switches', async () => {
+test('Smart results reloads for the selected mode and resets across workspace switches (#190)', async () => {
   const at = minute => new Date(Date.UTC(2026, 10, 5) + minute * 60000).toISOString();
   const reportOne = smartResults([{ id: 't1', startedAt: at(1), endedAt: at(2), status: 'complete', verification: 'passed', routing: { mode: 'smart', policy: 1 }, taskClass: { kind: 'change', size: 'standard' }, contextPolicy: 'task',
     models: [{ provider: 'codex', model: 'gpt-5', effort: 'low', role: 'builder' }], billing: ['subscription'], apiEstimateUSD: { total: null, runs: 0, billedRuns: 0 }, workingMs: 60000,
     usage: { runs: 1, reportedBy: { input: 1, output: 1 }, input: 1000, output: 100, cacheWrite: null, partialRuns: 0, runsWithTokens: 1 }, runs: 1, retries: 0, interventions: 0, firstAttemptSuccess: true }], { now: Date.parse(at(200)), days: null });
   const reportTwo = smartResults([], { now: Date.parse(at(200)), days: null });
-  const ui = await flowBrowser({ experimentalUI: true, moreProjects: true });
+  const experimental = { remote: true, plan: true, review: true, smartResults: true, tasks: true };
+  const ui = await flowBrowser({ experimentalUI: true, workbench: true, moreProjects: true });
   ui.setIntercept((request, next) => {
+    if (request.path === '/api/preferences' && request.method === 'GET') return response({ experimental });
     if (request.path === '/api/results') return response(request.params.projectId === 'project-two' ? reportTwo : reportOne);
-    if (request.path === '/api/ledger') return response({ runs: [], quotaObservations: [], tasks: [] });
-    if (request.path === '/api/budget') return response({ policy: {}, defaults: {}, quota: {}, task: null });
     return next();
   });
-  ui.window.relayFlow.enter(); await flush(); await ui.window.relaySmartResults.refresh(); await flush();
-  const titleEl = () => ui.$('flow-card-results-title');
-  assert.equal(titleEl().querySelector('.flow-card-title').textContent, 'Smart results');
-  assert.equal(titleEl().querySelector('.experimental-badge').textContent, 'Experimental');
-  assert.match(ui.$('flow-card-results').textContent, /1 task/);
+  await ui.window.relayExperimental.reload(); await flush();
+  assert.equal(ui.window.relaySmartResults.open(), true); await flush();
+  assert.match(ui.$('results-dialog-body').textContent, /1 task/);
 
   const chat = ui.canonical.get('project-one');
   chat.routing = { mode: 'saver', allowApi: false, check: true };
   await ui.window.relayUI.refresh(); await flush();
-  assert.equal(titleEl().querySelector('.flow-card-title').textContent, 'Saver results');
-  assert.equal(titleEl().querySelector('.experimental-badge').textContent, 'Experimental');
 
   await ui.switchProject('project-two'); await flush();
-  assert.doesNotMatch(ui.$('flow-card-results').textContent, /1 task/);
-  assert.match(ui.$('flow-card-results').textContent, /no finished Smart tasks yet/);
+  assert.doesNotMatch(ui.$('results-dialog-body').textContent, /1 task/);
+  assert.match(ui.$('results-dialog-body').textContent, /Not enough comparable data yet/);
+  assert.match(ui.$('results-dialog-body').textContent, /Show the 0 tasks/);
 });
 
 test('Tasks side by side is experimental: marked in Normal and Flow, and turning it off hides its entry points', async () => {
@@ -10161,4 +10189,266 @@ test("approving a pending request keeps focus on Stop, Escape closes an open Pla
   ui.document.dispatchEvent(new UIEvent("keydown", { key: "Escape" })); await flush();
   assert.equal(ui.$("board-drawer").hidden, true, "Escape closes the card drawer even when focus was in the chat pane.");
   assert.equal(ui.document.activeElement?.dataset?.card, ids.running, "Closing the drawer returns focus to the card on the Plan.");
+});
+
+test("sidebar task list sorts Needs you → Working → Finished, shows two lines while active, scopes folder chips, and folds older finished tasks (#192)", async () => {
+  const now = Date.now(), iso = minsAgo => new Date(now - minsAgo * 60000).toISOString();
+  const ui = await browser({ insights: true, agentsUI: true, wide: true, filesUI: true }), conversation = ui.canonical.get("project-one");
+  const [first, second] = ui.state().projects.find(project => project.id === "project-one").folders;
+  const oldSel = { id: "11111111-0000-4000-8000-000000000009", title: "Oldest finished", folderName: "Backend", folderId: second.id, status: "cancelled", endedAt: iso(90), conversationId: "lane-old", hasWorktree: false };
+  conversation.parallelTasks = [
+    { id: "11111111-0000-4000-8000-000000000001", title: "Older merged", folderName: "Frontend", folderId: first.id, status: "integrated", endedAt: iso(60), hasWorktree: false },
+    { id: "11111111-0000-4000-8000-000000000002", title: "Queued work", folderName: "Backend", folderId: second.id, status: "waiting", provider: "gemini", createdAt: iso(5), hasWorktree: false },
+    { id: "11111111-0000-4000-8000-000000000003", title: "Active build", folderName: "Frontend", folderId: first.id, status: "running", provider: "codex", runningStartedAt: iso(4), conversationId: "lane-run", hasWorktree: false },
+    { id: "11111111-0000-4000-8000-000000000004", title: "Recent stop", folderName: "Backend", folderId: second.id, status: "stopped", endedAt: iso(20), hasWorktree: false },
+    { id: "11111111-0000-4000-8000-000000000005", title: "Ready copy", folderName: "Backend", folderId: second.id, status: "complete", provider: "claude", endedAt: iso(3), conversationId: "lane-rev", hasWorktree: true },
+    { id: "11111111-0000-4000-8000-000000000006", title: "Newest done", folderName: "Frontend", folderId: first.id, status: "complete", endedAt: iso(2), hasWorktree: false },
+    { id: "11111111-0000-4000-8000-000000000007", title: "Broken run", folderName: "Frontend", folderId: first.id, status: "failed", endedAt: iso(10), hasWorktree: false },
+    { id: "11111111-0000-4000-8000-000000000008", title: "Ask schema", folderName: "Backend", folderId: second.id, status: "running", provider: "claude", approvals: 1, questions: 1, createdAt: iso(2), conversationId: "lane-q", hasWorktree: false },
+    oldSel,
+  ];
+  ui.setIntercept((request, next) => {
+    if (request.path === "/api/conversation" && request.params.task === oldSel.id) return response({ ...conversation, id: "lane-old", status: "idle", messages: [], cursor: 0, task: oldSel, parallelTasks: conversation.parallelTasks, checkpoints: {} });
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+
+  const items = () => ui.$("task-list").children.map(holder => holder.children[0]);
+  assert.deepEqual(
+    items().map(el => (el.querySelector(".task-row-title") || el.querySelector(".task-earlier-label"))?.textContent),
+    ["Workspace chat", "Ask schema", "Ready copy", "Active build", "Queued work", "Newest done", "Broken run", "Recent stop", "2 earlier"],
+    "Sorts Needs you → Working → Finished (newest ended first) and folds after 3 finished rows."
+  );
+
+  // Distinct data-state icons and 1-line vs 2-line layout.
+  const rows = items().filter(el => el.classList.contains("task-row"));
+  assert.deepEqual(rows.map(el => el.dataset.state), ["idle", "question", "review", "working", "waiting", "finished", "failed", "stopped"]);
+  assert.deepEqual(rows.map(el => el.classList.contains("task-row-detailed")), [false, true, true, true, true, false, false, false]);
+  assert.equal(rows[0].querySelector(".task-row-meta"), null, "Idle Workspace chat stays one quiet line without filler.");
+  assert.match(rows[1].querySelector(".task-row-meta").textContent, /^Needs your answer · Claude · \d+m$/);
+  assert.match(rows[3].querySelector(".task-row-meta").textContent, /^Working · Codex · \d+m$/);
+  assert.equal(rows[5].querySelector(".task-row-meta"), null, "Finished rows collapse to one line.");
+
+  // Multi-folder workspace shows folder chips on task rows; Workspace chat has none.
+  assert.equal(rows[0].querySelector(".task-row-folder"), null);
+  assert.deepEqual(rows.slice(1).map(el => el.querySelector(".task-row-folder")?.textContent), ["Backend", "Backend", "Frontend", "Backend", "Frontend", "Frontend", "Backend"]);
+
+  // Running or waiting Workspace chat gets a second line with state, agent and time.
+  Object.assign(conversation, { status: "running", activeRun: { id: "r-main", provider: "claude", startedAt: iso(6) }, pendingApprovals: [{ id: "q1", kind: "question" }] });
+  await ui.window.relayUI.refresh(); await flush();
+  const main = ui.$("task-list").querySelector(".task-row-main");
+  assert.equal(main.dataset.state, "question");
+  assert.equal(main.classList.contains("task-row-detailed"), true);
+  assert.match(main.querySelector(".task-row-meta").textContent, /^Needs your answer · Claude · \d+m$/);
+  Object.assign(conversation, { status: "idle", activeRun: null, pendingApprovals: [] });
+  await ui.window.relayUI.refresh(); await flush();
+
+  // Expanding and folding older finished tasks, while keeping a selected older finished task visible.
+  ui.$("task-list").querySelector(".task-earlier").click(); await flush();
+  assert.equal(ui.$("task-list").querySelector(".task-earlier").getAttribute("aria-expanded"), "true");
+  assert.equal(ui.$("task-list").querySelector(".task-earlier-label").textContent, "Show fewer");
+  assert.equal(items().some(el => el.querySelector(".task-row-title")?.textContent === "Oldest finished"), true);
+  items().find(el => el.querySelector(".task-row-title")?.textContent === "Oldest finished").click(); await flush();
+  ui.$("task-list").querySelector(".task-earlier").click(); await flush();
+  assert.equal(ui.$("task-list").querySelector(".task-earlier-label").textContent, "1 earlier", "Selected older finished task stays visible while unselected ones fold.");
+  assert.equal(items().some(el => el.querySelector(".task-row-title")?.textContent === "Oldest finished"), true);
+
+  // Selecting a folder hides folder chips (redundant inside one folder), and single-folder workspace hides them too.
+  const group = () => ui.document.querySelectorAll(".workspace-group").find(item => item.classList.contains("active"));
+  group().querySelectorAll(".workspace-folder-pick")[0].click(); await flush();
+  assert.equal(ui.window.relayUI.sidebarLevel(), "folder");
+  assert.equal(ui.$("task-list").querySelectorAll(".task-row-folder").length, 0, "No folder chips when a folder is selected.");
+
+  const project = ui.state().projects.find(item => item.id === "project-one");
+  project.folders = [first]; ui.state().sidebarLevels = {};
+  ui.window.dispatchEvent(new UIEvent("relay-state")); await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.window.relayUI.sidebarLevel(), "single");
+  assert.equal(ui.$("task-list").querySelectorAll(".task-row-folder").length, 0, "No folder chips in a single-folder workspace.");
+});
+
+test('main tabs support beside-Chat split, resizing, renaming, reordering, unread output dots and keyboard shortcuts (#193)', async () => {
+  const ui = await browser({ terminalUI: true, commandsUI: true });
+  const lists = new Map(), stops = []; let counter = 0;
+  ui.setIntercept((request, next) => {
+    if (!request.path.startsWith('/api/terminal')) return next();
+    const id = request.projectId, list = lists.get(id) || [];
+    if (request.path === '/api/terminal') return response({ sessions: clone(list), shell: 'zsh' });
+    if (request.path === '/api/terminal/start') {
+      const n = ++counter, sid = `shell-${n}`;
+      const value = { id: sid, projectId: id, folderId: request.body.folderId, folderName: request.body.folderId === 'backend' ? 'Backend' : 'Frontend', cwd: `/workspace/${request.body.folderId}`, shell: '/bin/zsh', status: 'running', exitCode: null, signal: null, error: null, startedAt: new Date().toISOString(), endedAt: null, cols: 80, rows: 24, tabId: sid, pane: 0, split: null, order: n };
+      lists.set(id, [...list, value]);
+      return response(value, 201);
+    }
+    if (request.path === '/api/terminal/stop') {
+      stops.push(request.body.id);
+      lists.set(id, list.filter(item => item.id !== request.body.id));
+      return response({ id: request.body.id, status: 'stopped' });
+    }
+    return response({ written: 1 });
+  });
+  const rows = () => ui.$('main-tool-tabs').querySelectorAll('.work-tab').filter(row => !row.hidden);
+  const labels = () => rows().map(row => row.querySelector('.main-tab-label').textContent);
+  const docKey = props => { const event = new UIEvent('keydown', props); ui.document.dispatchEvent(event); return event; };
+
+  // ⌃` opens a terminal; ⌃⇧` opens another; ⌃Tab and ⌃⇧Tab cycle across Chat and open tabs.
+  docKey({ key: '`', code: 'Backquote', ctrlKey: true }); await flush();
+  ui.$('tab-primary').querySelectorAll('.terminal-folder')[0].click(); await flush();
+  docKey({ key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true }); await flush();
+  ui.$('tab-primary').querySelectorAll('.terminal-folder')[1].click(); await flush();
+  assert.deepEqual(labels(), ['Frontend', 'Backend']);
+
+  // Rename with F2 survives subsequent terminal re-renders and saves to localStorage.
+  const secondBtn = rows()[1].querySelector('.main-tab');
+  secondBtn.dispatchEvent(new UIEvent('keydown', { key: 'F2' }));
+  const nameInput = secondBtn.querySelector('.main-tab-name');
+  assert(nameInput, 'F2 opens inline tab rename.');
+  nameInput.value = 'API Server';
+  nameInput.dispatchEvent(new UIEvent('keydown', { key: 'Enter' }));
+  assert.deepEqual(labels(), ['Frontend', 'API Server']);
+  await ui.window.relayTerminal.open(); await flush();
+  assert.deepEqual(labels(), ['Frontend', 'API Server'], 'Custom tab title survives terminal re-renders.');
+
+  // Alt+ArrowLeft reorders tabs; ⌃Tab cycles through Chat and the reordered tabs.
+  secondBtn.dispatchEvent(new UIEvent('keydown', { key: 'ArrowLeft', altKey: true }));
+  assert.deepEqual(labels(), ['API Server', 'Frontend']);
+  docKey({ key: 'Tab', ctrlKey: true });
+  assert.equal(ui.window.relayTabs.active(), 'terminal:shell-1');
+  docKey({ key: 'Tab', ctrlKey: true });
+  assert.equal(ui.window.relayTabs.active(), 'chat');
+  docKey({ key: 'Tab', ctrlKey: true, shiftKey: true });
+  assert.equal(ui.window.relayTabs.active(), 'terminal:shell-1');
+
+  // ⌃` from an active terminal toggles back to Chat; background output marks the tab unread until viewed.
+  docKey({ key: '`', code: 'Backquote', ctrlKey: true });
+  assert.equal(ui.window.relayTabs.active(), 'chat');
+  const stream1 = ui.eventSources.find(s => s.url.includes('id=shell-1'));
+  stream1.dispatchEvent(new UIEvent('data', { data: JSON.stringify({ data: 'build done\r\n' }) }));
+  assert.equal(rows()[1].classList.contains('tab-unread'), true, 'Hidden tab shows an unread dot when new output arrives.');
+
+  // Open beside Chat clears unread, splits #main-work-area, resizes between 25% and 75%, and unsplit keeps the tab open.
+  ui.$('main-work-area').bounds = { left: 0, top: 0, right: 1000, bottom: 600, width: 1000, height: 600 };
+  rows()[1].querySelectorAll('.tab-action')[0].click();
+  assert.equal(rows()[1].classList.contains('tab-unread'), false);
+  assert.equal(ui.$('chat-stage').hidden, false);
+  assert.equal(ui.$('tab-beside').hidden, false);
+  assert.equal(ui.$('tab-beside-title').textContent, 'Frontend');
+  assert.equal(ui.$('tab-secondary').contains(ui.terminals[0].host), true);
+  ui.$('tab-divider').dispatchEvent(new UIEvent('pointerdown', { button: 0, pointerId: 1 }));
+  ui.$('tab-divider').dispatchEvent(new UIEvent('pointermove', { pointerId: 1, clientX: 900 }));
+  ui.$('tab-divider').dispatchEvent(new UIEvent('pointerup', { pointerId: 1 }));
+  assert.equal(ui.$('main-work-area').style['--chat-share'], '75%', 'Split clamps at 75%.');
+  ui.$('tab-divider').dispatchEvent(new UIEvent('keydown', { key: 'Home' }));
+  assert.equal(ui.$('main-work-area').style['--chat-share'], '25%', 'Home jumps to 25%.');
+  ui.$('tab-divider').dispatchEvent(new UIEvent('dblclick'));
+  assert.equal(ui.$('main-work-area').style['--chat-share'], '50%', 'Double-click resets to 50%.');
+  ui.$('tab-unsplit').click();
+  assert.equal(ui.$('tab-beside').hidden, true);
+  assert.equal(rows().length, 2, 'Closing the split keeps the tab itself open.');
+
+  // Ctrl+W (or ⌘W on Mac) never closes Chat, and closes the active tool tab while stopping its session.
+  const onChat = docKey({ key: 'w', ctrlKey: true, metaKey: true });
+  assert.equal(onChat.defaultPrevented, false, 'Chat is never closed by ⌘W / Ctrl+W.');
+  assert.equal(stops.length, 0);
+  rows()[1].querySelector('.main-tab').click();
+  const onTab = docKey({ key: 'w', ctrlKey: true });
+  await flush();
+  assert.equal(onTab.defaultPrevented, true);
+  assert.deepEqual(stops, ['shell-1']);
+  assert.deepEqual(labels(), ['API Server']);
+});
+
+test('sidebar switch navigates Workspaces, Run and Git; Git opens diffs as tabs; failed commands offer Ask the agent; and remembered tabs restore as Start again without auto-spawning (#193)', async () => {
+  const savedTabs = {
+    'project-two': {
+      tabs: [
+        { id: 'cli', title: 'CLI', kind: 'cli' },
+        { id: 'terminal:old-1', title: 'API', kind: 'terminal', restore: { panes: [{ folderId: 'api' }], split: null } },
+        { id: 'command:test', title: 'test', kind: 'command', restore: { commandId: 'test' } },
+      ],
+      active: 'chat',
+      beside: null,
+      ratio: 50,
+    },
+  };
+  const ui = await browser({
+    moreProjects: true,
+    tabsUI: true,
+    commandsUI: true,
+    terminalUI: true,
+    cliUI: true,
+    insights: true,
+    stored: { 'throughline:work-tabs:v1': JSON.stringify(savedTabs) },
+  });
+  let spawned = 0;
+  let testSession = null;
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/terminal') return response({ sessions: [], cliAvailable: true, cli: null, shell: 'zsh' });
+    if (request.path === '/api/terminal/start') { spawned++; return response({ id: 'spawned-1', projectId: request.projectId, folderId: request.body.folderId || 'api', folderName: 'API', cwd: '/workspace/other/api', shell: '/bin/zsh', status: 'running', tabId: 'spawned-1', pane: 0, split: null, order: 1 }, 201); }
+    if (request.path === '/api/commands') return response({
+      commands: [{ id: 'test', name: 'test', folderId: 'api', directory: 'packages/core', command: 'npm test', test: true }],
+      sessions: testSession ? { test: testSession } : {},
+    });
+    if (request.path === '/api/commands/start') { spawned++; testSession = { id: 'cmd-1', commandId: 'test', name: 'test', command: 'npm test', folderId: 'api', status: 'exited', exitCode: 2, output: 'AssertionError: expected 200, got 500', ansi: 'AssertionError: expected 200, got 500', urls: [] }; return response(testSession, 202); }
+    if (request.path === '/api/git') return response({
+      checkedAt: '2026-11-25T10:00:00Z',
+      totalChanges: 1,
+      repositories: [{
+        folderId: 'api',
+        name: 'API',
+        available: true,
+        branch: 'main',
+        totalChanges: 1,
+        committer: { name: 'Dev', email: 'dev@example.com' },
+        changes: [{ path: 'src/index.js', code: ' M' }],
+        commits: [{ hash: 'a'.repeat(40), shortHash: 'aaaaaaa', subject: 'Initial commit', author: 'Dev', date: '2026-11-25T09:00:00Z' }],
+      }],
+    });
+    if (request.path === '/api/git/diff') return response({ path: 'src/index.js', code: ' M', diff: '@@ -1 +1 @@\n-old\n+new line\n' });
+    if (request.path === '/api/checkpoints/commit') return response({ shortHash: 'aaaaaaa', totalFiles: 1, files: [{ path: 'src/index.js', status: 'modified', diff: '@@ -1 +1 @@\n-a\n+b\n' }] });
+    return next();
+  });
+  await ui.switchProject('project-two');
+  ui.$('sidebar-tab-run').click();
+  await flush(); await flush();
+
+  // Remembered CLI, terminal and command tabs restore as Start again without auto-spawning any process.
+  assert.equal(spawned, 0, 'Restoring remembered tabs never auto-spawns shells or commands.');
+  const tabRows = () => ui.$('main-tool-tabs').querySelectorAll('.work-tab').filter(row => !row.hidden);
+  assert.deepEqual(tabRows().map(row => row.dataset.tabId), ['cli', 'terminal:old-1', 'command:test']);
+  tabRows()[1].querySelector('.main-tab').click();
+  assert.match(ui.$('tab-primary').textContent, /Start again/);
+  tabRows()[2].querySelector('.main-tab').click();
+  assert.equal(commandPart(ui, 'start').textContent, 'Start again');
+
+  // Starting a command that fails marks its tab failed and offers Ask the agent in both the tab and the sidebar row.
+  commandPart(ui, 'start').click(); await flush(); await flush();
+  assert.equal(tabRows()[2].dataset.state, 'failed');
+  assert.equal(commandPart(ui, 'fix').hidden, false);
+  const rowFix = ui.$('command-list').querySelector('.command-row-fix');
+  assert(rowFix, 'Failed command offers Ask the agent in the sidebar row too.');
+  rowFix.click(); await flush();
+  assert.equal(ui.window.relayTabs.active(), 'chat');
+  assert.match(ui.$('message-input').value, /The test command failed with exit code 2/);
+  assert.match(ui.$('message-input').value, /Command: npm test \(in API\/packages\/core\)/);
+  assert.match(ui.$('message-input').value, /AssertionError: expected 200, got 500/);
+  assert.equal(ui.requests.filter(r => r.path.endsWith('/messages')).length, 0, 'Ask the agent drafts without sending.');
+
+  // Sidebar switch keyboard navigation moves from Run -> Git -> Workspaces, and Git opens file and commit diffs as main tabs.
+  ui.$('sidebar-switch').dispatchEvent(new UIEvent('keydown', { key: 'ArrowRight' }));
+  await flush(); await flush();
+  assert.equal(ui.window.relaySidebar.active(), 'git');
+  assert.equal(ui.$('git-panel').hidden, false);
+  assert.equal(ui.$('sidebar-workspaces').hidden, true);
+  ui.$('git-content').querySelector('.git-file').click();
+  await flush(); await flush();
+  assert.equal(ui.$('diff-dialog').open, false, 'Changed file opens in a main tab instead of #diff-dialog.');
+  assert.match(ui.$('tab-primary').textContent, /new line/);
+  ui.$('git-commits-tab').click(); await flush();
+  ui.$('git-content').querySelector('.git-commit-subject').click();
+  await flush(); await flush();
+  assert.equal(ui.$('commit-dialog').open, false, 'Commit opens in a main tab instead of #commit-dialog.');
+  assert.match(ui.$('tab-primary').textContent, /aaaaaaa/);
+  ui.$('sidebar-switch').dispatchEvent(new UIEvent('keydown', { key: 'Home' }));
+  assert.equal(ui.window.relaySidebar.active(), 'workspaces');
+  assert.equal(ui.$('sidebar-workspaces').hidden, false);
 });

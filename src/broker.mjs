@@ -972,7 +972,7 @@ export class Broker extends EventEmitter {
       // Only the first check waits. Later ones refresh in the background, so a slow CLI never delays the conversation.
       if (!this.providerStatus) await this.providerStatusPending;
     }
-    return { workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, providers: this.providerStatus, runningConversationId: this.running?.c.id || null, workspaceActivity: this.workspaceActivity(), verificationCadence: this.verificationCadence(), pendingApprovals: [...this.conversations.values()].flatMap(c => this.pendingApprovals(c)) };
+    return { workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, providers: this.providerStatus, runningConversationId: this.running?.c.id || null, runningProvider: this.running?.c.activeRun?.provider || null, runningStartedAt: this.running?.c.activeRun?.startedAt || null, workspaceActivity: this.workspaceActivity(), verificationCadence: this.verificationCadence(), pendingApprovals: [...this.conversations.values()].flatMap(c => this.pendingApprovals(c)) };
   }
 
   // Read-only activity across the workspace, even when the viewer has a different task open. This describes

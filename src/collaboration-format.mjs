@@ -77,13 +77,17 @@ export function fileBytes(file, where = file?.path || 'file') {
   return bytes;
 }
 
-export function validateRelativePath(value) {
+const DENIED_PART = /^(?:\.git|\.data|\.ai-relay|\.codex|\.claude|\.gemini|\.aws|\.ssh|\.gnupg|node_modules|\.env(?:\..*)?|credentials(?:\..*)?|secrets?(?:\..*)?|sessions?(?:\..*)?|auth(?:\.json)?|\.npmrc|\.netrc)$/i;
+const ENV_TEMPLATE = /^\.env(?:\.[^.]+)*\.(?:example|sample|template|dist|defaults?|schema)$/i;
+export function isPrivatePath(value) {
+  return String(value || '').split(/[\\/]/).some(part => !ENV_TEMPLATE.test(part) && (DENIED_PART.test(part) || /\.(?:pem|key|p12|pfx|keystore)$/i.test(part)));
+}
+export function validateRelativePath(value, { allowPrivate = false } = {}) {
   assert(typeof value === 'string' && value.length > 0 && value.length <= 1024, 'File paths must be nonempty relative paths.');
   assert(!/[\\\x00-\x1f\x7f:]/.test(value) && !value.startsWith('/') && !value.startsWith('~') && !/%(?:2e|2f|5c)/i.test(value), 'Unsafe file path: ' + value);
   const parts = value.split('/');
   assert(parts.every(part => part && part !== '.' && part !== '..'), 'Path traversal is not supported: ' + value);
-  const denied = /^(?:\.git|\.data|\.ai-relay|\.codex|\.claude|\.gemini|\.aws|\.ssh|\.gnupg|node_modules|\.env(?:\..*)?|credentials(?:\..*)?|secrets?(?:\..*)?|sessions?(?:\..*)?|auth(?:\.json)?|\.npmrc|\.netrc)$/i;
-  assert(!parts.some(part => denied.test(part) || /\.(?:pem|key|p12|pfx|keystore)$/i.test(part)), 'Private, credential, provider-session, or runtime paths cannot be shared: ' + value);
+  assert(allowPrivate || !isPrivatePath(value), 'Private, credential, provider-session, or runtime paths cannot be shared: ' + value);
   return value;
 }
 function keys(value, allowed, where) {

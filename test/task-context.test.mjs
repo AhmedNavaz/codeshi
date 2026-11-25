@@ -157,8 +157,8 @@ test('sizes in tokens say they are estimates, and private paths are recognized',
   const { size } = build(conversation([]), 'Do it', [desktop]).metadata;
   assert.equal(size.estimatedTokens, Math.ceil(size.bytes / 4));
   assert.match(size.method, /estimate.*tokenizer is not available/);
-  for (const name of ['.env', 'a/.env.local', 'node_modules/x', 'keys/server.pem', '.ssh/id', 'credentials.json']) assert.equal(privatePath(name), true, name);
-  for (const name of ['src/env.js', 'README.md', 'docs/keys.md']) assert.equal(privatePath(name), false, name);
+  for (const name of ['.env', 'a/.env.local', '.env.example.local', '.env.example.key', 'node_modules/x', 'keys/server.pem', '.ssh/id', 'credentials.json']) assert.equal(privatePath(name), true, name);
+  for (const name of ['src/env.js', 'README.md', 'docs/keys.md', '.env.example', 'a/.env.sample', '.env.local.example', 'web/.env.defaults']) assert.equal(privatePath(name), false, name);
 });
 
 test('after native compaction the next resume restores task constraints, instructions and evidence without resetting the session', t => {

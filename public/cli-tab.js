@@ -8,7 +8,7 @@
   // layout, so the tab waits behind it and comes back when Flow is turned off.
   const $ = id => document.getElementById(id), api = window.relayUI, main = document.querySelector('.main-panel');
   const strip = $('main-tabs'), view = $('cli-view'), hosts = $('cli-views'), button = $('status-cli');
-  if (!api || !main || !strip || !view || !hosts) return;
+  if (!api || (!window.relayTabs && !main) || !strip || !view || !hosts) return;
   const Terminal = window.Terminal, FitAddon = window.FitAddon?.FitAddon, WebLinksAddon = window.WebLinksAddon?.WebLinksAddon;
   const loaded = Boolean(Terminal && FitAddon);
   // Each workspace's tab: its session as the engine reports it, whether it is in front, and its terminal once made.
@@ -22,7 +22,22 @@
   const tab = (id = projectId()) => { if (!tabs.has(id)) tabs.set(id, { session: null, front: false, term: null }); return tabs.get(id); };
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
 
-  function say(text) { notice = text || ''; $('cli-message').textContent = notice; $('cli-message').hidden = !notice; }
+  function say(text, id = projectId()) {
+    notice = text || '';
+    const target = window.relayTabs ? surfaceFor(id).message : $('cli-message');
+    if (target) { target.textContent = notice; target.hidden = !notice; }
+  }
+
+  function surfaceFor(id) {
+    const entry = tab(id);
+    if (entry.surface) return entry;
+    const surface = document.createElement('section'); surface.className = 'cli-view'; surface.hidden = true;
+    const container = document.createElement('div'); container.className = 'cli-views';
+    const message = document.createElement('p'); message.className = 'cli-message'; message.hidden = true; message.setAttribute('role', 'status');
+    surface.append(container, message); Object.assign(entry, { surface, container, message });
+    if (typeof ResizeObserver === 'function') new ResizeObserver(() => requestAnimationFrame(fitShown)).observe(container);
+    return entry;
+  }
 
   // The terminal's colours and font follow the window's, as the bottom panel's terminal does.
   function theme() { return window.relayTerminal?.theme?.() || {}; }
@@ -39,7 +54,7 @@
     const entry = tab(id);
     if (entry.term) return entry;
     const host = document.createElement('div'); host.className = 'cli-host'; host.dataset.projectId = id; host.hidden = true;
-    hosts.append(host);
+    (window.relayTabs ? surfaceFor(id).container : hosts).append(host);
     const font = (typeof getComputedStyle === 'function' && getComputedStyle(document.documentElement).getPropertyValue('--mono').trim()) || 'Menlo, monospace';
     const term = new Terminal({ cursorBlink: true, fontFamily: font, fontSize: 13, lineHeight: 1.2, scrollback: 10000, allowProposedApi: false, macOptionIsMeta: false, theme: theme(), linkHandler: { activate: (event, uri) => openLink(event, term, uri), allowNonHttpProtocols: false } });
     const fit = new FitAddon();
@@ -83,7 +98,7 @@
     const query = Object.entries({ projectId: id, id: session.id, ...(token() ? { token: token() } : {}) }).map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('&');
     entry.stream = new EventSource('/api/terminal/stream?' + query);
     entry.stream.addEventListener('reset', event => { entry.term.reset(); entry.term.write(JSON.parse(event.data).data); });
-    entry.stream.addEventListener('data', event => entry.term.write(JSON.parse(event.data).data));
+    entry.stream.addEventListener('data', event => { entry.term.write(JSON.parse(event.data).data); window.relayTabs?.notify('cli', id); });
     entry.stream.addEventListener('exit', event => {
       const ended = JSON.parse(event.data); entry.stream.close(); entry.stream = null;
       entry.session = { ...entry.session, ...ended };
@@ -99,11 +114,12 @@
     Object.assign(entry, { term: null, fit: null, host: null, stream: null, queue: '', session: null });
   }
 
-  const fitShown = () => { const entry = tabs.get(projectId()); if (entry?.term && !entry.host.hidden) try { entry.fit.fit(); } catch { /* Not laid out yet. */ } };
-  const focus = () => { const entry = tabs.get(projectId()); if (entry?.term && entry.front) entry.term.focus(); };
+  const fitShown = () => { const entry = tabs.get(projectId()); if (entry?.term && (window.relayTabs ? window.relayTabs.isVisible('cli') : !entry.host.hidden)) try { entry.fit.fit(); } catch { /* Not laid out yet. */ } };
+  const focus = () => { const entry = tabs.get(projectId()); if (entry?.term && (window.relayTabs ? window.relayTabs.isVisible('cli') : entry.front)) entry.term.focus(); };
   const frame = () => new Promise(resolve => requestAnimationFrame(() => resolve()));
 
   function render() {
+    if (window.relayTabs) { renderUnified(); return; }
     const id = projectId(), entry = id ? tabs.get(id) : null, flow = flowOn();
     const front = Boolean(entry?.front) && !flow, open = Boolean(entry && (entry.front || entry.session)) && !flow;
     strip.hidden = !open;
@@ -122,26 +138,56 @@
     if (front) requestAnimationFrame(fitShown);
   }
 
+  function renderUnified() {
+    for (const [id, entry] of tabs) {
+      if (!entry.front && !entry.session && !entry.restored) continue;
+      surfaceFor(id);
+      if (entry.host) entry.host.hidden = false;
+      if (entry.restored && !entry.term && !entry.restoreButton) {
+        const text = document.createElement('p'); text.textContent = 'This CLI session ended when Codeshi closed.';
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'primary-button'; button.textContent = 'Start again';
+        button.addEventListener('click', () => { if (id === projectId()) open(); });
+        const restore = document.createElement('div'); restore.className = 'terminal-restore'; restore.append(text, button);
+        entry.container.append(restore); entry.restoreButton = restore;
+      }
+      window.relayTabs.upsert({
+        id: 'cli', projectId: id, kind: 'cli', title: 'CLI', element: entry.surface,
+        state: entry.session ? live(entry.session) ? 'running' : entry.session.status === 'failed' || entry.session.exitCode ? 'failed' : 'finished' : entry.restored ? 'stopped' : 'running',
+        restore: {}, onSelect: () => requestAnimationFrame(() => { fitShown(); focus(); }),
+        onClose: () => close(id), onRestore: () => { if (id === projectId()) return open(); },
+      });
+    }
+    if (button) {
+      button.hidden = !available || !loaded;
+      button.disabled = !projectId() || busy;
+      button.setAttribute('aria-pressed', String(window.relayTabs.isVisible('cli')));
+      button.title = 'CLI: this conversation in the codeshi command, in a tab.';
+    }
+    requestAnimationFrame(fitShown);
+  }
+
   // Opens the workspace's CLI tab, starting the command if it isn't running.
   async function open() {
     const id = projectId();
     if (!id || !available || !loaded || busy || flowOn()) return;
     const entry = tab(id);
     entry.front = true; say('');
-    if (live(entry.session)) { render(); focus(); return; }
-    busy = true;
+    if (live(entry.session)) { render(); window.relayTabs?.select('cli'); focus(); return; }
+    busy = true; entry.starting = true;
     try {
       if (entry.session) dispose(entry);
-      terminalFor(id); render(); await frame(); fitShown();
+      entry.restoreButton?.remove(); entry.restoreButton = null; entry.restored = false;
+      terminalFor(id); render(); window.relayTabs?.select('cli'); await frame(); fitShown();
       const session = await api.post('/api/terminal/start', { kind: 'cli', cols: entry.term.cols, rows: entry.term.rows }, id);
       entry.session = session;
-      if (session.status === 'failed') say(session.error || 'codeshi could not start.');
+      if (session.status === 'failed') say(session.error || 'codeshi could not start.', id);
       else follow(id);
-    } catch (error) { say(error.message); }
-    finally { busy = false; render(); focus(); }
+    } catch (error) { say(error.message, id); }
+    finally { busy = false; entry.starting = false; render(); if (id === projectId()) focus(); }
   }
   async function restart(id) { if (id !== projectId()) return; await close(id, { quiet: true }); await open(); }
   function showChat() {
+    if (window.relayTabs) { window.relayTabs.showChat(); $('message-input')?.focus?.(); return; }
     const entry = tabs.get(projectId());
     if (!entry?.front) return;
     entry.front = false; render();
@@ -150,8 +196,17 @@
   // × ends the command; a run it started carries on, in the chat.
   async function close(id = projectId(), { quiet = false } = {}) {
     const entry = tabs.get(id);
-    if (!entry) return;
+    if (!entry) return true;
     const session = entry.session;
+    if (window.relayTabs) {
+      if (entry.starting) return false;
+      try { if (session) await api.post('/api/terminal/stop', { id: session.id }, id); }
+      catch (error) { say(error.message, id); return false; }
+      dispose(entry); entry.surface?.remove(); tabs.delete(id);
+      window.relayTabs.remove('cli', { projectId: id }); render();
+      if (id === projectId() && !quiet) $('message-input')?.focus?.();
+      return true;
+    }
     entry.front = false; dispose(entry); say(''); render();
     if (id === projectId() && !quiet) $('message-input')?.focus?.();
     // The engine ends the command if it still runs, and forgets it either way.
@@ -169,18 +224,21 @@
       const entry = tab(id);
       if (state.cli && live(state.cli) && (!entry.session || entry.session.id !== state.cli.id)) {
         entry.session = state.cli; terminalFor(id); follow(id);
-      } else if (!state.cli && entry.session && live(entry.session)) dispose(entry);
+      } else if (!state.cli && entry.session && live(entry.session)) { dispose(entry); entry.restored = true; }
+      if (window.relayTabs && !state.cli && window.relayTabs.getSaved(id, 'cli').length) entry.restored = true;
     } catch { /* The button stays as it was. */ }
     render();
   }
 
-  button?.addEventListener('click', () => { const entry = tabs.get(projectId()); if (entry?.front) showChat(); else open(); });
-  $('main-tab-chat').addEventListener('click', showChat);
-  $('main-tab-cli').addEventListener('click', () => open());
-  $('main-tab-cli-close').addEventListener('click', () => close());
+  button?.addEventListener('click', () => { if (window.relayTabs) { open(); return; } const entry = tabs.get(projectId()); if (entry?.front) showChat(); else open(); });
+  if (!window.relayTabs) {
+    $('main-tab-chat')?.addEventListener('click', showChat);
+    $('main-tab-cli')?.addEventListener('click', () => open());
+    $('main-tab-cli-close')?.addEventListener('click', () => close());
+  }
   // The two tabs move with the arrow keys, as tabs do.
   strip.addEventListener('keydown', event => {
-    if (!['ArrowLeft', 'ArrowRight'].includes(event.key) || !event.target?.closest?.('[role="tab"]')) return;
+    if (window.relayTabs || !['ArrowLeft', 'ArrowRight'].includes(event.key) || !event.target?.closest?.('[role="tab"]')) return;
     event.preventDefault();
     if (tabs.get(projectId())?.front) { showChat(); $('main-tab-chat').focus(); } else { open(); $('main-tab-cli').focus(); }
   });
@@ -199,5 +257,6 @@
   // ⌘J and friends stay with the window; on other systems, Ctrl keys typed here belong to the command.
   if (!mac) view.addEventListener('keydown', event => { if (event.ctrlKey) event.stopPropagation(); });
   render();
-  window.relayCli = { open, showChat, close: () => close(), isFront: () => Boolean(tabs.get(projectId())?.front) && !flowOn() };
+  window.relayCli = { open, showChat, close: () => close(), isFront: () => window.relayTabs ? window.relayTabs.isVisible('cli') : Boolean(tabs.get(projectId())?.front) && !flowOn() };
+  window.addEventListener('relay-tabs', () => requestAnimationFrame(fitShown));
 })();

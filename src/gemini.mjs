@@ -111,21 +111,22 @@ export async function runGemini(config, { event, approval, refusal = () => null,
         } else if (message.method === 'fs/read_text_file') {
           const file = geminiFile(config, p.path);
           let saved;
-          try { saved = readWorkspaceFile(file.root, file.relative); }
+          // Local coding runs enforce workspace containment and symlink checks, not Ask a Friend's sharing denylist.
+          try { saved = readWorkspaceFile(file.root, file.relative, { allowPrivate: true }); }
           catch (error) { if (!ordinaryReadFailure.test(error.message)) throw error; client.send({ id: message.id, error: { code: -32000, message: error.message } }); return; }
           const line = p.line ?? 1, limit = p.limit;
           if (!Number.isInteger(line) || line < 1 || limit !== undefined && (!Number.isInteger(limit) || limit < 1)) throw new Error('Invalid Gemini file line range.');
           result = { content: saved.content.split('\n').slice(line - 1, limit === undefined ? undefined : line - 1 + limit).join('\n') };
         } else if (message.method === 'fs/write_text_file') {
           if (config.mode === 'read' || cancelled()) throw new Error('Write permission denied in read-only mode.');
-          const file = geminiFile(config, p.path), before = readWorkspaceFile(file.root, file.relative, { allowMissing: true });
+          const file = geminiFile(config, p.path), before = readWorkspaceFile(file.root, file.relative, { allowMissing: true, allowPrivate: true });
           const allow = approvedWrites.delete(writeKey(p.path, p.content)) || await ask({ id: String(message.id), kind: 'write_file', input: { path: p.path, content: p.content } });
           if (!allow || cancelled()) {
             const why = cancelled() ? null : refusal(message.id);
             if (why) { client.send({ id: message.id, error: { code: -32000, message: why } }); return; }
             denied = true; throw new Error('Write permission denied.');
           }
-          writeWorkspaceFile(file.root, file.relative, p.content, { expectedHash: before.sha256 }); result = {};
+          writeWorkspaceFile(file.root, file.relative, p.content, { expectedHash: before.sha256, allowPrivate: true }); result = {};
         } else throw new Error('This Gemini interaction is unsupported by Codeshi.');
         client.send({ id: message.id, result }); return;
       }

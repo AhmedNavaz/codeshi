@@ -4,9 +4,9 @@ import { randomUUID } from 'node:crypto';
 import { resolveWorkspaceFile } from './workspace-layout.mjs';
 import { MAX_FILE_BYTES, MAX_BINARY_BYTES, sha256, fileBytes, isTextBytes, validateRelativePath, invalid } from './collaboration-format.mjs';
 
-export function safeWorkspacePath(workspace, relative, { allowMissing = false } = {}) {
-  validateRelativePath(relative);
-  const selection=resolveWorkspaceFile(workspace,relative);
+export function safeWorkspacePath(workspace, relative, { allowMissing = false, allowPrivate = false } = {}) {
+  validateRelativePath(relative, { allowPrivate });
+  const selection=resolveWorkspaceFile(workspace,relative,{ allowPrivate });
   const root=fs.realpathSync(selection.root);
   if(root!==path.resolve(selection.root))throw invalid('The workspace folder moved or became a symlink. Reattach its real folder.');
   const target = path.resolve(root, ...selection.relative.split('/'));
@@ -29,8 +29,8 @@ export function safeWorkspacePath(workspace, relative, { allowMissing = false } 
 
 // Text by default. With binary, a file that isn't UTF-8 text comes back as base64 with encoding 'base64'
 // (#25); its hash is over the same bytes, so a text file's hash doesn't depend on the option.
-export function readWorkspaceFile(workspace, relative, { allowMissing = false, binary = false } = {}) {
-  const safe = safeWorkspacePath(workspace, relative, { allowMissing });
+export function readWorkspaceFile(workspace, relative, { allowMissing = false, binary = false, allowPrivate = false } = {}) {
+  const safe = safeWorkspacePath(workspace, relative, { allowMissing, allowPrivate });
   if (safe.missing) return { path:relative, content:null, sha256:null, mode:null };
   let fd;
   try {
@@ -62,8 +62,8 @@ export function captureSelectedFiles(workspace, files = [], newPaths = []) {
   return { files:snapshots.map(({path,content,sha256,encoding})=>({path,content,sha256,...(encoding?{encoding}:{})})), baseline:[...snapshots,...absent].map(({path,sha256})=>({path,sha256})) };
 }
 
-function ensureParents(workspace, relative) {
-  const { root,relative:local } = safeWorkspacePath(workspace, relative, { allowMissing:true });
+function ensureParents(workspace, relative, { allowPrivate = false } = {}) {
+  const { root,relative:local } = safeWorkspacePath(workspace, relative, { allowMissing:true, allowPrivate });
   let current = root;
   for (const part of local.split('/').slice(0,-1)) {
     current = path.join(current,part);
@@ -76,20 +76,20 @@ function ensureParents(workspace, relative) {
 
 // Writes text, or with encoding 'base64' a binary file's bytes. binary also allows the file being replaced
 // to be binary; without it, as before, only text is read or written.
-export function writeWorkspaceFile(workspace, relative, content, { expectedHash, mode, encoding, binary = encoding !== undefined } = {}) {
+export function writeWorkspaceFile(workspace, relative, content, { expectedHash, mode, encoding, binary = encoding !== undefined, allowPrivate = false } = {}) {
   let data = content;
   if (content !== null && encoding !== undefined) {
     if (!binary) throw invalid('Unsupported text-file content.');
     try { data = fileBytes({ path:relative, content, encoding }); } catch (error) { throw invalid('Unsupported binary content: ' + relative); }
   } else if (content !== null && (typeof content !== 'string' || Buffer.byteLength(content) > MAX_FILE_BYTES || content.includes('\u0000'))) throw invalid('Unsupported text-file content.');
-  const before = readWorkspaceFile(workspace, relative, { allowMissing:true, binary });
+  const before = readWorkspaceFile(workspace, relative, { allowMissing:true, binary, allowPrivate });
   if (expectedHash !== undefined && before.sha256 !== expectedHash) throw invalid('File changed during application: ' + relative, 409);
-  const safe = safeWorkspacePath(workspace, relative, { allowMissing:true });
+  const safe = safeWorkspacePath(workspace, relative, { allowMissing:true, allowPrivate });
   if (content === null) {
-    if (before.sha256 !== null) { safeWorkspacePath(workspace,relative); fs.unlinkSync(safe.target); }
+    if (before.sha256 !== null) { safeWorkspacePath(workspace,relative,{ allowPrivate }); fs.unlinkSync(safe.target); }
     return;
   }
-  ensureParents(workspace,relative);
+  ensureParents(workspace,relative,{ allowPrivate });
   const temporary = path.join(path.dirname(safe.target), '.ai-relay-' + randomUUID() + '.tmp');
   let fd;
   try {
@@ -97,9 +97,9 @@ export function writeWorkspaceFile(workspace, relative, content, { expectedHash,
     fs.fchmodSync(fd, mode ?? before.mode ?? 0o644);
     if (typeof data === 'string') fs.writeFileSync(fd, data, 'utf8'); else fs.writeFileSync(fd, data);
     fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
-    const latest = readWorkspaceFile(workspace,relative,{allowMissing:true,binary});
+    const latest = readWorkspaceFile(workspace,relative,{allowMissing:true,binary,allowPrivate});
     if (expectedHash !== undefined && latest.sha256 !== expectedHash) throw invalid('File changed during application: ' + relative,409);
-    safeWorkspacePath(workspace,relative,{allowMissing:true});
+    safeWorkspacePath(workspace,relative,{allowMissing:true,allowPrivate});
     fs.renameSync(temporary,safe.target);
   } finally {
     if (fd !== undefined) fs.closeSync(fd);

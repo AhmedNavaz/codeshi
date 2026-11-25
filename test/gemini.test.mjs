@@ -154,6 +154,31 @@ test('Gemini filesystem proxy rejects outside paths and symlinks and rechecks fi
   await assert.rejects(run(read, { workspace, mode: 'read' }), /denied or unsupported/); assert(!fs.existsSync(path.join(workspace, 'new.txt')));
 });
 
+test('Gemini filesystem proxy reads and writes local .env templates, env files and auth paths inside the workspace', async t => {
+  const workspace = folder(t);
+  fs.writeFileSync(path.join(workspace, '.env.example'), 'API_URL=\n');
+  fs.writeFileSync(path.join(workspace, '.env.local'), 'API_URL=http://localhost:3000\n');
+  fs.mkdirSync(path.join(workspace, 'src/auth'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, 'src/auth/login.js'), 'export const login = () => true;\n');
+  const client = new Client(async c => {
+    assert.equal((await c.rpc('fs/read_text_file', { path: path.join(workspace, '.env.example') })).result.content, 'API_URL=\n');
+    assert.equal((await c.rpc('fs/read_text_file', { path: path.join(workspace, '.env.local') })).result.content, 'API_URL=http://localhost:3000\n');
+    assert.equal((await c.rpc('fs/read_text_file', { path: path.join(workspace, 'src/auth/login.js') })).result.content, 'export const login = () => true;\n');
+    assert.deepEqual((await c.rpc('fs/write_text_file', { path: path.join(workspace, '.env.example'), content: 'API_URL=\nAPP_NAME=codeshi\n' })).result, {});
+    assert.deepEqual((await c.rpc('fs/write_text_file', { path: path.join(workspace, 'src/auth/session.js'), content: 'export const ok = true;\n' })).result, {});
+  });
+  const { events } = await run(client, { workspace });
+  assert.equal(events.at(-1).type, 'turn.completed');
+  assert.equal(fs.readFileSync(path.join(workspace, '.env.example'), 'utf8'), 'API_URL=\nAPP_NAME=codeshi\n');
+  assert.equal(fs.readFileSync(path.join(workspace, 'src/auth/session.js'), 'utf8'), 'export const ok = true;\n');
+  const readOnly = new Client(async c => {
+    assert.equal((await c.rpc('fs/read_text_file', { path: path.join(workspace, '.env.example') })).result.content, 'API_URL=\nAPP_NAME=codeshi\n');
+    assert((await c.rpc('fs/write_text_file', { path: path.join(workspace, '.env.example'), content: 'BLOCKED=1\n' })).error);
+  });
+  await assert.rejects(run(readOnly, { workspace, mode: 'read' }), /denied or unsupported/);
+  assert.equal(fs.readFileSync(path.join(workspace, '.env.example'), 'utf8'), 'API_URL=\nAPP_NAME=codeshi\n');
+});
+
 test('Gemini verifies requested model before sending and treats limits, refusal and cancellation as incomplete', async () => {
   const mismatch = new Client(async () => { throw Error('Must not prompt'); }, 'other-model');
   await assert.rejects(run(mismatch), /requested model/); assert(!mismatch.requests.some(r => r.method === 'session/prompt'));

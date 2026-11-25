@@ -8,10 +8,11 @@ export const appearances = ['system', 'light', 'dark', 'graphite'];
 export const appearance = config => appearances.includes(config.appearance) ? config.appearance : 'system';
 // view is the layout setup chose for new workspaces: Normal (every panel, manual choices) or Flow (routed, cards).
 export const defaultPreferences = { provider: 'codex', model: null, effort: null, mode: 'edit', billing: 'subscription', view: 'normal' };
-// Experimental features (#176): newer parts of Codeshi that can each be turned off. All are on by default, so a missing
-// or partial saved value means on.
+// Experimental features (#176): newer parts of Codeshi that can each be turned on or off. Smart results (#190) starts
+// off by default; the others start on, so a missing or partial saved value keeps those defaults.
 export const experimentalFeatures = ['remote', 'plan', 'review', 'smartResults', 'tasks'];
-export const experimental = config => Object.fromEntries(experimentalFeatures.map(id => [id, config.experimental?.[id] !== false]));
+export const experimentalDefaults = { remote: true, plan: true, review: true, smartResults: false, tasks: true };
+export const experimental = config => Object.fromEntries(experimentalFeatures.map(id => [id, typeof config.experimental?.[id] === 'boolean' ? config.experimental[id] : experimentalDefaults[id]]));
 export function preferencePatch(input, previous = {}, { languages = ['en'] } = {}) {
   const patch = {};
   // The interface language (#27): System follows the computer, or a language with a catalog.

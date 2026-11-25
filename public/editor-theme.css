@@ -71,6 +71,8 @@
   --icon-play: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black' stroke='black' stroke-width='2' stroke-linejoin='round'%3E%3Cpath d='M7 4.5v15l12.5-7.5z'/%3E%3C/svg%3E");
   --icon-agent: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 4v3M8 4.5h8M6 10a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2zM9.5 13h.01M14.5 13h.01'/%3E%3C/svg%3E");
   --icon-terminal: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 7 5 5-5 5M12 18h7'/%3E%3C/svg%3E");
+  --icon-chat: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.5 12a8.5 8.5 0 0 1-12.3 7.6L3.5 21l1.4-4.7A8.5 8.5 0 1 1 20.5 12z'/%3E%3C/svg%3E");
+  --icon-working: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='8.5' stroke-opacity='.28'/%3E%3Cpath d='M12 3.5a8.5 8.5 0 0 1 8.5 8.5'/%3E%3C/svg%3E");
 }
 
 :root[data-ui-size="large"] {
@@ -87,7 +89,7 @@
   --bg: #1c1a18;
   --sidebar: #161513;
   --statusbar-bg: #161513;
-  /* The bottom panel (Terminal, Run) sits apart from the conversation. */
+  /* Terminal, command output and Run sit apart from the conversation. */
   --panel-bg: #161513;
   --overlay-bg: #242220;
   --surface-raised: #242220;

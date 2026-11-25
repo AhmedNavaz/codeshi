@@ -97,7 +97,7 @@
   }
 
   const remember = value => { try { localStorage.setItem(PANEL_KEY, value); } catch { /* The panel choice is a convenience. */ } };
-  const preferred = () => { try { return localStorage.getItem(PANEL_KEY) || 'agents'; } catch { return 'agents'; } };
+  const preferred = () => { try { const value = localStorage.getItem(PANEL_KEY) || 'agents'; return value === 'tasks' ? 'agents' : value; } catch { return 'agents'; } };
   const flowing = () => ['flow', 'plan'].includes(window.relayFlow?.view?.()) || Boolean($('app-shell')?.classList.contains('flow'));
   // Plan usage lists Ollama when it has models downloaded (#99). This only reads what's installed: nothing is downloaded and
   // no model runs. With no Ollama there's simply no row.
@@ -117,7 +117,7 @@
     if (open) {
       window.relayGit?.close();
       window.relayReviews?.closePanel?.(); window.relayTimeline?.close();
-      window.relayBrief?.close(); window.relayTasks?.close();
+      window.relayBrief?.close();
       loadPreferences();
       loadLocalRow();
       loadTestCommand();
@@ -157,8 +157,8 @@
     }
     render();
   });
-  // Memory, skills and the brief live in the Brief panel, and tasks and limits in the Tasks panel; older links still work.
-  const elsewhere = { memory: () => window.relayBrief?.open('memory'), skills: () => window.relayBrief?.open('skills'), brief: () => window.relayBrief?.open(), tasks: () => window.relayTasks?.open(), limits: () => window.relayTasks?.open('limits') };
+  // Memory, skills and the brief live in the Brief panel, and task limits live in Settings; older links still work.
+  const elsewhere = { memory: () => window.relayBrief?.open('memory'), skills: () => window.relayBrief?.open('skills'), brief: () => window.relayBrief?.open(), limits: () => window.relayLimits?.open?.() };
   window.relayAgents = { open: section => elsewhere[section] ? elsewhere[section]() : setOpen(true, section), close: () => { if (!panel.hidden) setOpen(false, null, false); }, isOpen: () => !panel.hidden };
   render();
 })();

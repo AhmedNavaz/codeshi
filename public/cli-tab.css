@@ -21,7 +21,6 @@
 @container main-panel (max-width: 520px) { .main-tabs-note { display: none; } }
 
 /* With CLI in front, it takes the conversation's place: everything between the tabs and the bottom panel waits behind. */
-.main-panel.cli-front > :not(.conversation-header, #main-tabs, #cli-view, #bottom-panel, #announcer) { display: none !important; }
 .cli-view { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 10px 4px 4px 14px; background: var(--panel-bg, var(--bg)); }
 .cli-view[hidden] { display: none; }
 .cli-views { position: relative; flex: 1; min-height: 0; }

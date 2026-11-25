@@ -22,14 +22,14 @@ export function currentWorkspace(registry,projectId) {
 export function restrictWorkspace(snapshot,current) {
   return {...workspaceSnapshot(snapshot),allowedPaths:workspaceSnapshot(current).folders.map(folder=>folder.path)};
 }
-export function resolveWorkspaceFile(workspace,relative) {
-  validateRelativePath(relative);
+export function resolveWorkspaceFile(workspace,relative,{allowPrivate=false}={}) {
+  validateRelativePath(relative,{allowPrivate});
   const descriptor=workspaceSnapshot(workspace);
   let folder=descriptor.folders[0],local=relative;
   if(descriptor.pathStyle==='namespaced') {
     const [name,...parts]=relative.split('/');folder=descriptor.folders.find(entry=>entry.name===name);
     if(!folder||!parts.length)throw invalid('Use a folder alias followed by a file path, such as frontend/src/app.js.');
-    local=parts.join('/');validateRelativePath(local);
+    local=parts.join('/');validateRelativePath(local,{allowPrivate});
   }
   if(workspace.allowedPaths&&!workspace.allowedPaths.includes(folder.path))throw invalid('This request belongs to a folder no longer attached to the workspace. Reattach the original folder before applying or recovering it.',409);
   return {folder,root:folder.path,relative:local};

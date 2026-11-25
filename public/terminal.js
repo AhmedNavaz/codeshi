@@ -1,17 +1,20 @@
 (() => {
   'use strict';
-  // The workspace terminal (#7, #70): a tab of the bottom panel with the workspace's shells. Each shell is a tab,
-  // listed at the right of the terminal and named after its folder, and a tab can be split into two panes, side by
-  // side or stacked, each with its own shell. + opens another, in a folder you choose when the workspace has several;
-  // closing a tab or ending a pane stops that shell and what it started. Switching workspaces swaps the list, and
-  // hiding the panel leaves every shell running. Input goes to the pane it was typed in, never to another. Keys typed
-  // here belong to the shell, not to the message box.
+  // The workspace terminal (#7, #70, #193): independent shell tabs in the main workspace. Each shell is a tab,
+  // named after its folder, and a tab can be split into two panes, side by side or stacked, each with its own
+  // shell. + opens another, in a folder you choose when the workspace has several; closing a tab or ending a pane
+  // stops that shell and what it started. Switching workspaces swaps the list, and hiding the tab leaves every
+  // shell running. Input goes to the pane it was typed in, never to another. Keys typed here belong to the shell,
+  // not to the message box.
   const $ = id => document.getElementById(id), api = window.relayUI, panel = $('terminal-panel');
   if (!api || !panel) return;
   const Terminal = window.Terminal, FitAddon = window.FitAddon?.FitAddon, WebLinksAddon = window.WebLinksAddon?.WebLinksAddon;
   // Views by session id; each workspace's sessions as the server lists them; and each workspace's open tab and the pane
   // last used in each of its tabs.
   const views = new Map(), lists = new Map(), layouts = new Map();
+  const groups = new Map(), newPickers = new Map(), restored = new Map(), restoredProjects = new Set();
+  const tabKey = id => `terminal:${id}`;
+  const groupKey = (project, id) => `${project}:${id}`;
   const MAX_SESSIONS = 8;
   let busy = false;
 
@@ -25,7 +28,7 @@
 
   const token = () => window.relayDesktop?.token;
   const projectId = () => api.getState().projectId;
-  const project = () => api.getState().projects?.find(item => item.id === projectId());
+  const project = (id = projectId()) => api.getState().projects?.find(item => item.id === id);
   // What the panel says: that the terminal could not load, why a shell failed, the last thing that went wrong, or,
   // less loudly, that shells are ending. It stays until the next action succeeds, so a failure isn't cleared by the
   // next redraw.
@@ -33,8 +36,19 @@
   function showNotice() {
     const failed = focusedPane(activeTab())?.status === 'failed' ? focusedPane(activeTab()).error : '';
     const shown = !Terminal || !FitAddon ? 'The terminal could not load. Reinstall Codeshi to restore it.' : notice || failed;
+    const shownTone = shown && shown === notice ? tone : '';
     $('terminal-message').textContent = shown || ''; $('terminal-message').hidden = !shown;
-    $('terminal-message').dataset.tone = shown && shown === notice ? tone : '';
+    $('terminal-message').dataset.tone = shownTone;
+    const id = projectId(), open = activeTab(id), group = open && groups.get(groupKey(id, open.id));
+    if (group) {
+      group.status.textContent = shown || ''; group.status.hidden = !shown;
+      group.status.dataset.tone = shownTone;
+    }
+    const picker = newPickers.get(id);
+    if (picker) {
+      picker.status.textContent = shown || ''; picker.status.hidden = !shown;
+      picker.status.dataset.tone = shownTone;
+    }
   }
   const message = (text, kind = '') => { notice = text || ''; tone = kind; showNotice(); };
   const element = (tag, className, text) => { const value = document.createElement(tag); if (className) value.className = className; if (text !== undefined) value.textContent = text; return value; };
@@ -110,6 +124,7 @@
     const block = `Terminal output from \`${folder}\`:\n\n${fence}text\n${body}\n${fence}`;
     input.value = input.value.trim() ? `${input.value.trimEnd()}\n\n${block}\n` : `${block}\n`;
     input.dispatchEvent(new Event('input', { bubbles: true }));
+    window.relayTabs?.showChat();
     input.focus?.(); input.setSelectionRange?.(input.value.length, input.value.length);
     message('');
     api.showNotice?.(`${selected.trim() ? 'The selected terminal output' : 'The terminal screen'} is in the message box. Nothing is sent until you send the message.${cut ? ' It was shortened: the start and end are kept.' : ''}${secretPatterns.some(pattern => pattern.test(body)) ? ' It may contain a secret, such as a token, key or password. Check it before you send.' : ''}`);
@@ -185,22 +200,171 @@
     const query = Object.entries({ projectId: session.projectId, id: session.id, ...(token() ? { token: token() } : {}) }).map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('&');
     view.stream = new EventSource('/api/terminal/stream?' + query);
     view.stream.addEventListener('reset', event => { term.reset(); term.write(JSON.parse(event.data).data); });
-    view.stream.addEventListener('data', event => term.write(JSON.parse(event.data).data));
+    view.stream.addEventListener('data', event => { term.write(JSON.parse(event.data).data); window.relayTabs?.notify(tabKey(session.tabId), session.projectId); });
     view.stream.addEventListener('exit', event => {
       const ended = JSON.parse(event.data); view.stream.close();
       const known = sessions(view.projectId).find(item => item.id === view.id);
       if (known) remember({ ...known, ...ended, tabId: known.tabId, pane: known.pane, split: known.split, order: known.order });
       // The shell's end is said once, under its last output, as a terminal does.
       if (ended.status !== 'failed') term.write(`\r\n\x1b[2m[The shell exited${Number.isInteger(ended.exitCode) ? ` with code ${ended.exitCode}` : ''}. Its output stays until you close this tab or start a new session.]\x1b[22m\r\n`);
-      if (view.projectId === projectId()) render();
+      if (window.relayTabs) renderUnified(view.projectId); else if (view.projectId === projectId()) render();
     });
     view.dispose = () => { view.stream?.close(); clearTimeout(view.resizeTimer); term.dispose(); host.remove(); };
     views.set(session.id, view);
     return view;
   }
 
-  function fitVisible() { for (const view of views.values()) if (!panel.hidden && !view.host.hidden) try { view.fit.fit(); } catch { /* Not laid out yet. */ } }
-  function focusPane() { const pane = focusedPane(activeTab()); if (pane && !panel.hidden) views.get(pane.id)?.term.focus(); }
+  function fitVisible() { for (const view of views.values()) if ((window.relayTabs ? window.relayTabs.isVisible(tabKey(sessions(view.projectId).find(item => item.id === view.id)?.tabId), view.projectId) : !panel.hidden) && !view.host.hidden) try { view.fit.fit(); } catch { /* Not laid out yet. */ } }
+  function focusPane() { const pane = focusedPane(activeTab()); if (pane && (window.relayTabs ? window.relayTabs.isVisible(tabKey(pane.tabId)) : !panel.hidden)) views.get(pane.id)?.term.focus(); }
+
+  const captureKeys = /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⇧⌘L' : 'Ctrl+Shift+L';
+
+  // Each main tab owns its DOM and xterms. Moving a tab beside Chat never changes its
+  // session identity, input queue, or output stream.
+  function groupFor(id, tab) {
+    const key = groupKey(id, tab.id);
+    if (groups.has(key)) return groups.get(key);
+    const root = element('section', 'terminal-workspace-tab'), tools = element('div', 'terminal-tab-tools');
+    root.hidden = true;
+    const status = element('p', 'terminal-message'), body = element('div', 'terminal-views');
+    status.hidden = true; status.setAttribute('role', 'status');
+    const group = { root, tools, status, body, id: tab.id, projectId: id, buttons: {} };
+    const act = (name, title, fn) => {
+      const button = element('button', 'toolbar-button', title); button.type = 'button';
+      button.dataset.terminalAction = name;
+      button.addEventListener('click', event => {
+        if (id !== projectId()) return;
+        layout(id).tab = tab.id; fn(event);
+      });
+      tools.append(button); group.buttons[name] = button;
+    };
+    act('restart', 'Start again', () => { const pane = focusedPane(activeTab()); if (pane) start(pane.folderId, { replace: pane.id }); });
+    act('new', 'New terminal', newUnified);
+    act('capture', 'Add to message', () => addOutput());
+    act('split', 'Split terminal', event => { const pane = focusedPane(activeTab()); if (pane) start(pane.folderId, { split: { of: pane.id, direction: event.altKey ? 'down' : 'right' } }); });
+    group.buttons.split.title = 'Split right · Alt-click to split down';
+    act('end', 'End pane', () => { const pane = focusedPane(activeTab()); if (pane) end([pane.id]); });
+    root.append(tools, status, body);
+    // xterm consumes some Ctrl keys before they bubble. The tab manager handles its
+    // shortcuts at document capture, while ordinary shell keys stay with this pane.
+    root.addEventListener('contextmenu', event => { if (event.target === root) event.preventDefault(); });
+    if (typeof ResizeObserver === 'function') new ResizeObserver(() => { clearTimeout(fitTimer); fitTimer = setTimeout(fitVisible, 80); }).observe(body);
+    groups.set(key, group);
+    return group;
+  }
+
+  function pickerFor(id) {
+    if (newPickers.has(id)) return newPickers.get(id);
+    const root = element('section', 'terminal-workspace-tab'), status = element('p', 'terminal-message'), box = element('div', 'terminal-start'), folders = element('div', 'command-chips terminal-folders');
+    root.hidden = true; status.hidden = true; status.setAttribute('role', 'status');
+    box.append(element('p', 'terminal-start-title', 'Choose a folder for this terminal'), folders);
+    root.append(status, box);
+    const picker = { root, status, folders, projectId: id };
+    newPickers.set(id, picker);
+    return picker;
+  }
+
+  function renderPicker(id = projectId()) {
+    const picker = newPickers.get(id);
+    if (!picker) return;
+    picker.folders.replaceChildren(...(project(id)?.folders || []).map(folder => {
+      const button = element('button', 'command-chip terminal-folder', folder.displayName || folder.name); button.type = 'button';
+      button.dataset.folderId = folder.id;
+      button.disabled = busy || sessions(id).length >= MAX_SESSIONS;
+      button.addEventListener('click', () => start(folder.id).then(() => { if (sessions(id).length) { newPickers.delete(id); window.relayTabs.remove('terminal:new', { projectId: id }); } }));
+      return button;
+    }));
+  }
+
+  function renderUnified(id = projectId()) {
+    if (!id || !window.relayTabs) return;
+    const list = tabs(id), names = labels(list), liveKeys = new Set(list.map(tab => groupKey(id, tab.id)));
+    for (const [key, group] of groups) {
+      if (group.projectId !== id || liveKeys.has(key)) continue;
+      window.relayTabs.remove(tabKey(group.id), { projectId: id });
+      group.root.remove(); groups.delete(key);
+    }
+    for (const [index, tab] of list.entries()) {
+      const group = groupFor(id, tab), pane = focusedPane(tab, id);
+      for (const session of tab.panes) {
+        const view = views.get(session.id);
+        if (!view) continue;
+        if (view.host.parentElement !== group.body) group.body.append(view.host);
+        view.host.hidden = false; view.host.style.order = String(session.pane);
+        view.host.dataset.pane = String(session.pane); view.host.dataset.active = String(session.id === pane?.id);
+      }
+      group.body.dataset.split = tab.panes.length > 1 ? tab.panes[1].split || 'right' : '';
+      group.buttons.new.disabled = busy || sessions(id).length >= MAX_SESSIONS;
+      group.buttons.restart.hidden = live(pane); group.buttons.restart.disabled = busy;
+      group.buttons.split.disabled = busy || !live(pane) || tab.panes.length > 1 || sessions(id).length >= MAX_SESSIONS;
+      group.buttons.end.hidden = !live(pane); group.buttons.end.disabled = busy;
+      group.buttons.capture.title = `${selectionOf(views.get(pane?.id)).trim() ? 'Add the selection to your message' : 'Add the terminal screen to your message'} (${captureKeys})`;
+      const error = pane?.status === 'failed' ? pane.error : '';
+      group.status.textContent = id === projectId() ? notice || error : error || '';
+      group.status.hidden = !group.status.textContent; group.status.dataset.tone = group.status.textContent && group.status.textContent === notice ? tone : '';
+      window.relayTabs.upsert({
+        id: tabKey(tab.id), projectId: id, kind: 'terminal', title: names[index] || 'Terminal', element: group.root,
+        state: tab.panes.some(item => item.status === 'failed' || (item.exitCode != null && item.exitCode !== 0)) ? 'failed' : tab.panes.some(live) ? 'running' : 'finished',
+        restore: { panes: tab.panes.map(item => ({ folderId: item.folderId })), split: tab.panes[1]?.split || null },
+        onSelect: () => { layout(id).tab = tab.id; requestAnimationFrame(() => { fitVisible(); focusPane(); }); },
+        onClose: () => end(tab.panes.map(item => item.id), id),
+      });
+    }
+    for (const saved of restored.values()) {
+      if (saved.projectId !== id) continue;
+      if (!saved.element) {
+        const root = element('section', 'terminal-workspace-tab terminal-restore');
+        const text = element('p', '', 'This shell ended when Codeshi closed. Start it again when you are ready.');
+        const button = element('button', 'primary-button', 'Start again'); button.type = 'button';
+        button.addEventListener('click', () => restoreTab(saved)); root.append(text, button);
+        saved.element = root;
+      }
+      window.relayTabs.upsert({ ...saved, kind: 'terminal', state: 'stopped', onRestore: () => restoreTab(saved), onClose: () => { restored.delete(groupKey(id, saved.id)); return true; } });
+    }
+    renderPicker(id);
+    if (id === projectId()) showNotice();
+    requestAnimationFrame(fitVisible);
+  }
+
+  async function restoreTab(saved) {
+    if (busy || saved.projectId !== projectId()) return;
+    const folders = project()?.folders || [], panes = saved.restore?.panes || [];
+    if (!panes.length || panes.some(pane => !folders.some(folder => folder.id === pane.folderId))) {
+      newUnified(); return;
+    }
+    const previous = new Set(sessions().map(item => item.id));
+    await start(panes[0].folderId);
+    const first = sessions(saved.projectId).find(item => !previous.has(item.id));
+    if (!first) return;
+    if (panes[1] && saved.projectId === projectId()) await start(panes[1].folderId, { split: { of: first.id, direction: saved.restore.split === 'down' ? 'down' : 'right' } });
+    restored.delete(groupKey(saved.projectId, saved.id));
+    window.relayTabs.remove(saved.id, { projectId: saved.projectId }); saved.element?.remove();
+  }
+
+  function newUnified() {
+    const id = projectId();
+    if (!id || busy || ['flow', 'plan'].includes(window.relayFlow?.view?.())) return;
+    if (sessions(id).length >= MAX_SESSIONS) { message('A workspace keeps up to 8 terminals.'); return; }
+    const folders = project(id)?.folders || [];
+    if (folders.length === 1) { start(folders[0].id); return; }
+    const picker = pickerFor(id);
+    renderPicker(id);
+    window.relayTabs.upsert({
+      id: 'terminal:new', projectId: id, title: 'New terminal', kind: 'terminal', element: picker.root, state: 'stopped',
+      onSelect: () => [...picker.folders.querySelectorAll('button')].find(item => !item.disabled)?.focus?.(),
+      onClose: () => { newPickers.delete(id); return true; },
+    });
+    window.relayTabs.select('terminal:new');
+  }
+
+  async function openUnified() {
+    if (!projectId() || ['flow', 'plan'].includes(window.relayFlow?.view?.())) return;
+    const id = projectId(); await load(); if (id !== projectId()) return;
+    const tab = activeTab();
+    if (tab) { window.relayTabs.select(tabKey(tab.id)); focusPane(); return; }
+    const saved = [...restored.values()].find(item => item.projectId === id);
+    if (saved) window.relayTabs.select(saved.id); else newUnified();
+  }
 
   function renderTabs(list, open) {
     const names = labels(list), host = $('terminal-tabs');
@@ -223,6 +387,7 @@
   }
 
   function render() {
+    if (window.relayTabs) { renderUnified(); return; }
     const id = projectId(), list = tabs(id), open = activeTab(id), pane = focusedPane(open), folders = project()?.folders || [];
     if (open) layout(id).tab = open.id;
     // Only the open tab's panes show, side by side or stacked when it is split.
@@ -259,10 +424,17 @@
       const { sessions: listed = [] } = await api.api('/api/terminal', {}, id);
       if (id !== projectId()) return;
       lists.set(id, listed);
+      if (window.relayTabs && !restoredProjects.has(id)) {
+        restoredProjects.add(id);
+        for (const saved of window.relayTabs.getSaved(id, 'terminal')) {
+          if (saved.id === 'terminal:new' || listed.some(session => tabKey(session.tabId) === saved.id)) continue;
+          restored.set(groupKey(id, saved.id), { ...saved, projectId: id });
+        }
+      }
       for (const session of listed) viewFor(session);
       for (const [sessionId, view] of views) if (view.projectId === id && !listed.some(session => session.id === sessionId)) { view.dispose(); views.delete(sessionId); }
       // A single-folder workspace opens its shell at once; with several folders, the person chooses one.
-      if (!listed.length && !panel.hidden && (project()?.folders || []).length === 1) await start(project().folders[0].id);
+      if (!window.relayTabs && !listed.length && !panel.hidden && (project()?.folders || []).length === 1) await start(project().folders[0].id);
     } catch (error) { message(error.message); }
     render();
   }
@@ -279,26 +451,27 @@
       if (replace) { views.get(replace)?.dispose(); views.delete(replace); }
       remember(session, replace);
       layout(id).tab = session.tabId; layout(id).focus.set(session.tabId, session.id);
-      if (id === projectId()) { viewFor(session); message(''); }
+      viewFor(session);
+      if (window.relayTabs) { renderUnified(id); if (id === projectId()) window.relayTabs.select(tabKey(session.tabId)); }
+      if (id === projectId()) message('');
     } catch (error) { if (id === projectId()) message(error.message); }
     finally { busy = false; render(); if (id === projectId()) focusPane(); }
   }
 
   // Ends shells: each one and everything it started. A pane closes with its shell.
-  async function end(ids) {
-    const id = projectId();
-    if (busy || !id || !ids.length) return;
+  async function end(ids, id = projectId()) {
+    if (busy || !id || !ids.length) return false;
     // A shell that ignores the request to end is stopped after a grace period, so this can take a moment.
     busy = true; message(ids.length > 1 ? 'Ending the shells…' : 'Ending the session…', 'progress'); render();
-    try { for (const sessionId of ids) { await api.post('/api/terminal/stop', { id: sessionId }, id); forget(id, sessionId); } message(''); }
-    catch (error) { message(error.message); }
-    finally { busy = false; render(); focusPane(); }
+    try { for (const sessionId of ids) { await api.post('/api/terminal/stop', { id: sessionId }, id); forget(id, sessionId); } message(''); return true; }
+    catch (error) { message(error.message); return false; }
+    finally { busy = false; if (window.relayTabs) renderUnified(id); render(); focusPane(); }
   }
   const closeTab = tab => end(tab.panes.map(pane => pane.id));
 
   // Add to message stays for a shell that exited, since its output does.
-  const captureKeys = /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⇧⌘L' : 'Ctrl+Shift+L';
   function renderCapture() {
+    if (window.relayTabs) { renderUnified(); return; }
     const pane = focusedPane(activeTab()), button = $('terminal-capture');
     if (!button) return;
     button.hidden = !pane;
@@ -306,7 +479,7 @@
   }
   $('terminal-capture')?.addEventListener('click', () => addOutput());
   // A right-click in a pane offers Add to message, and Copy when text is selected.
-  const context = element('div', 'terminal-menu terminal-context'); context.setAttribute('role', 'menu'); context.setAttribute('aria-label', 'Terminal output'); context.hidden = true; panel.append(context);
+  const context = element('div', 'terminal-menu terminal-context'); context.setAttribute('role', 'menu'); context.setAttribute('aria-label', 'Terminal output'); context.hidden = true; (window.relayTabs ? document.body : panel).append(context);
   function closeContext() { context.hidden = true; }
   function openContext(view, event) {
     const selected = selectionOf(view), item = (label, act) => { const button = element('button', 'terminal-menu-item'); button.type = 'button'; button.setAttribute('role', 'menuitem'); button.append(element('span', 'terminal-menu-name', label)); button.addEventListener('click', () => { closeContext(); act(); }); return button; };
@@ -321,7 +494,7 @@
   // shell sees it.
   document.addEventListener('keydown', event => {
     const mac = captureKeys === '⇧⌘L';
-    if (!(mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) || !event.shiftKey || event.altKey || String(event.key).toLowerCase() !== 'l' || panel.hidden || !event.target?.closest?.('#terminal-panel')) return;
+    if (!(mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) || !event.shiftKey || event.altKey || String(event.key).toLowerCase() !== 'l' || !shown() || !event.target?.closest?.('#terminal-panel, .terminal-workspace-tab')) return;
     event.preventDefault(); event.stopPropagation(); closeContext(); addOutput();
   }, true);
 
@@ -358,16 +531,22 @@
     $('terminal-tabs').querySelector('[aria-selected="true"]')?.focus();
   });
 
-  // The bottom panel decides when the terminal shows; it says so with a relay-panel event.
-  const shown = () => !panel.hidden;
-  const toggle = () => window.relayPanel?.toggle('terminal');
+  // Main tabs decide when the terminal shows; legacy layout uses relay-panel.
+  const shown = () => window.relayTabs ? tabs().some(tab => window.relayTabs.isVisible(tabKey(tab.id))) || window.relayTabs.isVisible('terminal:new') : !panel.hidden;
+  const toggle = () => {
+    if (!window.relayTabs) { window.relayPanel?.toggle('terminal'); return; }
+    if (String(window.relayTabs.active?.() || '').startsWith('terminal:')) { window.relayTabs.showChat(); return; }
+    if (shown()) { focusPane(); return; }
+    openUnified();
+  };
   window.addEventListener('relay-panel', () => { if (shown()) load().then(() => { if (shown()) focusPane(); }); else { closeMenu(); render(); } });
-  // ⌃` shows or hides the terminal, and ⌃⇧` opens another shell in the folder of the one in use, as in VS Code.
+  // ⌃` shows or hides the terminal, and ⌃⇧` opens another shell in a folder you choose (or the workspace's folder).
   document.addEventListener('keydown', event => {
     if (!event.ctrlKey || event.metaKey || event.altKey || !(event.key === '`' || event.key === '~' || event.code === 'Backquote') || !api.getState().projectId) return;
     event.preventDefault();
     if (['flow', 'plan'].includes(window.relayFlow?.view?.())) return;
     if (!event.shiftKey) { toggle(); return; }
+    if (window.relayTabs) { newUnified(); return; }
     const folderId = focusedPane(activeTab())?.folderId || project()?.folders?.[0]?.id;
     if (!shown()) window.relayPanel?.show('terminal');
     start(folderId);
@@ -381,7 +560,8 @@
   window.addEventListener('relay-state', () => {
     if (projectId() === lastProject) return;
     lastProject = projectId(); closeMenu(); closeContext(); notice = '';
-    if (shown()) load(); else render();
+    if (window.relayTabs || shown()) load(); else render();
   });
-  window.relayTerminal = { theme, toggle, open: () => window.relayPanel?.show('terminal'), close: () => { if (window.relayPanel?.isOpen('terminal')) window.relayPanel.hide(); }, isOpen: () => shown() };
+  window.relayTerminal = { theme, toggle, new: () => window.relayTabs ? newUnified() : openMenu(), open: () => window.relayTabs ? openUnified() : window.relayPanel?.show('terminal'), close: () => { if (window.relayTabs) window.relayTabs.showChat(); else if (window.relayPanel?.isOpen('terminal')) window.relayPanel.hide(); }, isOpen: () => shown() };
+  window.addEventListener('relay-tabs', () => { requestAnimationFrame(fitVisible); });
 })();

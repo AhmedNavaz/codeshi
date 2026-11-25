@@ -7,8 +7,6 @@ html[data-exp-remote="off"] #settings-nav [data-page="phone"],
 html[data-exp-plan="off"] #open-plan,
 html[data-exp-plan="off"] #board-view,
 html[data-exp-review="off"] #flow-card-preview,
-html[data-exp-smart-results="off"] #flow-card-results,
-html[data-exp-smart-results="off"] #tasks-results,
 html[data-exp-tasks="off"] #task-section,
 html[data-exp-tasks="off"] #task-draft,
 html[data-exp-tasks="off"] #flow-card-tasks { display: none !important; }

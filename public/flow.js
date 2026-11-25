@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   // Flow mode (#107, #128): just the chat, with plain-language cards in the space either side. Each card reads what
-  // Codeshi has already recorded, with no extra model call: how routing and handoff are working, what's left on each plan, the plan and the queue, routing results, and the files changed with Undo.
+  // Codeshi has already recorded, with no extra model call: how routing and handoff are working, what's left on each plan, the plan and the queue, and the files changed with Undo.
   // Entering hides the sidebar and the panels behind a short seal moment; leaving brings them back as they were.
   // Approvals, questions and Stop stay in the chat, so they are never hidden.
   const $ = id => document.getElementById(id), api = window.relayUI, shell = $('app-shell');
@@ -30,7 +30,6 @@
     { id: 'next', title: 'What’s next', side: left },
     { id: 'tasks', title: 'Tasks side by side', side: left },
     { id: 'plans', title: 'What’s left on your plans', side: left },
-    { id: 'results', title: 'Smart results', side: left },
     { id: 'working', title: 'How it’s working now', side: right },
     { id: 'happened', title: 'What happened', side: right },
     { id: 'files', title: 'Files changed', side: right },
@@ -88,8 +87,8 @@
     try { await api.setRouting({ mode: null }); } catch { /* Tried again when the workspace is idle. */ }
     finally { routingReleasing = false; schedule(); }
   }
-  const sidePanels = ['agents', 'git', 'brief', 'tasks', 'timeline'];
-  const openSidePanel = () => sidePanels.find(name => $(`${name}-panel`) && !$(`${name}-panel`).hidden) || null;
+  const sidePanels = () => window.relaySidebar ? ['agents', 'brief', 'timeline'] : ['agents', 'git', 'brief', 'timeline'];
+  const openSidePanel = () => sidePanels().find(name => $(`${name}-panel`) && !$(`${name}-panel`).hidden) || null;
   const detail = $('flow-detail'), detailBody = $('flow-detail-body');
   let detailPanel = null, detailFocus = null, detailCard = null, detailScheduled = false, detailScope = null;
   const scope = () => `${api.getState().projectId || ''}:${api.getState().taskId || ''}`;
@@ -98,11 +97,10 @@
     timeline: ['Your timeline', 'Explore saved checkpoints and preview a restore before changing files.'],
     git: ['Your changes', 'Review the workspace diff, stage files, and commit when ready.'],
     brief: ['Workspace context', 'The instructions and context your agents share.'],
-    tasks: ['Your tasks', 'Review progress, usage, and limits across tasks.'],
     review: ['Code review', 'Feedback on a saved snapshot of your changes.'],
     phone: ['Remote access', 'Pick up the conversation on your phone, on the same Wi-Fi or away from home.'],
   };
-  const panelAPI = name => { const key = { agents: 'relayAgents', timeline: 'relayTimeline', git: 'relayGit', brief: 'relayBrief', tasks: 'relayTasks', review: 'relayReviews' }[name]; return key ? window[key] : null; };
+  const panelAPI = name => { const key = { agents: 'relayAgents', timeline: 'relayTimeline', git: 'relayGit', brief: 'relayBrief', review: 'relayReviews' }[name]; return key ? window[key] : null; };
   // Remote access is drawn into the sheet by the same module as in Settings, with the Settings kit's markup, so
   // pairing, approvals and the QR code work the same way. Only the buttons report errors here instead of in Settings.
   const phoneHost = node('div', 'flow-phone');
@@ -131,7 +129,7 @@
     if (!detailPanel) return;
     if (detailPanel === 'phone') { phoneHost.replaceChildren(); phoneHost.remove(); }
     const panel = $(`${detailPanel}-panel`);
-    if (panel) shell.append(panel);
+    if (panel) (detailPanel === 'git' ? document.querySelector('.sidebar') || shell : shell).append(panel);
     detailPanel = null;
   }
   function showSheet(name) {
@@ -174,7 +172,7 @@
   function syncDetail() {
     detailScheduled = false;
     if (!sheeted() || !detail) return;
-    const shown = [...sidePanels, 'review'].filter(name => $(`${name}-panel`)?.hidden === false);
+    const shown = ['agents', 'git', 'brief', 'timeline', 'review'].filter(name => $(`${name}-panel`)?.hidden === false);
     const name = shown.find(name => name !== detailPanel) || shown[0];
     // The remote-access sheet is not a side panel, so a panel closing elsewhere leaves it alone.
     if (!name) { if (detailPanel && detailPanel !== 'phone') closeDetail(); return; }
@@ -184,13 +182,13 @@
   function scheduleDetail() { if (!detailScheduled) { detailScheduled = true; Promise.resolve().then(syncDetail); } }
 
   // ---- The cards. Each is built once; renders replace only its body and footer.
-  // Tasks side by side, Smart results and Run and review your project are experimental (#176); off, their cards leave both rails and the strip.
-  const cardOff = id => (id === 'tasks' && window.relayExperimental?.enabled('tasks') === false) || (id === 'results' && window.relayExperimental?.enabled('smartResults') === false) || (id === 'preview' && window.relayExperimental?.enabled('review') === false);
+  // Tasks side by side and Run and review your project are experimental (#176); off, their cards leave both rails and the strip.
+  const cardOff = id => (id === 'tasks' && window.relayExperimental?.enabled('tasks') === false) || (id === 'preview' && window.relayExperimental?.enabled('review') === false);
   const cards = new Map(CARDS.map(card => {
     const element = node('section', 'flow-card'), head = node('div', 'flow-card-head'), title = node('h2'), body = node('div', 'flow-card-body'), foot = node('div', 'flow-card-foot');
     title.append(node('span', 'flow-card-title', card.title));
     element.id = `flow-card-${card.id}`; title.id = `flow-card-${card.id}-title`; element.setAttribute('aria-labelledby', title.id);
-    if (card.hidden) element.hidden = true; if (['tasks', 'results', 'preview'].includes(card.id)) title.append(window.relayExperimental?.badge() || ''); head.append(title); element.append(head, body, foot);
+    if (card.hidden) element.hidden = true; if (['tasks', 'preview'].includes(card.id)) title.append(window.relayExperimental?.badge() || ''); head.append(title); element.append(head, body, foot);
     return [card.id, { ...card, element, body, foot, signature: null }];
   }));
   // Quiet utility areas anchor the two rails, separate from the live task cards.
@@ -705,7 +703,7 @@
         if (task.status === 'waiting' && task.held && window.relayTaskThreads?.resume) actions.append(button('flow-button flow-task-action', 'Start', () => window.relayTaskThreads.resume(task.id)));
         if (task.managed) { /* Flow finishes it */ }
         else if (taskMergeable(task) && window.relayTaskThreads?.review) actions.append(button('flow-button flow-task-action', 'Review & merge', () => window.relayTaskThreads.review(task.id)));
-        else if (taskEnded(task) && window.relayTaskThreads?.close) actions.append(button('flow-button flow-task-action', 'Close', () => window.relayTaskThreads.close(task.id)));
+        else if (taskEnded(task) && window.relayTaskThreads?.close) { const remove = button('flow-button flow-task-action', window.relayTaskThreads.removeLabel || 'Remove from list', () => window.relayTaskThreads.close(task.id)); remove.title = window.relayTaskThreads.removeHint?.(task.id) || ''; actions.append(remove); }
         if (actions.querySelector('button')) item.append(actions);
         list.append(item);
       }
@@ -731,9 +729,9 @@
     });
     newTaskBtn.disabled = !state.projectId || !folders.length || !hasThreads || Boolean(state.taskDraft);
     newTaskBtn.title = 'Start a task in a folder beside the workspace chat';
-    const tasksSheetBtn = button('flow-button', 'Tasks & limits', () => window.relayTasks?.open?.());
-    tasksSheetBtn.title = 'Review progress, usage, and limits across tasks';
-    card.foot.append(newTaskBtn, tasksSheetBtn);
+    const limitsBtn = button('flow-button', 'Task limits', () => window.relayLimits?.open?.());
+    limitsBtn.title = 'Set working time, token, spend and agent limits for tasks';
+    card.foot.append(newTaskBtn, limitsBtn);
   }
 
   // Files changed: each run that changed files, newest first, with the same Undo as the run's line in the chat.
@@ -816,7 +814,7 @@
     }
     body.append(list);
   }
-  const renderers = { working: renderWorking, plans: renderPlans, next: renderNext, tasks: renderTasks, files: renderFiles, happened: renderHappened, preview: card => window.relayProjectReview?.render(card), results: card => window.relaySmartResults?.renderCard(card) };
+  const renderers = { working: renderWorking, plans: renderPlans, next: renderNext, tasks: renderTasks, files: renderFiles, happened: renderHappened, preview: card => window.relayProjectReview?.render(card) };
 
   // ---- Live status in the working card. Remote access and Settings sit below it; no footer is needed.
   const phaseWords = { starting: 'starting', probing: 'checking usage', reasoning: 'thinking', responding: 'writing', tool: 'running tools', compacting: 'organizing its context', approval: 'waiting for you' };
@@ -874,7 +872,6 @@
   function chipText(id) {
     const state = api.getState();
     if (id === 'preview') return window.relayProjectReview?.label() || 'Run and review your project';
-    if (id === 'results') { const data = window.relaySmartResults?.data?.(), mode = canonicalMode(routing()?.mode) || 'smart', name = modes.find(item => item.mode === mode)?.name || 'Smart', seen = data?.observed?.[mode]; return seen?.tasks ? `${name} · ${plural(seen.tasks, 'task')} · ${seen.verified} verified` : `${name} results`; }
     if (id === 'happened') { const latest = happenings()[0]; return latest ? clip(latest.title, 48) : 'What happened'; }
     if (id === 'working') return modes.find(item => item.mode === canonicalMode(routing()?.mode))?.name || 'Routing';
     if (id === 'plans') { const rows = planRows(), row = rows.find(item => item.provider === state.provider) || rows[0]; return row?.primary ? `${agentNames[row.provider]} · ${row.primary.label} · ${remaining(row.primary)}% left${row.warning ? ` · ${row.warning.label} · ${remaining(row.warning)}% left` : ''}` : 'Plans'; }
@@ -943,7 +940,7 @@
       if (from === target) return false;
       if (from === 'normal') {
         saved = { panel: openSidePanel(), bottom: window.relayPanel?.isOpen?.() ? window.relayPanel.active() : null };
-        window.relayAgents?.close?.(); window.relayGit?.close?.(); window.relayBrief?.close?.(); window.relayTasks?.close?.(); window.relayTimeline?.close?.(); window.relayReviews?.closePanel?.();
+        window.relayAgents?.close?.(); window.relayGit?.close?.(); window.relayBrief?.close?.(); window.relayTimeline?.close?.(); window.relayReviews?.closePanel?.();
         if (saved.bottom) window.relayPanel?.hide?.();
       } else closeDetail();
       if (from === 'flow') { const s = api.getState(), conv = s.conversation, openTask = s.taskId && ((conv?.task?.id === s.taskId ? conv.task : null) || (conv?.parallelTasks || []).find(task => task.id === s.taskId)); if (openTask?.managed) api.setTask?.(null)?.catch?.(() => {}); on = false; closePeek(); clearTimeout(ticker); ticker = null; shell.classList.remove('flow'); keepFocus(restoreControls); }
@@ -1067,10 +1064,10 @@
   });
   window.addEventListener('relay-side-panel', scheduleDetail);
   window.addEventListener('relay-project-review', schedule);
-  window.addEventListener('relay-results', schedule);
   if (typeof MutationObserver === 'function') {
     const observer = new MutationObserver(scheduleDetail);
-    for (const name of [...sidePanels, 'review']) if ($(`${name}-panel`)) observer.observe($(`${name}-panel`), { attributes: true, attributeFilter: ['hidden'] });
+    // Watch Git too: whether it lives in the side panel or the left sidebar is only known once sidebar-tools.js loads.
+    for (const name of ['agents', 'git', 'brief', 'timeline', 'review']) if ($(`${name}-panel`)) observer.observe($(`${name}-panel`), { attributes: true, attributeFilter: ['hidden'] });
   }
   $('flow-peek-close')?.addEventListener('click', closePeek);
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && peeking && !event.isComposing) { event.preventDefault(); closePeek(); } });

@@ -1,16 +1,5 @@
-/* The bottom panel: the workspace's tools as tabs (Terminal, Run), resizable from its top edge. */
-.bottom-panel { position: relative; display: flex; flex-direction: column; flex: none; height: min(320px, 42vh); min-height: 140px; border-top: 1px solid var(--border-strong); background: var(--panel-bg); }
-.bottom-panel[hidden] { display: none; }
-.bottom-heading { display: flex; align-items: center; gap: 8px; flex: none; height: 34px; padding: 0 6px 0 8px; }
-.bottom-tabs { display: flex; align-self: stretch; gap: 2px; margin-right: auto; }
-.bottom-tab { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 100%; padding: 0 10px; border: 0; background: none; color: var(--muted); font-size: 12px; font-weight: 500; }
-.bottom-tab:hover { color: var(--text); }
-.bottom-tab[aria-selected="true"] { color: var(--text-strong); }
-.bottom-tab[aria-selected="true"]::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 0; height: 2px; border-radius: 1px; background: var(--accent); }
-.bottom-tab-count { min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px; background: var(--chip-bg); color: var(--text); font-size: 10.5px; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums; }
 .bottom-tools { display: flex; align-items: center; gap: 2px; min-width: 0; }
 .bottom-tools[hidden] { display: none; }
-.bottom-hide::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon-chevron-down) center / contain no-repeat; mask: var(--icon-chevron-down) center / contain no-repeat; }
 .command-add .icon { width: 13px; height: 13px; }
 
 /* The status bar keeps Terminal and Run within reach, open or not. */
@@ -131,3 +120,26 @@
 .command-empty-title { margin: 0; color: var(--text-strong); font-size: 13px; font-weight: 600; }
 .command-empty .command-note { margin: 0 0 10px; }
 @media (max-width: 760px) { .command-list { width: 140px; } .command-fields { grid-template-columns: 1fr; } .command-line { display: none; } }
+
+/* Run's chooser uses the sidebar width; output lives in an independent main tab. */
+.sidebar .project-commands { flex-direction: column; overflow: auto; }
+.sidebar .command-list { width: auto; border-right: 0; overflow: visible; padding: 4px 8px 10px; }
+.sidebar .run-pane { flex: none; }
+.sidebar .command-row { display: grid; grid-template-columns: minmax(0, 1fr) 24px 24px; padding: 3px 2px; }
+.sidebar .command-pick { grid-column: 1; grid-row: 1; }
+.sidebar .command-quick { grid-column: 2; grid-row: 1; opacity: 1; }
+.sidebar .command-row-restart { grid-column: 3; grid-row: 1; width: 24px; height: 24px; color: var(--muted); }
+.command-row-state { grid-column: 1 / -1; grid-row: 2; padding: 0 7px 3px 23px; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.command-row[data-status="failed"] .command-row-state { color: var(--danger); }
+.command-row-fix { grid-column: 1 / -1; justify-self: start; margin: 1px 7px 4px 23px; font-size: 11.5px; }
+.sidebar .command-form { padding: 8px 12px 12px; }
+.sidebar .command-form-head { flex-wrap: wrap; }
+.sidebar .command-form-head h3 { flex-basis: 100%; margin-bottom: 5px; }
+.sidebar .command-fields { grid-template-columns: minmax(0, 1fr); }
+.sidebar .command-chip { max-width: 100%; }
+.sidebar .command-empty { padding: 12px; }
+.command-tab-view { width: 100%; min-width: 0; height: 100%; background: var(--panel-bg); }
+.command-tab-view .run-pane-bar { flex-wrap: wrap; gap: 6px 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.command-tab-view .command-line { flex: 1 1 140px; }
+.command-tab-view .command-buttons { flex-wrap: wrap; gap: 4px; }
+.command-tab-view .command-output { padding-top: 10px; }

@@ -1,9 +1,9 @@
-/* The workspace terminal: a tab of the bottom panel (see project-commands.css). Its shells are listed at the right of
+/* The workspace terminal: shell tabs beside Chat in the main tab strip. Its shells are listed at the right of
    the terminal, each named after its folder, and a shell split into two panes shows them side by side or stacked. The
    panel's header holds +, Split and End. */
 .terminal-panel { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .terminal-panel[hidden] { display: none; }
-.bottom-panel { --terminal-capture-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 14.5a2 2 0 0 1-2 2H8.5L4 20V6.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z'/%3E%3Cpath d='M12 7.5v6M9 10.5h6'/%3E%3C/svg%3E"); --terminal-split-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='4.5' width='17' height='15' rx='2'/%3E%3Cpath d='M12 4.5v15'/%3E%3C/svg%3E"); }
+.terminal-panel, .terminal-workspace-tab, .terminal-context { --terminal-capture-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 14.5a2 2 0 0 1-2 2H8.5L4 20V6.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z'/%3E%3Cpath d='M12 7.5v6M9 10.5h6'/%3E%3C/svg%3E"); --terminal-split-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='4.5' width='17' height='15' rx='2'/%3E%3Cpath d='M12 4.5v15'/%3E%3C/svg%3E"); }
 
 /* The header: New session when the shell in use has ended, then +, Split and End. */
 .terminal-tools { gap: 2px; }

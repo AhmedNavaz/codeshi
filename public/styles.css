@@ -207,7 +207,10 @@ summary::-webkit-details-marker { display: none; }
 #github-repos-error { white-space: pre-line; }
 .github-signin { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; font-size: 12px; color: var(--text); }
 .github-signin-text { margin: 0; white-space: pre-line; }
-.github-signin-actions { display: flex; gap: 8px; }
+.github-signin-code { padding: 1px 5px; border-radius: 4px; background: var(--code-inline-bg); font: 600 12px var(--mono); user-select: all; }
+.github-signin-link { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.github-signin-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+.github-signin-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 /* New workspace's two sources: folders on this computer, or one of your GitHub repositories (#159). */
 .project-source { display: flex; gap: 2px; margin: -4px 0 12px; border-bottom: 1px solid var(--border); }
 .project-source-tab { margin-bottom: -1px; padding: 5px 10px 6px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); font: 500 12px var(--font); cursor: pointer; }
@@ -1479,6 +1482,7 @@ button.commit-hash:hover { text-decoration: underline; }
 .results-metric summary { cursor: pointer; color: var(--text); line-height: 1.45; }
 .results-metric .results-table { margin-top: 2px; }
 .results-foot { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.results-dialog { width: min(680px, calc(100vw - 48px)); }
 .results-share-dialog { width: min(560px, calc(100vw - 48px)); }
 .results-share-dialog[open] { display: flex; flex-direction: column; }
 .results-share-body { display: grid; gap: 6px; font-size: var(--font-ui-sm); }

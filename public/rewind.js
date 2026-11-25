@@ -245,7 +245,7 @@
     if (!panel) return;
     panel.hidden = !open;
     if (keep) remember(open ? 'timeline' : 'none');
-    if (open) { window.relayAgents?.close(); window.relayGit?.close(); window.relayBrief?.close(); window.relayTasks?.close(); window.relayReviews?.closePanel?.(); loadTimeline(true); }
+    if (open) { window.relayAgents?.close(); window.relayGit?.close(); window.relayBrief?.close(); window.relayReviews?.closePanel?.(); loadTimeline(true); }
     window.dispatchEvent(new CustomEvent('relay-side-panel'));
   }
   $('refresh-timeline')?.addEventListener('click', () => loadTimeline(true));

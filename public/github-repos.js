@@ -82,27 +82,81 @@
   }
   // Sign in with GitHub (#159) for people without gh. The code is shown until GitHub confirms it; the window checks in
   // at GitHub's interval and reads the list once you're in.
-  const signin = $('github-signin'), signinText = $('github-signin-text'), signinStart = $('github-signin-start'), signinOut = $('github-signout');
-  let polling = null;
+  const signin = $('github-signin'), signinText = $('github-signin-text'), signinStart = $('github-signin-start'), signinCopy = $('github-signin-copy'), signinOpen = $('github-signin-open'), signinOut = $('github-signout');
+  let polling = null, pendingState = null, copyTimer = null;
+  function safeUrl(value) {
+    try {
+      const parsed = new URL(String(value || ''));
+      return parsed.protocol === 'https:' && !parsed.username && !parsed.password ? parsed.href : null;
+    } catch { return null; }
+  }
+  function openExternal(url) {
+    const safe = safeUrl(url);
+    if (!safe) return;
+    if (window.relayDesktop?.openExternal) window.relayDesktop.openExternal(safe).catch(() => {});
+    else window.open(safe, '_blank', 'noopener,noreferrer');
+  }
   function signinShow(state) {
     clearTimeout(polling); polling = null;
-    signinStart.hidden = true; signinOut.hidden = true;
+    signinStart.hidden = true; signinCopy.hidden = true; signinOpen.hidden = true; signinOut.hidden = true;
     signin.hidden = !state || state.state === 'unavailable';
-    if (signin.hidden) return;
-    if (state.state === 'signed-in') { signinText.textContent = state.login ? `Signed in to GitHub as ${state.login}.` : 'Signed in to GitHub.'; signinOut.hidden = false; return; }
-    if (state.state === 'pending') { signinText.textContent = `Enter the code ${state.userCode} at ${state.verificationUri} to finish signing in. Codeshi checks until you do.`; polling = setTimeout(signinCheck, 5000); return; }
+    if (signin.hidden) { pendingState = null; return; }
+    if (state.state === 'signed-in') {
+      pendingState = null;
+      signinText.textContent = state.login ? `Signed in to GitHub as ${state.login}.` : 'Signed in to GitHub.';
+      signinOut.hidden = false;
+      return;
+    }
+    if (state.state === 'pending') {
+      const url = safeUrl(state.verificationUri);
+      const same = pendingState && pendingState.userCode === state.userCode && pendingState.verificationUri === (url || state.verificationUri || '');
+      pendingState = { userCode: state.userCode || '', verificationUri: url || state.verificationUri || '' };
+      if (!same) {
+        clearTimeout(copyTimer);
+        signinCopy.textContent = 'Copy code';
+        const code = el('code', state.userCode, 'github-signin-code');
+        let target;
+        if (url) {
+          target = el('a', state.verificationUri, 'github-signin-link');
+          target.href = url; target.target = '_blank'; target.rel = 'noopener noreferrer';
+          target.addEventListener('click', event => { event.preventDefault(); openExternal(url); });
+        } else target = document.createTextNode(state.verificationUri || '');
+        signinText.replaceChildren('Enter the code ', code, ' at ', target, ' to finish signing in. Codeshi checks until you do.');
+      }
+      signinCopy.hidden = !state.userCode || !navigator.clipboard?.writeText;
+      signinOpen.hidden = !url;
+      polling = setTimeout(signinCheck, 5000);
+      return;
+    }
+    pendingState = null;
     signinText.textContent = { denied: 'GitHub sign-in was cancelled.', expired: 'The GitHub sign-in code expired. Start again.' }[state.state] || 'Sign in with GitHub to list your repositories without gh.';
     signinStart.hidden = false;
   }
   async function signinCheck() {
     try { const state = await api.api('/api/github/signin'); signinShow(state); if (state.state === 'signed-in') load(true); }
-    catch (failure) { signinText.textContent = failure.message; signinStart.hidden = false; }
+    catch (failure) { pendingState = null; signinCopy.hidden = true; signinOpen.hidden = true; signinText.textContent = failure.message; signinStart.hidden = false; }
   }
   signinStart.addEventListener('click', async () => {
     signinStart.disabled = true;
-    try { signinShow(await api.post('/api/github/signin', {}, null)); }
+    try {
+      const state = await api.post('/api/github/signin', {}, null);
+      signinShow(state);
+      if (state?.state === 'pending') openExternal(state.verificationUri);
+    }
     catch (failure) { showError(failure.message); }
     finally { signinStart.disabled = false; }
+  });
+  signinCopy.addEventListener('click', async () => {
+    if (!pendingState?.userCode) return;
+    try {
+      await navigator.clipboard?.writeText(pendingState.userCode);
+      signinCopy.textContent = 'Copied';
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => { signinCopy.textContent = 'Copy code'; }, 1500);
+    } catch { /* Clipboard may be unavailable. */ }
+  });
+  signinOpen.addEventListener('click', () => {
+    if (pendingState?.verificationUri) openExternal(pendingState.verificationUri);
   });
   signinOut.addEventListener('click', async () => {
     signinOut.disabled = true;

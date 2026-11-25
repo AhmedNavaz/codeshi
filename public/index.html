@@ -27,6 +27,8 @@
     <script src="/routing.js" defer></script>
     <script src="/layout.js" defer></script>
     <script src="/app.js" defer></script>
+    <script src="/main-tabs.js" defer></script>
+    <script src="/sidebar-tools.js" defer></script>
     <script src="/questions.js" defer></script>
     <script src="/workbench.js" defer></script>
     <script src="/settings.js" defer></script>
@@ -58,7 +60,6 @@
     <script src="/vendor/xterm.js" defer></script>
     <script src="/vendor/addon-fit.js" defer></script>
     <script src="/vendor/addon-web-links.js" defer></script>
-    <script src="/bottom-panel.js" defer></script>
     <script src="/preview.js" defer></script>
     <link rel="stylesheet" href="/sketch.css" />
     <script src="/sketch-logic.js" defer></script>
@@ -109,6 +110,9 @@
     <link rel="stylesheet" href="/alerts.css" />
     <link rel="stylesheet" href="/activity.css" />
     <link rel="stylesheet" href="/questions.css" />
+    <link rel="stylesheet" href="/main-tabs.css" />
+    <link rel="stylesheet" href="/terminal-tabs.css" />
+    <link rel="stylesheet" href="/git-tabs.css" />
   </head>
   <body>
     <div id="launch-screen" class="launch-screen" aria-hidden="true"><img src="/logo.svg" alt="" width="72" height="72" /></div>
@@ -118,6 +122,12 @@
           <a class="brand" href="/" aria-label="Codeshi home"><img class="brand-mark" src="/logo.svg" alt="" width="18" height="18" /><span class="brand-name">Codeshi</span><span id="build-channel" class="build-channel" title="Running from source, separate from the installed app" hidden>Dev</span></a>
           <button id="workspace-toggle" class="workspace-toggle" type="button" aria-expanded="false" aria-controls="workspace-list">Workspaces <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
         </div>
+        <div id="sidebar-switch" class="sidebar-switch" role="tablist" aria-label="Workspace tools">
+          <button id="sidebar-tab-workspaces" type="button" role="tab" aria-selected="true" aria-controls="sidebar-workspaces" title="Workspaces"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h7l2 2h9v12H3z"/></svg><span>Workspaces</span></button>
+          <button id="sidebar-tab-run" type="button" role="tab" aria-selected="false" aria-controls="sidebar-run" tabindex="-1" title="Run"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7z"/></svg><span>Run</span><span id="run-tab-count" class="count-badge" hidden></span></button>
+          <button id="sidebar-tab-git" type="button" role="tab" aria-selected="false" aria-controls="git-panel" tabindex="-1" title="Git"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="7" r="2"/><path d="M6 7v10M18 9v2a4 4 0 0 1-4 4h-4a4 4 0 0 0-4 4"/></svg><span>Git</span></button>
+        </div>
+        <div id="sidebar-workspaces" class="sidebar-workspaces" role="tabpanel" aria-labelledby="sidebar-tab-workspaces">
         <div class="sidebar-heading"><span>Workspaces</span><span id="workspace-count" class="count-badge">0</span><button id="toggle-explorer" class="sidebar-files-button" type="button" aria-expanded="false" aria-controls="files-dialog" title="Browse workspace files"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6l2 2h8v14H4zM8 10h8M8 14h5"/></svg>Files</button><button id="create-workspace" class="icon-button new-workspace" type="button" title="New workspace" aria-label="New workspace"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
         <button id="open-setup" class="setup-launch" type="button" hidden><span>Getting started</span><span id="setup-progress">Setup</span></button>
         <nav id="workspace-list" class="workspace-list" aria-label="Saved workspaces and folders"></nav>
@@ -126,6 +136,45 @@
           <ul id="task-list" class="task-list"></ul>
         </section>
         <span id="workspace-name" class="sr-only">No workspace selected</span>
+        </div>
+        <section id="sidebar-run" class="sidebar-run" role="tabpanel" aria-labelledby="sidebar-tab-run" hidden>
+          <header class="sidebar-heading"><span>Run</span>            <div id="run-tools" class="bottom-tools" data-tool="run"><button id="command-add" class="toolbar-button command-add" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add command</button></div>
+</header>
+          <div id="project-commands" class="project-commands" role="tabpanel" aria-label="Saved commands" hidden>
+            <nav id="command-list" class="command-list" aria-label="Commands"></nav>
+            <div class="run-pane">
+              <p id="command-error" class="project-error command-error" role="alert" hidden></p>
+              <div id="command-view" class="command-view" hidden>
+                <div class="run-pane-bar"><span id="command-state" class="command-state" role="status"></span><span id="command-place" class="command-place" hidden></span><code id="command-line" class="command-line"></code><span id="command-links" class="command-links"></span><span class="command-buttons"><button id="command-fix" class="toolbar-button command-fix" type="button" hidden>Ask an agent to fix it</button><button id="command-preview" class="pill-button command-preview" type="button" title="Open it in the preview, where you can click an element to change" hidden>Preview</button><button id="command-start" class="pill-button command-start" type="button">Start</button><button id="command-stop" class="pill-button command-stop" type="button" hidden>Stop</button><button id="command-restart" class="icon-button command-icon" type="button" aria-label="Restart" title="Restart" data-icon="restart" hidden></button><button id="command-clear" class="icon-button command-icon" type="button" aria-label="Clear output" title="Clear output" data-icon="clear" hidden></button><button id="command-edit" class="icon-button command-icon" type="button" aria-label="Edit command" title="Edit command" data-icon="edit"></button></span></div>
+                <p id="command-truncated" class="command-note" hidden>Older output was discarded. Showing the latest 64K characters.</p>
+                <pre id="command-output" class="command-output" tabindex="0" aria-label="Command output"></pre>
+              </div>
+              <form id="command-form" class="command-form" hidden>
+                <div class="command-form-head"><h3 id="command-form-title">Add a command</h3><button id="command-remove" class="toolbar-button quiet-danger" type="button" hidden>Remove</button><button id="command-cancel" class="toolbar-button" type="button">Cancel</button><button id="command-save" class="pill-button command-save" type="submit">Save</button></div>
+                <div id="command-suggestions" class="command-chips" aria-label="Found in this folder"></div>
+                <p id="command-detection" class="command-note" hidden></p>
+                <div class="command-fields"><label>Name<input id="command-name" maxlength="40" autocomplete="off" spellcheck="false" placeholder="dev" /></label><label id="command-folder-field">Folder<select id="command-folder" aria-label="Command folder"></select></label><label>Subdirectory<input id="command-directory" placeholder=". (folder root)" autocomplete="off" spellcheck="false" maxlength="1024" /></label><label class="command-full">Command<input id="command-text" placeholder="npm run dev" autocomplete="off" spellcheck="false" maxlength="4096" /></label></div>
+                <label class="command-check"><input id="command-test" type="checkbox" /><span>Use for Check with tests<small>Routing runs it after changes when Check with tests is on.</small></span></label>
+                <p class="command-note">Runs in your own shell with your permissions, whatever the agents’ access. Scripts can run other commands, so check them first.</p>
+              </form>
+              <div id="command-empty" class="command-empty" hidden>
+                <p class="command-empty-title">Run your project from here</p>
+                <p class="command-note">Your dev server, tests or any script, with live output while agents work.</p>
+                <div id="command-quick" class="command-chips" aria-label="Found in this folder"></div>
+                <button id="command-custom" class="text-link" type="button">Add a custom command</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      <aside id="git-panel" class="git-panel sidebar-git" aria-label="Git activity" hidden>
+        <div class="sidebar-heading"><span>Git</span></div>
+        <div class="git-toolbar"><label class="sr-only" for="git-repository">Repository</label><select id="git-repository" aria-label="Repository"></select><button id="refresh-git" class="icon-button refresh-button" type="button" aria-label="Refresh Git activity" title="Refresh"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button></div>
+        <div id="git-summary"></div><div class="inspector-tabs" role="group" aria-label="Git view"><button id="git-changes-tab" type="button" aria-pressed="true">Changes</button><button id="git-commits-tab" type="button" aria-pressed="false">Commits</button></div>
+        <form id="git-commit" class="git-commit" aria-label="Commit" hidden><textarea id="git-commit-message" rows="2" placeholder="Commit message" aria-label="Commit message"></textarea><div class="git-commit-row"><button id="git-commit-button" class="primary-button" type="submit" disabled>Commit</button><span id="git-committer" class="git-committer"></span></div><div id="git-commit-result" class="git-commit-result" role="status" hidden></div></form>
+        <div id="git-content" class="git-content"></div><p id="git-updated" class="git-updated"></p>
+      </aside>
+
+
       </aside>
 
       <section id="board-view" class="plan-view board-view" aria-label="Plan" hidden>
@@ -195,8 +244,14 @@
             <button id="open-export" class="header-menu-item" role="menuitem" type="button" title="Export conversation"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14.5V3.5M8 7.5l4-4 4 4"/><path d="M5 12.5v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg><span class="button-label">Export conversation…</span></button>
           </div>
         </header>
-        <div id="main-tabs" class="main-tabs" role="tablist" aria-label="Conversation view" hidden><button id="main-tab-chat" class="main-tab" type="button" role="tab" aria-selected="true" title="The conversation in the window"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5a2 2 0 0 1-2 2H8.5L4 20V6.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/></svg>Chat</button><span class="main-tab-cli"><button id="main-tab-cli" class="main-tab" type="button" role="tab" aria-selected="false" aria-controls="cli-view" title="The same conversation in the codeshi command"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7.5 4.5 4.5L5 16.5M12 17h7"/></svg>CLI</button><button id="main-tab-cli-close" class="icon-button main-tab-close" type="button" aria-label="Close the CLI tab" title="Close: ends this codeshi session. A run carries on in the chat."><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></span><span class="main-tabs-note">Same conversation, same agent</span></div>
+        <div id="main-tabs" class="main-tabs" role="tablist" aria-label="Workspace tabs" hidden>
+          <button id="main-tab-chat" class="main-tab" type="button" role="tab" aria-selected="true" aria-controls="chat-stage">Chat</button>
+          <div id="main-tool-tabs" class="main-tool-tabs" role="presentation"></div>
+          <button id="main-tab-new" class="main-tab-new icon-button" type="button" aria-label="New terminal" title="New terminal (⌃⇧`)">+</button>
+        </div>
         <section id="cli-view" class="cli-view" role="tabpanel" aria-labelledby="main-tab-cli" hidden><div id="cli-views" class="cli-views"></div><p id="cli-message" class="cli-message" role="status" hidden></p></section>
+        <div id="main-work-area" class="main-work-area">
+        <div id="chat-stage" class="chat-stage" role="tabpanel" aria-labelledby="main-tab-chat">
         <div id="flow-strip" class="flow-strip" role="group" aria-label="Flow cards" hidden></div>
 
         <label class="sr-only" for="project-select">Current workspace</label>
@@ -213,7 +268,7 @@
             <label class="github-repos-search"><span class="sr-only">Search repositories</span><input id="github-repos-search" type="search" autocomplete="off" spellcheck="false" placeholder="Search your repositories" aria-controls="github-repos-list" disabled /></label>
             <div id="github-repos-list" class="github-repos-list" role="list" aria-label="Your repositories" aria-busy="true"></div>
             <div class="github-clone-folder"><label for="github-clone-folder">Clone into</label><input id="github-clone-folder" autocomplete="off" spellcheck="false" placeholder="~/Developer" /><button id="github-clone-pick" class="secondary-button" type="button" hidden>Choose…</button></div>
-            <div id="github-signin" class="github-signin" hidden><p id="github-signin-text" class="github-signin-text" role="status"></p><div class="github-signin-actions"><button id="github-signin-start" class="secondary-button" type="button" hidden>Sign in with GitHub</button><button id="github-signout" class="secondary-button" type="button" hidden>Sign out</button></div></div>
+            <div id="github-signin" class="github-signin" hidden><p id="github-signin-text" class="github-signin-text" role="status"></p><div class="github-signin-actions"><button id="github-signin-start" class="secondary-button" type="button" hidden>Sign in with GitHub</button><button id="github-signin-copy" class="secondary-button" type="button" hidden>Copy code</button><button id="github-signin-open" class="secondary-button" type="button" hidden>Open sign-in page</button><button id="github-signout" class="secondary-button" type="button" hidden>Sign out</button></div></div>
             <p id="github-repos-error" class="project-error" role="alert" hidden></p>
           </section>
           <form id="project-form" class="project-form" role="tabpanel" aria-labelledby="project-source-folders">
@@ -345,13 +400,17 @@
           <p id="permission-note" class="sr-only">Review workspace permissions in Settings.</p>
         </div>
         <div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
-        <section id="bottom-panel" class="bottom-panel" aria-label="Terminal and Run" hidden>
-          <header class="bottom-heading">
-            <div class="bottom-tabs" role="tablist" aria-label="Panel"><button id="bottom-tab-terminal" class="bottom-tab" type="button" role="tab" aria-selected="false" aria-controls="terminal-panel" data-tool="terminal" title="Your own shell. Agent access settings such as Read only don’t apply to it.">Terminal</button><button id="bottom-tab-run" class="bottom-tab" type="button" role="tab" aria-selected="false" aria-controls="project-commands" data-tool="run" title="Your dev servers, tests and scripts">Run<span id="run-tab-count" class="bottom-tab-count" hidden></span></button></div>
+        </div>
+        <section id="tab-primary" class="tab-stage" aria-label="Workspace tool" hidden></section>
+        <aside id="tab-beside" class="tab-beside" aria-label="Beside Chat" hidden>
+          <div id="tab-divider" class="tab-divider" role="separator" aria-label="Resize view beside Chat" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="75" aria-valuenow="50" tabindex="0"></div>
+          <header class="tab-beside-heading"><span id="tab-beside-title"></span><button id="tab-unsplit" class="toolbar-button" type="button" title="Keep the tab open and return to Chat">Close beside view</button></header>
+          <div id="tab-secondary" class="tab-stage"></div>
+        </aside>
+        </div>
+        <div id="tab-parking" hidden></div>
+        <div id="tool-templates" hidden>
             <div id="terminal-tools" class="bottom-tools terminal-tools" data-tool="terminal" hidden><button id="terminal-restart" class="pill-button terminal-restart" type="button" hidden>New session</button><span class="terminal-add"><button id="terminal-new" class="icon-button terminal-new" type="button" aria-label="New terminal" aria-haspopup="menu" aria-expanded="false" aria-controls="terminal-new-menu" title="New terminal (⌃⇧`)" hidden></button><div id="terminal-new-menu" class="terminal-menu" role="menu" aria-label="Open a terminal in" hidden></div></span><button id="terminal-capture" class="icon-button terminal-capture" type="button" aria-label="Add terminal output to your message" title="Add the terminal screen to your message" hidden></button><button id="terminal-split" class="icon-button terminal-split" type="button" aria-label="Split terminal" title="Split right · ⌥-click to split down" hidden></button><button id="terminal-end" class="icon-button terminal-end" type="button" aria-label="End this terminal" title="End this shell and what it started" hidden></button></div>
-            <div id="run-tools" class="bottom-tools" data-tool="run" hidden><button id="command-add" class="toolbar-button command-add" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add command</button></div>
-            <button id="bottom-hide" class="icon-button bottom-hide" type="button" aria-label="Hide panel" title="Hide (the terminal and commands keep running)"></button>
-          </header>
           <div id="terminal-panel" class="terminal-panel" role="tabpanel" aria-labelledby="bottom-tab-terminal" hidden>
             <div id="terminal-start" class="terminal-start" hidden><p class="terminal-start-title">Open a shell in</p><div id="terminal-folders" class="command-chips terminal-folders" role="group" aria-label="Folders"></div></div>
             <div class="terminal-body">
@@ -359,53 +418,20 @@
               <div id="terminal-tabs" class="terminal-tabs" role="tablist" aria-label="Terminals" aria-orientation="vertical" hidden></div>
             </div>
           </div>
-          <div id="project-commands" class="project-commands" role="tabpanel" aria-labelledby="bottom-tab-run" hidden>
-            <nav id="command-list" class="command-list" aria-label="Commands"></nav>
-            <div class="run-pane">
-              <p id="command-error" class="project-error command-error" role="alert" hidden></p>
-              <div id="command-view" class="command-view" hidden>
-                <div class="run-pane-bar"><span id="command-state" class="command-state" role="status"></span><span id="command-place" class="command-place" hidden></span><code id="command-line" class="command-line"></code><span id="command-links" class="command-links"></span><span class="command-buttons"><button id="command-fix" class="toolbar-button command-fix" type="button" hidden>Ask an agent to fix it</button><button id="command-preview" class="pill-button command-preview" type="button" title="Open it in the preview, where you can click an element to change" hidden>Preview</button><button id="command-start" class="pill-button command-start" type="button">Start</button><button id="command-stop" class="pill-button command-stop" type="button" hidden>Stop</button><button id="command-restart" class="icon-button command-icon" type="button" aria-label="Restart" title="Restart" data-icon="restart" hidden></button><button id="command-clear" class="icon-button command-icon" type="button" aria-label="Clear output" title="Clear output" data-icon="clear" hidden></button><button id="command-edit" class="icon-button command-icon" type="button" aria-label="Edit command" title="Edit command" data-icon="edit"></button></span></div>
-                <p id="command-truncated" class="command-note" hidden>Older output was discarded. Showing the latest 64K characters.</p>
-                <pre id="command-output" class="command-output" tabindex="0" aria-label="Command output"></pre>
-              </div>
-              <form id="command-form" class="command-form" hidden>
-                <div class="command-form-head"><h3 id="command-form-title">Add a command</h3><button id="command-remove" class="toolbar-button quiet-danger" type="button" hidden>Remove</button><button id="command-cancel" class="toolbar-button" type="button">Cancel</button><button id="command-save" class="pill-button command-save" type="submit">Save</button></div>
-                <div id="command-suggestions" class="command-chips" aria-label="Found in this folder"></div>
-                <p id="command-detection" class="command-note" hidden></p>
-                <div class="command-fields"><label>Name<input id="command-name" maxlength="40" autocomplete="off" spellcheck="false" placeholder="dev" /></label><label id="command-folder-field">Folder<select id="command-folder" aria-label="Command folder"></select></label><label>Subdirectory<input id="command-directory" placeholder=". (folder root)" autocomplete="off" spellcheck="false" maxlength="1024" /></label><label class="command-full">Command<input id="command-text" placeholder="npm run dev" autocomplete="off" spellcheck="false" maxlength="4096" /></label></div>
-                <label class="command-check"><input id="command-test" type="checkbox" /><span>Use for Check with tests<small>Routing runs it after changes when Check with tests is on.</small></span></label>
-                <p class="command-note">Runs in your own shell with your permissions, whatever the agents’ access. Scripts can run other commands, so check them first.</p>
-              </form>
-              <div id="command-empty" class="command-empty" hidden>
-                <p class="command-empty-title">Run your project from here</p>
-                <p class="command-note">Your dev server, tests or any script, with live output while agents work.</p>
-                <div id="command-quick" class="command-chips" aria-label="Found in this folder"></div>
-                <button id="command-custom" class="text-link" type="button">Add a custom command</button>
-              </div>
-            </div>
-          </div>
-        </section>
+        </div>
       </main>
       <aside id="flow-right" class="flow-side flow-right" aria-label="How it’s working and files changed" hidden></aside>
       <section id="flow-peek" class="flow-peek" aria-label="Card" hidden><div class="flow-peek-head"><button id="flow-peek-close" class="icon-button flow-peek-close" type="button" aria-label="Close card" title="Close"></button></div><div id="flow-peek-body" class="flow-peek-body"></div></section>
       <div id="flow-veil" class="flow-veil" aria-hidden="true" hidden><div class="flow-veil-stage"><img src="/mark.svg" alt="" width="96" height="96" /><strong class="flow-veil-title">Flow</strong><span class="flow-veil-line">Let it flow. Watch it ship.</span></div></div>
 
-      <aside id="git-panel" class="side-panel git-panel" aria-label="Git activity" hidden>
-        <div class="inspector-heading panel-heading"><h2 class="sr-only">Git activity</h2><div class="panel-tabs" role="tablist" aria-label="Side panel"><button class="panel-tab" type="button" role="tab" data-panel="agents" aria-selected="false" aria-label="Agents" title="Agents: who does the work"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg><span class="panel-tab-label">Agents</span></button><button class="panel-tab" type="button" role="tab" data-panel="brief" aria-selected="false" aria-label="Brief" title="Brief: what every agent is told"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 4h11A1.5 1.5 0 0 1 19 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18.5v-13A1.5 1.5 0 0 1 6.5 4z"/><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4"/></svg><span class="panel-tab-label">Brief</span></button><button class="panel-tab" type="button" role="tab" data-panel="tasks" aria-selected="false" aria-label="Tasks" title="Tasks: what each task used, and its limits"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.2l1.6 1.6 2.9-2.9M4 12.2l1.6 1.6 2.9-2.9M4 18.2l1.6 1.6 2.9-2.9"/><path d="M12 6h8M12 12h8M12 18h8"/></svg><span class="panel-tab-label">Tasks</span></button><button class="panel-tab" type="button" role="tab" data-panel="git" aria-selected="true" aria-label="Git" title="Git activity"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5.5" r="2.2"/><circle cx="6" cy="18.5" r="2.2"/><circle cx="18" cy="7" r="2.2"/><path d="M6 7.7v8.6M18 9.2v.6a4.5 4.5 0 0 1-4.5 4.5H8.5a2.5 2.5 0 0 0-2.5 2"/></svg><span class="panel-tab-label">Git</span></button><button class="panel-tab" type="button" role="tab" data-panel="timeline" aria-selected="false" aria-label="Timeline" title="Timeline: checkpoints and restore"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/></svg><span class="panel-tab-label">Timeline</span></button></div></div>
-        <div class="git-toolbar"><label class="sr-only" for="git-repository">Repository</label><select id="git-repository" aria-label="Repository"></select><button id="refresh-git" class="icon-button refresh-button" type="button" aria-label="Refresh Git activity" title="Refresh"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button></div>
-        <div id="git-summary"></div><div class="inspector-tabs" role="group" aria-label="Git view"><button id="git-changes-tab" type="button" aria-pressed="true">Changes</button><button id="git-commits-tab" type="button" aria-pressed="false">Commits</button></div>
-        <form id="git-commit" class="git-commit" aria-label="Commit" hidden><textarea id="git-commit-message" rows="2" placeholder="Commit message" aria-label="Commit message"></textarea><div class="git-commit-row"><button id="git-commit-button" class="primary-button" type="submit" disabled>Commit</button><span id="git-committer" class="git-committer"></span></div><div id="git-commit-result" class="git-commit-result" role="status" hidden></div></form>
-        <div id="git-content" class="git-content"></div><p id="git-updated" class="git-updated"></p>
-      </aside>
-
       <aside id="timeline-panel" class="side-panel timeline-panel" aria-labelledby="timeline-panel-title" hidden>
-        <div class="inspector-heading panel-heading"><h2 id="timeline-panel-title" class="sr-only">Timeline</h2><div class="panel-tabs" role="tablist" aria-label="Side panel"><button class="panel-tab" type="button" role="tab" data-panel="agents" aria-selected="false" aria-label="Agents" title="Agents: who does the work"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg><span class="panel-tab-label">Agents</span></button><button class="panel-tab" type="button" role="tab" data-panel="brief" aria-selected="false" aria-label="Brief" title="Brief: what every agent is told"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 4h11A1.5 1.5 0 0 1 19 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18.5v-13A1.5 1.5 0 0 1 6.5 4z"/><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4"/></svg><span class="panel-tab-label">Brief</span></button><button class="panel-tab" type="button" role="tab" data-panel="tasks" aria-selected="false" aria-label="Tasks" title="Tasks: what each task used, and its limits"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.2l1.6 1.6 2.9-2.9M4 12.2l1.6 1.6 2.9-2.9M4 18.2l1.6 1.6 2.9-2.9"/><path d="M12 6h8M12 12h8M12 18h8"/></svg><span class="panel-tab-label">Tasks</span></button><button class="panel-tab" type="button" role="tab" data-panel="git" aria-selected="false" aria-label="Git" title="Git activity"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5.5" r="2.2"/><circle cx="6" cy="18.5" r="2.2"/><circle cx="18" cy="7" r="2.2"/><path d="M6 7.7v8.6M18 9.2v.6a4.5 4.5 0 0 1-4.5 4.5H8.5a2.5 2.5 0 0 0-2.5 2"/></svg><span class="panel-tab-label">Git</span></button><button class="panel-tab" type="button" role="tab" data-panel="timeline" aria-selected="true" aria-label="Timeline" title="Timeline: checkpoints and restore"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/></svg><span class="panel-tab-label">Timeline</span></button></div></div>
+        <div class="inspector-heading panel-heading"><h2 id="timeline-panel-title" class="sr-only">Timeline</h2><div class="panel-tabs" role="tablist" aria-label="Side panel"><button class="panel-tab" type="button" role="tab" data-panel="agents" aria-selected="false" aria-label="Agents" title="Agents: who does the work"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg><span class="panel-tab-label">Agents</span></button><button class="panel-tab" type="button" role="tab" data-panel="brief" aria-selected="false" aria-label="Brief" title="Brief: what every agent is told"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 4h11A1.5 1.5 0 0 1 19 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18.5v-13A1.5 1.5 0 0 1 6.5 4z"/><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4"/></svg><span class="panel-tab-label">Brief</span></button><button class="panel-tab" type="button" role="tab" data-panel="timeline" aria-selected="true" aria-label="Timeline" title="Timeline: checkpoints and restore"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/></svg><span class="panel-tab-label">Timeline</span></button></div></div>
         <div class="timeline-toolbar"><span>Workspace checkpoints</span><button id="refresh-timeline" class="text-link" type="button">Refresh</button></div>
         <p class="timeline-hint">Choose a checkpoint to review every file before restoring. The conversation stays.</p>
         <div id="timeline-content" class="timeline-content" aria-live="polite"></div>
       </aside>
       <aside id="agents-panel" class="side-panel agents-panel" aria-labelledby="agents-panel-title" hidden>
-        <div class="inspector-heading panel-heading"><h2 id="agents-panel-title" class="sr-only">Agents</h2><div class="panel-tabs" role="tablist" aria-label="Side panel"><button class="panel-tab" type="button" role="tab" data-panel="agents" aria-selected="true" aria-label="Agents" title="Agents: who does the work"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg><span class="panel-tab-label">Agents</span></button><button class="panel-tab" type="button" role="tab" data-panel="brief" aria-selected="false" aria-label="Brief" title="Brief: what every agent is told"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 4h11A1.5 1.5 0 0 1 19 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18.5v-13A1.5 1.5 0 0 1 6.5 4z"/><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4"/></svg><span class="panel-tab-label">Brief</span></button><button class="panel-tab" type="button" role="tab" data-panel="tasks" aria-selected="false" aria-label="Tasks" title="Tasks: what each task used, and its limits"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.2l1.6 1.6 2.9-2.9M4 12.2l1.6 1.6 2.9-2.9M4 18.2l1.6 1.6 2.9-2.9"/><path d="M12 6h8M12 12h8M12 18h8"/></svg><span class="panel-tab-label">Tasks</span></button><button class="panel-tab" type="button" role="tab" data-panel="git" aria-selected="false" aria-label="Git" title="Git activity"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5.5" r="2.2"/><circle cx="6" cy="18.5" r="2.2"/><circle cx="18" cy="7" r="2.2"/><path d="M6 7.7v8.6M18 9.2v.6a4.5 4.5 0 0 1-4.5 4.5H8.5a2.5 2.5 0 0 0-2.5 2"/></svg><span class="panel-tab-label">Git</span></button><button class="panel-tab" type="button" role="tab" data-panel="timeline" aria-selected="false" aria-label="Timeline" title="Timeline: checkpoints and restore"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/></svg><span class="panel-tab-label">Timeline</span></button></div></div>
+        <div class="inspector-heading panel-heading"><h2 id="agents-panel-title" class="sr-only">Agents</h2><div class="panel-tabs" role="tablist" aria-label="Side panel"><button class="panel-tab" type="button" role="tab" data-panel="agents" aria-selected="true" aria-label="Agents" title="Agents: who does the work"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg><span class="panel-tab-label">Agents</span></button><button class="panel-tab" type="button" role="tab" data-panel="brief" aria-selected="false" aria-label="Brief" title="Brief: what every agent is told"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 4h11A1.5 1.5 0 0 1 19 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18.5v-13A1.5 1.5 0 0 1 6.5 4z"/><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4"/></svg><span class="panel-tab-label">Brief</span></button><button class="panel-tab" type="button" role="tab" data-panel="timeline" aria-selected="false" aria-label="Timeline" title="Timeline: checkpoints and restore"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/></svg><span class="panel-tab-label">Timeline</span></button></div></div>
         <div class="agents-body">
           <section id="agents-usage" class="agents-section agents-usage" aria-labelledby="agents-usage-title"><h3 id="agents-usage-title">Plan usage</h3><p class="agents-hint">What each agent has left on your own plan. Select one for all its limits and reset times.</p><div class="agent-accounts"><button id="codex-status" class="provider-status agent-account" type="button" data-provider="codex"><i class="agent-icon codex" aria-hidden="true"></i><span class="provider-name">Codex<span id="codex-working" class="provider-working" hidden>Working</span></span><i id="codex-status-dot" class="status-dot" aria-hidden="true"></i><span id="codex-status-text" class="provider-state">Checking…</span><span id="codex-usage" class="usage-meter" hidden></span></button><button id="claude-status" class="provider-status agent-account" type="button" data-provider="claude"><i class="agent-icon claude" aria-hidden="true"></i><span class="provider-name">Claude<span id="claude-working" class="provider-working" hidden>Working</span></span><i id="claude-status-dot" class="status-dot" aria-hidden="true"></i><span id="claude-status-text" class="provider-state">Checking…</span><span id="claude-usage" class="usage-meter" hidden></span></button><button id="gemini-status" class="provider-status agent-account" type="button" data-provider="gemini"><i class="agent-icon gemini" aria-hidden="true"></i><span class="provider-name">Gemini<span id="gemini-working" class="provider-working" hidden>Working</span></span><i id="gemini-status-dot" class="status-dot" aria-hidden="true"></i><span id="gemini-status-text" class="provider-state">Not checked</span><span id="gemini-usage" class="usage-meter" hidden></span></button><div id="ollama-status" class="provider-status agent-account" data-provider="local" hidden><i class="agent-icon local" aria-hidden="true"></i><span class="provider-name">Ollama<span id="ollama-working" class="provider-working" hidden>Working</span></span><span class="provider-state">Local models · no limit</span></div></div></section>
           <section id="agents-routing-note" class="agents-section" aria-label="Routing" hidden><p class="agents-hint">In Flow, routing picks the agent, model and effort for each message. Here you choose them yourself.</p></section>
@@ -415,7 +441,7 @@
       </aside>
 
       <aside id="brief-panel" class="side-panel brief-panel" aria-labelledby="brief-panel-title" hidden>
-        <div class="inspector-heading panel-heading"><h2 id="brief-panel-title" class="sr-only">Brief</h2><div class="panel-tabs" role="tablist" aria-label="Side panel"><button class="panel-tab" type="button" role="tab" data-panel="agents" aria-selected="false" aria-label="Agents" title="Agents: who does the work"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg><span class="panel-tab-label">Agents</span></button><button class="panel-tab" type="button" role="tab" data-panel="brief" aria-selected="true" aria-label="Brief" title="Brief: what every agent is told"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 4h11A1.5 1.5 0 0 1 19 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18.5v-13A1.5 1.5 0 0 1 6.5 4z"/><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4"/></svg><span class="panel-tab-label">Brief</span></button><button class="panel-tab" type="button" role="tab" data-panel="tasks" aria-selected="false" aria-label="Tasks" title="Tasks: what each task used, and its limits"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.2l1.6 1.6 2.9-2.9M4 12.2l1.6 1.6 2.9-2.9M4 18.2l1.6 1.6 2.9-2.9"/><path d="M12 6h8M12 12h8M12 18h8"/></svg><span class="panel-tab-label">Tasks</span></button><button class="panel-tab" type="button" role="tab" data-panel="git" aria-selected="false" aria-label="Git" title="Git activity"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5.5" r="2.2"/><circle cx="6" cy="18.5" r="2.2"/><circle cx="18" cy="7" r="2.2"/><path d="M6 7.7v8.6M18 9.2v.6a4.5 4.5 0 0 1-4.5 4.5H8.5a2.5 2.5 0 0 0-2.5 2"/></svg><span class="panel-tab-label">Git</span></button><button class="panel-tab" type="button" role="tab" data-panel="timeline" aria-selected="false" aria-label="Timeline" title="Timeline: checkpoints and restore"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/></svg><span class="panel-tab-label">Timeline</span></button></div></div>
+        <div class="inspector-heading panel-heading"><h2 id="brief-panel-title" class="sr-only">Brief</h2><div class="panel-tabs" role="tablist" aria-label="Side panel"><button class="panel-tab" type="button" role="tab" data-panel="agents" aria-selected="false" aria-label="Agents" title="Agents: who does the work"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg><span class="panel-tab-label">Agents</span></button><button class="panel-tab" type="button" role="tab" data-panel="brief" aria-selected="true" aria-label="Brief" title="Brief: what every agent is told"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 4h11A1.5 1.5 0 0 1 19 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18.5v-13A1.5 1.5 0 0 1 6.5 4z"/><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4"/></svg><span class="panel-tab-label">Brief</span></button><button class="panel-tab" type="button" role="tab" data-panel="timeline" aria-selected="false" aria-label="Timeline" title="Timeline: checkpoints and restore"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/></svg><span class="panel-tab-label">Timeline</span></button></div></div>
         <div class="panel-body">
           <section id="brief-next" class="panel-section" aria-labelledby="brief-next-title">
             <h3 id="brief-next-title" class="panel-section-title">Every agent reads the same brief</h3>
@@ -438,33 +464,14 @@
           </section>
         </div>
       </aside>
-      <aside id="tasks-panel" class="side-panel tasks-panel" aria-labelledby="tasks-panel-title" hidden>
-        <div class="inspector-heading panel-heading"><h2 id="tasks-panel-title" class="sr-only">Tasks</h2><div class="panel-tabs" role="tablist" aria-label="Side panel"><button class="panel-tab" type="button" role="tab" data-panel="agents" aria-selected="false" aria-label="Agents" title="Agents: who does the work"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg><span class="panel-tab-label">Agents</span></button><button class="panel-tab" type="button" role="tab" data-panel="brief" aria-selected="false" aria-label="Brief" title="Brief: what every agent is told"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 4h11A1.5 1.5 0 0 1 19 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18.5v-13A1.5 1.5 0 0 1 6.5 4z"/><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4"/></svg><span class="panel-tab-label">Brief</span></button><button class="panel-tab" type="button" role="tab" data-panel="tasks" aria-selected="true" aria-label="Tasks" title="Tasks: what each task used, and its limits"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.2l1.6 1.6 2.9-2.9M4 12.2l1.6 1.6 2.9-2.9M4 18.2l1.6 1.6 2.9-2.9"/><path d="M12 6h8M12 12h8M12 18h8"/></svg><span class="panel-tab-label">Tasks</span></button><button class="panel-tab" type="button" role="tab" data-panel="git" aria-selected="false" aria-label="Git" title="Git activity"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5.5" r="2.2"/><circle cx="6" cy="18.5" r="2.2"/><circle cx="18" cy="7" r="2.2"/><path d="M6 7.7v8.6M18 9.2v.6a4.5 4.5 0 0 1-4.5 4.5H8.5a2.5 2.5 0 0 0-2.5 2"/></svg><span class="panel-tab-label">Git</span></button><button class="panel-tab" type="button" role="tab" data-panel="timeline" aria-selected="false" aria-label="Timeline" title="Timeline: checkpoints and restore"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/></svg><span class="panel-tab-label">Timeline</span></button></div></div>
-        <div class="panel-body">
-          <section id="tasks-current" class="panel-section" aria-labelledby="tasks-current-title">
-            <div class="panel-section-head"><h3 id="tasks-current-title" class="panel-section-title">Current task</h3><button id="limits-open" class="icon-button" type="button" aria-label="Task limits" title="Task limits"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="15.5" cy="7" r="2.2"/><circle cx="9.5" cy="17" r="2.2"/></svg></button></div>
-            <p id="tasks-empty" class="panel-empty">Nothing has run yet. Each task you send shows here: which agents worked on it, how long, what it used, and whether the tests passed.</p>
-            <div id="task-card" class="task-card" hidden></div>
-          </section>
-          <section id="tasks-results" class="panel-section" aria-labelledby="tasks-results-title" hidden>
-            <div class="panel-section-head"><h3 id="tasks-results-title" class="panel-section-title">Smart results <span data-experimental-mark></span></h3></div>
-            <div id="tasks-results-body" class="results-body"></div>
-          </section>
-          <section id="tasks-recent" class="panel-section" aria-labelledby="tasks-recent-title" hidden>
-            <div class="panel-section-head"><h3 id="tasks-recent-title" class="panel-section-title">Earlier</h3></div>
-            <ul id="tasks-list" class="panel-list"></ul>
-            <div class="panel-section-foot"><button id="tasks-export" class="text-link" type="button" hidden>Export without prompts</button></div>
-          </section>
-        </div>
-      </aside>
       <aside id="review-panel" class="review-panel" aria-labelledby="review-panel-title" hidden><div class="inspector-heading"><h2 id="review-panel-title">Code review</h2></div><p id="review-panel-hint" class="review-panel-hint">Reviewing a saved snapshot. You can send your next prompt.</p><p id="review-panel-error" class="review-error" role="alert" hidden></p><div id="review-panel-body" class="review-panel-body"></div></aside>
 
 
       <footer class="status-bar" aria-label="Status">
         <div class="status-group">
           <div id="flow-status" class="flow-status" role="status" aria-live="polite" data-live="false" data-attention="false" hidden><i aria-hidden="true"></i><span id="flow-status-text">Ready</span></div>
-          <button id="status-terminal" class="status-button status-tool" type="button" aria-pressed="false" aria-controls="bottom-panel" title="Terminal (⌃`)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="m7 9.5 3 2.5-3 2.5M12.5 15h4"/></svg>Terminal</button>
-          <button id="status-run" class="status-button status-tool" type="button" aria-pressed="false" aria-controls="bottom-panel" title="Run your dev servers, tests and scripts"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>Run<span id="status-run-state" class="status-run-state" hidden></span></button>
+          <button id="status-terminal" class="status-button status-tool" type="button" aria-pressed="false" aria-controls="main-tabs" title="Terminal (⌃`)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="m7 9.5 3 2.5-3 2.5M12.5 15h4"/></svg>Terminal</button>
+          <button id="status-run" class="status-button status-tool" type="button" aria-pressed="false" aria-controls="sidebar-run" title="Run your dev servers, tests and scripts"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>Run<span id="status-run-state" class="status-run-state" hidden></span></button>
           <button id="status-cli" class="status-button status-tool" type="button" aria-pressed="false" aria-controls="cli-view" title="CLI: this conversation in the codeshi command, in a tab. Same agent, same runs." hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7.5 4.5 4.5L5 16.5M12 17h7"/></svg>CLI</button>
           <button id="connect-phone" class="status-button" type="button" title="Remote access from your phone or tablet, on the same Wi-Fi or away from home"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10 5h4M11 18.5h2"/></svg><span id="connect-phone-label">Remote access</span><span id="connect-phone-count" class="phone-pending-count" hidden></span></button>
           <button id="status-watch" class="status-button status-watch" type="button" popovertarget="status-watch-menu" aria-haspopup="menu" title="Share this conversation live with a teammate, or watch theirs"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M8.2 15.8a5.4 5.4 0 0 1 0-7.6M15.8 8.2a5.4 5.4 0 0 1 0 7.6M5.3 18.7a9.5 9.5 0 0 1 0-13.4M18.7 5.3a9.5 9.5 0 0 1 0 13.4"/></svg><span id="status-watch-label">Share live</span><span id="status-watch-count" class="phone-pending-count" hidden></span></button>
@@ -685,6 +692,12 @@
       <header class="panel-dialog-head"><div><h2 id="brief-dialog-title">What the next agent is told</h2><p class="panel-muted">In the order it gets them, worked out just now from the saved conversation and the files as they are.</p></div><button id="brief-dialog-close" class="icon-button" type="button" aria-label="Close"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></header>
       <div id="brief-dialog-body" class="panel-dialog-body brief-dialog-body"></div>
       <footer class="panel-dialog-foot"><button id="brief-copy" class="text-link" type="button">Copy as JSON</button></footer>
+    </dialog>
+
+    <dialog id="results-dialog" class="panel-dialog results-dialog" aria-labelledby="results-dialog-title">
+      <header class="panel-dialog-head"><div><h2 id="results-dialog-title">Smart results <span data-experimental-mark></span></h2><p class="panel-muted">What Smart, Saver and Ultra routing saved, worked out from your own tasks on this computer.</p></div><button id="results-dialog-close" class="icon-button" type="button" aria-label="Close"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></header>
+      <div id="results-dialog-body" class="panel-dialog-body results-body"></div>
+      <footer class="panel-dialog-foot"><button id="results-dialog-done" class="secondary-button" type="button">Close</button></footer>
     </dialog>
 
     <dialog id="limits-dialog" class="panel-dialog" aria-labelledby="limits-dialog-title">

@@ -3,6 +3,7 @@ import { planForBrief } from './task-plan.mjs';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isPrivatePath } from './collaboration-format.mjs';
 import { gitExecutable } from './resolve-binary.mjs';
 import { workspaceGit } from './workspace-git.mjs';
 import { commandOutcome } from './tool-outcomes.mjs';
@@ -17,9 +18,8 @@ import { fileNameWords } from './request-words.mjs';
 // the brief, marked as evidence, and is never moved up to where the person's own requests sit.
 const GIT_LIMIT_MS = 400, FILE_LIMIT = 40, INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md'], INSTRUCTION_BYTES = 12000, INSTRUCTION_TOTAL = 24000;
 const EXCERPT_LINES = 12, EXCERPT_FILES = 3, FAILED_LIMIT = 8;
-const PRIVATE_PART = /^(?:\.git|\.data|\.ai-relay|\.codex|\.claude|\.gemini|\.aws|\.ssh|\.gnupg|node_modules|\.env(?:\..*)?|credentials(?:\..*)?|secrets?(?:\..*)?|sessions?(?:\..*)?|auth(?:\.json)?|\.npmrc|\.netrc)$/i;
 // Same rule as Ask a Friend: credentials and runtime folders never reach a prompt through here.
-export const privatePath = relative => relative.split(/[\\/]/).some(part => PRIVATE_PART.test(part) || /\.(?:pem|key|p12|pfx|keystore)$/i.test(part));
+export const privatePath = isPrivatePath;
 const folderName = folder => folder.displayName || folder.name || path.basename(folder.path);
 const inside = (target, root) => target === root || target.startsWith(root + path.sep);
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');

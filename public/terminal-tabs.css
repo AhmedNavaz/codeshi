@@ -1,0 +1,8 @@
+/* Full-size terminal tabs; session views remain mounted while another tab is selected. */
+.terminal-workspace-tab { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel-bg); }
+.terminal-workspace-tab[hidden] { display: none; }
+.terminal-tab-tools { display: flex; flex-wrap: wrap; gap: 4px; flex: none; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.terminal-tab-tools .toolbar-button { font-size: 11px; }
+.terminal-restore { align-items: flex-start; justify-content: center; gap: 12px; padding: 24px; color: var(--muted); }
+.terminal-restore p { max-width: 48ch; }
+.terminal-workspace-tab .terminal-views { min-height: 0; }

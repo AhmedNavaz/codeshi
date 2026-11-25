@@ -175,6 +175,27 @@
       if (handed.shortenedMessages) metrics.push(`${handed.shortenedMessages} history excerpts`);
       if (handed.compactedActivityMessages) metrics.push(`${handed.compactedActivityMessages} tool logs excerpted by Codeshi`);
     }
+    if (!running) {
+      const checkLabel = { passed: 'Tests passed', failed: 'Tests failed', deferred: 'Tests wait for your review', running: 'Running tests…' }[run.check?.status];
+      if (checkLabel) metrics.push(run.check.command ? `${checkLabel} (${run.check.command})` : checkLabel);
+      const taskKey = run.taskId || run.id;
+      const taskRuns = (c.runs || []).filter(item => (item.taskId || item.id) === taskKey && item.endedAt);
+      if (taskRuns.length > 1) {
+        const freshTokens = u => ['input', 'output', 'cacheWrite'].some(k => typeof u?.[k] === 'number') ? (u.input || 0) + (u.output || 0) + (u.cacheWrite || 0) : null;
+        let totalMs = 0, timed = 0, tokens = 0, withTokens = 0;
+        for (const item of taskRuns) {
+          const ms = item.elapsedMs ?? (Date.parse(item.endedAt) - Date.parse(item.startedAt));
+          if (Number.isFinite(ms) && ms >= 0) { totalMs += ms; timed++; }
+          const n = freshTokens(item.usageMeasured);
+          if (n !== null) { tokens += n; withTokens++; }
+        }
+        const lastTest = [...taskRuns].reverse().find(item => item.check?.status)?.check?.status;
+        const taskCheck = c.taskResult?.tests || lastTest;
+        const testText = taskCheck === 'passed' ? 'tests passed' : taskCheck === 'failed' ? 'tests failed' : taskCheck === 'deferred' ? 'tests wait for your review' : '';
+        const tokenText = withTokens === 0 ? 'usage not reported' : withTokens < taskRuns.length ? `${tokens.toLocaleString()} new tokens (${withTokens} of ${taskRuns.length} runs reported)` : `${tokens.toLocaleString()} new tokens`;
+        metrics.push(`Task (${taskRuns.length} runs): ${[timed ? duration(totalMs) : '', tokenText, testText].filter(Boolean).join(' · ')}`);
+      }
+    }
     $('run-metrics').replaceChildren(...metrics.map(value => el('span', value, 'run-metric-item')));
     if (run.purpose === 'review') {
       if (!running && report?.status !== 'complete') $('run-phase').className = 'run-phase sr-only quiet';
@@ -217,7 +238,7 @@
     } else {
       if (!repo.commits.length) $('git-content').append(el('p', 'No commits yet. Your commits will appear here.', 'inspector-empty'));
       for (const commit of repo.commits) {
-        const row = el('article', undefined, 'commit-card'); row.append(el('h3', commit.subject), el('p', `${commit.author} · ${date(commit.date)}`));
+        const row = el('article', undefined, 'commit-card'), subject = action(commit.subject || commit.shortHash, () => openCommit(repo, commit), 'git-commit-subject'); subject.title = 'Show this commit’s changes'; row.append(subject, el('p', `${commit.author} · ${date(commit.date)}`));
         row.append(commit.url ? action(commit.shortHash + ' ↗', () => external(commit.url), 'commit-hash') : el('code', commit.shortHash, 'commit-hash')); $('git-content').append(row);
       }
     }
@@ -322,41 +343,147 @@
     catch (error) { if (request === gitRequest) $('git-content').replaceChildren(el('p', error.message, 'inspector-empty')); }
     finally { if (request === gitRequest) { gitBusy = false; $('refresh-git').disabled = false; $('refresh-git').setAttribute('aria-busy', 'false'); } }
   }
+  const sheetedGit = () => ['flow', 'plan'].includes(window.relayFlow?.view?.());
   function setGitPanel(open, remember = true) {
+    if (window.relaySidebar && !sheetedGit()) {
+      if (open) { window.relaySidebar.show('git'); loadGit(); }
+      else if (remember && window.relaySidebar.active?.() === 'git') window.relaySidebar.hide?.();
+      // Right-hand panels still call close() with remember = false. Git now belongs to the independent left sidebar.
+      return;
+    }
     $('git-panel').hidden = !open; $('open-git').setAttribute('aria-expanded', String(open));
     if (remember) try { localStorage.setItem('throughline:side-panel', open ? 'git' : 'none'); } catch { /* Panel state is a convenience. */ }
-    if (open) { window.relayReviews?.closePanel(); window.relayTimeline?.close(); window.relayAgents?.close(); window.relayBrief?.close(); window.relayTasks?.close(); loadGit(); }
+    if (open) { window.relayReviews?.closePanel(); window.relayTimeline?.close(); window.relayAgents?.close(); window.relayBrief?.close(); loadGit(); }
     window.dispatchEvent(new CustomEvent('relay-side-panel'));
   }
-  $('open-git').addEventListener('click', () => setGitPanel($('git-panel').hidden));
+  $('open-git').addEventListener('click', () => setGitPanel(window.relaySidebar && !sheetedGit() ? window.relaySidebar.active?.() !== 'git' : $('git-panel').hidden));
   // One side panel shows at a time, and docked layouts reopen the one last chosen (Agents at first). Narrow layouts
   // overlay it, so it starts closed there. Flow and the Plan have no side panel and show an open one as a sheet, so a
   // workspace opened in either reopens nothing.
   function wantsGitPanel() { let preference = null; try { preference = localStorage.getItem('throughline:side-panel'); } catch { /* Defaults apply. */ } return preference === 'git' && !['flow', 'plan'].includes(window.relayFlow?.view?.()) && Boolean(window.matchMedia?.('(min-width: 1101px)').matches); }
 
-  const diffDialog = $('diff-dialog'), statusNames = { added: 'Added', untracked: 'New file', deleted: 'Deleted', renamed: 'Renamed', modified: 'Modified' };
+  const diffDialog = $('diff-dialog'), statusNames = { added: 'Added', untracked: 'New file', deleted: 'Deleted', renamed: 'Renamed', copied: 'Copied', type: 'Type changed', modified: 'Modified' };
   let diffRequest = 0;
+  const diffTabs = new Map();
+  const diffKey = (projectId, id) => JSON.stringify([projectId, id]);
+  const diffId = source => `diff:${encodeURIComponent(source.folderId)}:${source.type === 'commit' ? 'commit:' + source.hash : 'file:' + encodeURIComponent(source.path)}`;
+  const diffTarget = () => ({ content: $('diff-content'), meta: $('diff-meta') });
+  function updateDiffTab(entry, state = '') {
+    if (entry.closed) return;
+    window.relayTabs.upsert({
+      id: entry.id, projectId: entry.projectId, kind: 'diff', title: entry.title,
+      element: entry.element, state, restore: entry.source,
+      onSelect: () => { if (!entry.loaded && !entry.loading) loadDiffTab(entry); },
+      onClose: () => { entry.closed = true; entry.request++; diffTabs.delete(diffKey(entry.projectId, entry.id)); },
+    });
+  }
+  function makeDiffTab(projectId, source) {
+    const id = diffId(source), key = diffKey(projectId, id);
+    if (diffTabs.has(key)) return diffTabs.get(key);
+    const element = el('section', undefined, 'git-diff-view'), header = el('header', undefined, 'git-diff-head'), heading = el('div');
+    const title = el('h2', source.type === 'commit' ? source.subject || source.shortHash || source.hash.slice(0, 7) : source.path);
+    const meta = el('p', '', 'git-diff-meta'), content = el('div', undefined, 'diff-content');
+    const entry = { id, projectId, source, element, meta, content, title: source.type === 'commit' ? source.shortHash || source.hash.slice(0, 7) : source.path.split('/').pop(), loaded: false, loading: false, closed: false, request: 0 };
+    heading.append(title, meta); header.append(heading);
+    const refresh = action('Refresh', () => loadDiffTab(entry), 'text-link'); refresh.title = 'Read these changes again'; header.append(refresh); element.append(header, content);
+    element.setAttribute('aria-label', source.type === 'commit' ? `Commit ${source.shortHash || source.hash}` : `Changes to ${source.path}`);
+    content.append(el('p', 'Loading changes…', 'inspector-empty'));
+    diffTabs.set(key, entry); updateDiffTab(entry);
+    return entry;
+  }
+  async function loadDiffTab(entry) {
+    if (entry.closed) return;
+    const request = ++entry.request, source = entry.source;
+    entry.loading = true; entry.element.setAttribute('aria-busy', 'true'); updateDiffTab(entry, 'running');
+    const query = source.type === 'commit'
+      ? `/api/checkpoints/commit?folderId=${encodeURIComponent(source.folderId)}&hash=${encodeURIComponent(source.hash)}`
+      : `/api/git/diff?folderId=${encodeURIComponent(source.folderId)}&path=${encodeURIComponent(source.path)}`;
+    try {
+      const result = await api.api(query, {}, entry.projectId);
+      if (entry.closed || request !== entry.request) return;
+      if (source.type === 'commit') renderCommitDiff(result, entry);
+      else {
+        const code = String(result.code || ''), kind = code === '??' ? 'untracked' : statusOf(code.trim()[0] || 'M');
+        entry.meta.replaceChildren(`${source.folderName} · ${statusNames[kind] || 'Modified'}${code && !' ?'.includes(code[0]) ? ' · staged' : ''}`);
+        renderDiff(result, entry);
+      }
+      entry.loaded = true; updateDiffTab(entry);
+    } catch (error) {
+      if (!entry.closed && request === entry.request) { entry.content.replaceChildren(el('p', error.message, 'inspector-empty')); entry.loaded = true; updateDiffTab(entry, 'failed'); }
+    } finally {
+      if (request === entry.request) { entry.loading = false; entry.element.removeAttribute('aria-busy'); }
+    }
+  }
+  function renderCommitDiff(commit, entry) {
+    const files = Array.isArray(commit.files) ? commit.files : [];
+    entry.meta.replaceChildren(`${entry.source.folderName} · ${commit.shortHash || entry.source.shortHash || entry.source.hash.slice(0, 7)} · ${commit.totalFiles || 0} changed file${commit.totalFiles === 1 ? '' : 's'}${commit.merge ? ' · compared with first parent' : ''}`);
+    const list = el('div', undefined, 'git-commit-diff');
+    if (commit.body) list.append(el('p', commit.body, 'git-commit-body'));
+    for (const file of files) {
+      const section = el('details', undefined, 'git-commit-file'), summary = el('summary'), meta = el('span', statusNames[file.status] || 'Modified', 'git-diff-meta'), content = el('div', undefined, 'diff-content');
+      summary.append(el('code', file.originalPath ? `${file.originalPath} → ${file.path}` : file.path), meta); section.append(summary, content); section.open = files.length === 1;
+      if (file.binary) content.append(el('p', 'Binary file. Its contents are not shown.', 'inspector-empty'));
+      else if (file.diff == null) content.append(el('p', 'These lines are not available in this preview.', 'inspector-empty'));
+      else renderDiff(file, { content, meta });
+      list.append(section);
+    }
+    if (!files.length) list.append(el('p', 'This commit changed no files in this folder.', 'inspector-empty'));
+    if (files.length < commit.totalFiles || commit.linesUnavailable) list.append(el('p', 'Only part of this commit is shown.', 'diff-truncated'));
+    entry.content.replaceChildren(list);
+  }
+  const useDiffTabs = () => Boolean(window.relayTabs && !sheetedGit());
+  function openCommit(repo, commit) {
+    if (!window.relayTabs) return;
+    const projectId = api.getState().projectId;
+    if (!projectId || !repo.folderId || !commit.hash) return;
+    const entry = makeDiffTab(projectId, { type: 'commit', folderId: repo.folderId, folderName: repo.name, hash: commit.hash, shortHash: commit.shortHash, subject: commit.subject });
+    window.relayTabs.select(entry.id); if (!entry.loading) loadDiffTab(entry);
+  }
   function showDiff(folder, result, status) {
-    diffRequest++;
     const code = String(result.code || ''), kind = status || (code === '??' ? 'untracked' : statusOf(code.trim()[0] || 'M')), staged = Boolean(code && !' ?'.includes(code[0]));
+    if (useDiffTabs()) {
+      const projectId = api.getState().projectId, folderId = result.folderId || folder.id || folder.folderId;
+      if (!projectId || !folderId) return;
+      const entry = makeDiffTab(projectId, { type: 'file', folderId, folderName: folder.displayName || folder.name, path: result.path });
+      entry.request++; entry.loading = false; entry.loaded = true; entry.element.removeAttribute('aria-busy');
+      entry.meta.replaceChildren(`${entry.source.folderName} · ${statusNames[kind] || 'Modified'}${staged ? ' · staged' : ''}`);
+      renderDiff(result, entry); updateDiffTab(entry); window.relayTabs.select(entry.id); return;
+    }
+    diffRequest++;
     $('diff-title').textContent = result.path;
     $('diff-meta').replaceChildren(`${folder.displayName || folder.name} · ${statusNames[kind] || 'Modified'}${staged ? ' · staged' : ''}`);
     if (!diffDialog.open) diffDialog.showModal();
     renderDiff(result);
   }
   async function openDiff(repo, file, status) {
-    const projectId = api.getState().projectId, request = ++diffRequest;
+    const projectId = api.getState().projectId;
+    if (useDiffTabs()) {
+      if (!projectId || !repo.folderId) return;
+      const entry = makeDiffTab(projectId, { type: 'file', folderId: repo.folderId, folderName: repo.name, path: file.path });
+      window.relayTabs.select(entry.id); if (!entry.loading) await loadDiffTab(entry); return;
+    }
+    const request = ++diffRequest;
     $('diff-title').textContent = file.path; $('diff-meta').replaceChildren(`${repo.name} · ${statusNames[status]}${file.staged ? ' · staged' : ''}`);
     $('diff-content').replaceChildren(el('p', 'Loading changes…', 'inspector-empty'));
     if (!diffDialog.open) diffDialog.showModal();
-    try { const result = await api.api(`/api/git/diff?folderId=${encodeURIComponent(repo.folderId)}&path=${encodeURIComponent(file.path)}`, {}, projectId); if (request === diffRequest) renderDiff(result); }
-    catch (error) { if (request === diffRequest) $('diff-content').replaceChildren(el('p', error.message, 'inspector-empty')); }
+    try { const result = await api.api(`/api/git/diff?folderId=${encodeURIComponent(repo.folderId)}&path=${encodeURIComponent(file.path)}`, {}, projectId); if (request === diffRequest && projectId === api.getState().projectId) renderDiff(result); }
+    catch (error) { if (request === diffRequest && projectId === api.getState().projectId) $('diff-content').replaceChildren(el('p', error.message, 'inspector-empty')); }
+  }
+  function restoreDiffTabs(projectId) {
+    if (!projectId || !window.relayTabs) return;
+    const folders = api.getState().projects?.find(project => project.id === projectId)?.folders || [];
+    for (const saved of window.relayTabs.getSaved(projectId, 'diff') || []) {
+      const source = saved.restore;
+      if (!source || !folders.some(folder => folder.id === source.folderId)) continue;
+      if (source.type === 'commit' ? typeof source.hash !== 'string' || !/^[a-f0-9]{7,64}$/i.test(source.hash) : source.type !== 'file' || typeof source.path !== 'string' || !source.path) continue;
+      makeDiffTab(projectId, source);
+    }
   }
   // The pull request dialog reads the folder shown here and hands back Git activity after it pushes.
   const updateGit = (data, projectId) => { if (data && api.getState().projectId === projectId) { gitData = data; if (commitOutcome?.kind === 'done') commitOutcome = null; renderGit(); nextSteps(); } };
-  window.relayGit = { open: () => setGitPanel(true), close: () => { if (!$('git-panel').hidden) setGitPanel(false, false); }, openDiff, showDiff, update: updateGit, refresh: loadGit };
+  window.relayGit = { open: () => setGitPanel(true), close: () => { if (!$('git-panel').hidden) setGitPanel(false, false); }, openDiff, showDiff, openCommit, update: updateGit, refresh: loadGit };
   // A changed image shows as pictures: before and after side by side, or the one side an added or deleted image has.
-  function renderImages(images) {
+  function renderImages(images, target = diffTarget()) {
     const view = el('div', undefined, 'diff-images'), size = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
     for (const [key, label] of [['before', images.after ? 'Before' : 'Deleted'], ['after', images.before ? 'After' : 'Added']]) {
       const side = images[key];
@@ -369,14 +496,14 @@
       } else frame.append(el('p', side.tooLarge ? 'Too large to preview.' : 'This file is not a readable image.', 'inspector-empty'));
       caption.append(el('span', label, 'diff-image-label'), facts); figure.append(frame, caption); view.append(figure);
     }
-    $('diff-content').replaceChildren(view);
+    target.content.replaceChildren(view);
   }
-  function renderDiff(result) {
-    if (result.images) { renderImages(result.images); return; }
+  function renderDiff(result, target = diffTarget()) {
+    if (result.images) { renderImages(result.images, target); return; }
     const lines = el('div', undefined, 'diff-lines'), maxRows = 5000;
     let oldLine = 0, newLine = 0, added = 0, removed = 0, rows = 0, inHunk = false;
     const row = (kind, before, after, text) => { const line = el('div', undefined, 'diff-line ' + kind); line.append(el('span', String(before), 'diff-number'), el('span', String(after), 'diff-number'), el('span', kind === 'add' ? '+' : kind === 'del' ? '-' : '', 'diff-sign'), el('span', text, 'diff-text')); lines.append(line); rows++; };
-    for (const line of result.diff.split('\n')) {
+    for (const line of String(result.diff || '').split('\n')) {
       if (line.startsWith('diff --git')) { inHunk = false; continue; }
       const hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
       if (hunk) { inHunk = true; oldLine = Number(hunk[1]); newLine = Number(hunk[2]); if (rows < maxRows) row('hunk', '', '', line); continue; }
@@ -386,9 +513,9 @@
       else if (line.startsWith(' ')) { if (rows < maxRows) row('context', oldLine, newLine, line.slice(1)); oldLine++; newLine++; }
       else if (line.startsWith('\\') && rows < maxRows) row('note', '', '', line.slice(2));
     }
-    if (added || removed) $('diff-meta').append(el('span', ` +${added}`, 'diff-added'), el('span', ` -${removed}`, 'diff-removed'));
-    if (!rows) $('diff-content').replaceChildren(el('p', result.directory ? 'This is a new folder. Add its files to Git to review them individually.' : 'No line changes to show. Only file metadata changed.', 'inspector-empty'));
-    else { $('diff-content').replaceChildren(lines); if (result.truncated || rows >= maxRows) $('diff-content').append(el('p', 'This change is large. Only the first part is shown.', 'diff-truncated')); }
+    if (added || removed) target.meta.append(el('span', ` +${added}`, 'diff-added'), el('span', ` -${removed}`, 'diff-removed'));
+    if (!rows) target.content.replaceChildren(el('p', result.directory ? 'This is a new folder. Add its files to Git to review them individually.' : 'No line changes to show. Only file metadata changed.', 'inspector-empty'));
+    else { target.content.replaceChildren(lines); if (result.truncated || rows >= maxRows) target.content.append(el('p', 'This change is large. Only the first part is shown.', 'diff-truncated')); }
   }
   $('close-diff').addEventListener('click', () => diffDialog.close());
 
@@ -560,7 +687,8 @@
       if (!state.projectId) { $('git-panel').hidden = true; $('open-git').setAttribute('aria-expanded', 'false'); }
       else if (!$('git-panel').hidden) loadGit();
       else if (wantsGitPanel()) setGitPanel(true, false);
-      if (diffDialog.open) { diffRequest++; diffDialog.close(); }
+      if (diffDialog?.open) { diffRequest++; diffDialog.close(); }
+      restoreDiffTabs(state.projectId);
     }
     const completed = state.conversation?.lastRun;
     const key = completed?.status === 'complete' && completed.purpose !== 'review' ? nextStepsKey() : null;
@@ -568,6 +696,7 @@
     nextSteps();
   }
   window.addEventListener('relay-state', render);
+  window.addEventListener('relay-sidebar', event => { if (event.detail?.view === 'git' || event.detail?.tool === 'git') loadGit(); });
   window.addEventListener('relay-account', event => { const provider = event.detail?.provider || api.getState().provider; delete catalog[provider]; delete attemptedModels[provider]; modelSignature = ''; modelControls(); });
   setInterval(() => { if (!document.hidden) progress(); }, 1000);
   setInterval(() => { if (!document.hidden && !$('git-panel').hidden && !gitBusy && !gitWriting && gitScope === api.getState().projectId) loadGit(); }, 15000);

@@ -741,6 +741,7 @@ export class TaskCoordinator {
     const lane = this.lanes.get(task.id), { text, attachments, requestId, folderPath, commonDir, repoRoot, preparationSource, workspaceFolders, resolve, integration, ...shown } = task;
     const active = lane?.c?.activeRun;
     const runningProvider = (lane?.broker?.running && active?.provider) || (task.status === "running" && (active?.provider || lane?.c?.provider || task.provider)) || null;
+    const pending = lane ? [...lane.broker.conversations.values()].flatMap(item => lane.broker.pendingApprovals(item)) : [];
     // The page gets each saved file without its diff, and not the names kept past those (integrate).
     const { rest, ...merged } = integration || {};
     const publicIntegration = integration ? {
@@ -757,8 +758,10 @@ export class TaskCoordinator {
       runningEffort: (runningProvider && active?.effort) || null,
       runningPhase: active?.phase || null,
       runningStep: active?.plan?.steps?.find(s => s.status === "active")?.text || null,
+      runningStartedAt: active?.startedAt || null,
       usage: this.usageOf(task, lane),
-      approvals: lane?.broker.pendingCount() || 0,
+      approvals: pending.length,
+      questions: pending.filter(item => item.kind === 'question').length,
       testing: this.checking.has(task.id),
       hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status)
     };
