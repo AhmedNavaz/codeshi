@@ -398,7 +398,9 @@ test('in a split, the review reads every merged part in its own copy, a repair s
   // copy begins with every part as merged, and what it changes merges back as a change to the part's file.
   const repair = await until(() => { const task = c.parallelTasks.find(item => item.splitRepair); return task?.scopePath && sent(task).length ? task : null; }, 'the repair to start');
   assert.deepEqual([repair.carried, read(repair.scopePath, 'src/redirect.js'), read(repair.scopePath, 'README.md')], [{ from: head, files: 3 }, 'export const next = url => url;\n', '# Project\n\nReports export to CSV.\n']);
-  assert.deepEqual(execFileSync('git', ['diff', '--name-status', repair.base], { cwd: repair.scopePath, encoding: 'utf8' }), 'M\tsrc/export.js\n', 'Against what it began with, it changed the part’s file, where it once added a second one beside the folder’s.');
+  // The mock records its prompt before it writes its change, so wait for the change to land (a slow runner can be behind).
+  const changed = await until(() => { const out = execFileSync('git', ['diff', '--name-status', repair.base], { cwd: repair.scopePath, encoding: 'utf8' }); return out.trim() ? out : null; }, 'the repair to change its file');
+  assert.equal(changed, 'M\tsrc/export.js\n', 'Against what it began with, it changed the part’s file, where it once added a second one beside the folder’s.');
   // The first review's run has ended, so its copy can hold the second one.
   fs.rmSync(path.join(review.scopePath, '.release'));
   fs.writeFileSync(path.join(repair.scopePath, '.release'), '');
