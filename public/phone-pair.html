@@ -21,7 +21,8 @@
     </div>
     <form id="phone-pair-form">
       <label>Device name<input id="phone-name" maxlength="60" autocomplete="off" value="My phone" required></label>
-      <label>Pairing code<input id="phone-code" inputmode="numeric" autocomplete="one-time-code" placeholder="8-digit code" required></label>
+      <button type="button" id="phone-pair-paste" class="secondary">Paste from your other browser</button>
+      <label>Pairing code<input id="phone-code" autocomplete="one-time-code" placeholder="8-digit code" required></label>
       <button type="submit">Connect</button>
     </form>
     <section id="phone-pair-wait" hidden>

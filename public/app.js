@@ -30,7 +30,14 @@
     projects: [], projectId: null, projectVersion: 0, projectsLoaded: false, projectSaving: false,
     projectListSignature: "", events: null, pollTimer: null,
     projectsRequestVersion: 0, projectsTimer: null, removingProjectId: null,
+    // Workspaces shown in the other Codeshi windows (#203).
+    windowsElsewhere: [],
   };
+  window.relayDesktop?.onWindowsChanged?.(({ elsewhere } = {}) => {
+    const next = Array.isArray(elsewhere) ? elsewhere.filter(id => typeof id === "string") : [];
+    if (JSON.stringify(next) === JSON.stringify(state.windowsElsewhere)) return;
+    state.windowsElsewhere = next; renderWorkspaceList();
+  });
 
   function storageKey(key) {
     const workspace = state.status?.workspace;
@@ -48,8 +55,18 @@
   function storedWrite(key, value) {
     try { localStorage.setItem(storageKey(key), value); } catch { /* The app also works without browser storage. */ }
   }
-  function activeProjectRead() { try { return localStorage.getItem("ai-relay:active-project"); } catch { return null; } }
-  function activeProjectWrite(id) { try { localStorage.setItem("ai-relay:active-project", id); } catch { /* Browser storage is optional. */ } }
+  // A workspace window (#203) names its workspace in its address and keeps it there, so a reload shows the same one and
+  // the main window's remembered workspace stays the main window's.
+  const addressWorkspace = () => { try { return new URLSearchParams(globalThis.location?.search || "").get("workspace"); } catch { return null; } };
+  const workspaceWindow = addressWorkspace() !== null;
+  function activeProjectRead() {
+    if (workspaceWindow) return addressWorkspace() || null;
+    try { return localStorage.getItem("ai-relay:active-project"); } catch { return null; }
+  }
+  function activeProjectWrite(id) {
+    if (workspaceWindow) { try { history.replaceState(history.state, "", "?workspace=" + encodeURIComponent(id || "")); } catch { /* The address is a convenience. */ } return; }
+    try { localStorage.setItem("ai-relay:active-project", id); } catch { /* Browser storage is optional. */ }
+  }
   function draftKey(id = state.conversation?.id) { return state.taskDraft && id !== null ? `ai-relay:draft:task:${state.taskDraft.folderId}` : `ai-relay:draft:${id || "new"}`; }
   function saveDraft() { if (state.status && state.ready && !state.loading) storedWrite(draftKey(), ui.input.value); }
   function restoreDraft() { ui.input.value = storedRead(draftKey()) || ""; resizeInput(); }
@@ -294,10 +311,25 @@
     try { localStorage.setItem('ai-relay:folder:' + projectId, folderId); } catch { /* Folder choice is a convenience. */ }
     renderWorkspaceList(); window.dispatchEvent(new CustomEvent("relay-state"));
   }
+  // A workspace in a window of its own (#203), in the desktop app. Answers whether it was asked.
+  function openInWindow(id) {
+    if (!window.relayDesktop?.openWorkspaceWindow) return false;
+    window.relayDesktop.openWorkspaceWindow(id).catch(error => showNotice(error.message));
+    return true;
+  }
+  async function workspaceContextMenu(id) {
+    let choice = null;
+    const lanes = window.relayLanes, pin = id === state.projectId || !lanes ? null : lanes.has(id) ? 'pinned' : lanes.canPin(id) ? 'can' : null;
+    try { choice = await window.relayDesktop.workspaceMenu(id, { pin }); } catch { return; }
+    if (choice === 'pin') lanes?.pin(id);
+    else if (choice === 'unpin') lanes?.unpin(id);
+    else if (choice === 'window') openInWindow(id);
+    else if (choice === 'settings') openWorkspaceOptions(id);
+  }
   function filteredProjects() { return state.projects.filter(project => project.name.toLowerCase().includes(state.workspaceFilter.toLowerCase())); }
   function renderWorkspaceList() {
     const level = sidebarLevelFor();
-    const signature = JSON.stringify([state.projects,state.projectId,projectBusy(),state.loading,state.status?.runningConversationId,state.workspaceFilter,selectedFolderId(),state.conversation?.pendingApprovals?.length,level]);
+    const signature = JSON.stringify([state.projects,state.projectId,projectBusy(),state.loading,state.status?.runningConversationId,state.workspaceFilter,selectedFolderId(),state.conversation?.pendingApprovals?.length,level,state.windowsElsewhere,window.relayLanes?.ids?.() || []]);
     if (signature === state.listSignature) return;
     renderFolderSettings();
     state.listSignature = signature; ui.workspaceList.replaceChildren(); ui.workspaceCount.textContent = String(state.projects.length);
@@ -319,7 +351,20 @@
       if (doing) metaNode.append(element('span','workspace-meta-separator',' · '),element('span','workspace-meta-state',doing));
       button.append(heading,metaNode);
       if (waiting) { const badge = element('span','workspace-approval-badge',String(waiting)); badge.title = `${waiting} approval${waiting === 1 ? '' : 's'} waiting`; badge.setAttribute('aria-hidden','true'); heading.append(badge); }
-      button.addEventListener('click',()=>{ setSidebarLevel(project.id,'workspace'); selectProject(project.id); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); }); const row = element('div','workspace-row');
+      // Open in another Codeshi window (#203): a click brings that window forward.
+      const elsewhere = !active && state.windowsElsewhere.includes(project.id);
+      if (elsewhere) { const mark = element('span','workspace-window-mark'); mark.title = 'Open in another window'; mark.setAttribute('aria-hidden','true'); heading.append(mark); button.setAttribute('aria-description','Open in another window'); }
+      // Pinned beside this workspace as a companion lane (#203): a click swaps it into the main view.
+      else if (!active && window.relayLanes?.has(project.id)) { const mark = element('span','workspace-lane-mark'); mark.title = 'Pinned beside this workspace'; mark.setAttribute('aria-hidden','true'); heading.append(mark); button.setAttribute('aria-description','Pinned beside this workspace'); }
+      if (window.relayDesktop?.openWorkspaceWindow) button.title = `${project.name}${elsewhere ? ' · open in another window' : active ? '' : ` · ${/Mac/.test(navigator.platform || '') ? '⌘' : 'Ctrl'}-click to open in a new window`}`;
+      button.addEventListener('click',(event)=>{
+        // ⌘-click (Ctrl-click) opens the workspace in a window of its own, as a link opens in a new tab.
+        if ((/Mac/.test(navigator.platform || '') ? event.metaKey : event.ctrlKey) && !active && openInWindow(project.id)) return;
+        setSidebarLevel(project.id,'workspace'); selectProject(project.id); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state'));
+      });
+      button.addEventListener('auxclick',(event)=>{ if (event.button === 1 && !active && openInWindow(project.id)) event.preventDefault(); });
+      button.addEventListener('contextmenu',(event)=>{ if (!window.relayDesktop?.workspaceMenu || projectBusy()) return; event.preventDefault(); workspaceContextMenu(project.id); });
+      const row = element('div','workspace-row');
       const options = element('button','workspace-options'); options.type = 'button'; options.disabled = projectBusy(); options.dataset.projectId = project.id;
       options.setAttribute('aria-label','Workspace options for ' + project.name); options.title = 'Workspace settings'; options.addEventListener('click',()=>openWorkspaceOptions(project.id));
       row.append(button,options); group.append(row);
@@ -1151,7 +1196,7 @@
     }
     return replyPlans.get(key);
   }
-  function renderMessage(message, finalAnswer = false) {
+  function renderMessage(message, finalAnswer = false, turnCheckpoint = null) {
     if (message.rewoundMarker) {
       const { id, count, shown } = message.rewoundMarker, line = element("div", "messages-rewound");
       line.setAttribute("role", "note");
@@ -1257,6 +1302,10 @@
         setTimeout(() => node.classList.remove("activity-highlight"), 2000);
       });
       actions.append(jumpRun);
+    }
+    if (user && !message.steer && !message.rewound && !state.taskId && turnCheckpoint?.files) {
+      const undo = window.relayRewind?.button?.({ runId: turnCheckpoint.runId, beforeRunId: turnCheckpoint.beforeRunId, undone: turnCheckpoint.undone, files: turnCheckpoint.files, disabled: state.conversation?.status === "running" });
+      if (undo) actions.append(undo);
     }
     if (message.text) {
       const copy = copyButton("message-copy", "Copy message", message.text);
@@ -1423,10 +1472,8 @@
     messages.forEach((message, index) => { if (message.role === "user" && !message.steer && !isContinuationPrompt(message)) starts.push(index); });
     const segments = starts[0] > 0 || (!starts.length && messages.length) ? [{ from: 0, to: starts[0] ?? messages.length, loose: true }] : [];
     starts.forEach((from, index) => segments.push({ from, to: starts[index + 1] ?? messages.length }));
-    const lastSegmentOfRun = new Map();
-    segments.forEach((segment, index) => { for (let at = segment.from; at < segment.to; at++) if (messages[at].runId) lastSegmentOfRun.set(messages[at].runId, index); });
     // What a message's drawing reads besides the message itself.
-    const messageExtra = message => {
+    const messageExtra = (message, turnCheckpoint = null) => {
       let extra = "";
       if (message.role === "assistant") extra += `|final-copy:${finalAnswers.has(message)}`;
       if (message.reviewId) { const review = c?.reviews?.find(item => item.id === message.reviewId); extra += JSON.stringify([Boolean(review), review?.summary]); }
@@ -1434,6 +1481,7 @@
       // A reply written as a draft plan redraws once its cards are on the Plan, and when the chat moves into a task.
       else if (message.role === "assistant" && replyPlan(message)) extra += `|reply-plan:${Boolean(c?.orchestrations?.some(item => item.fromMessage === message.id && item.status === "moved"))}:${Boolean(state.taskId)}`;
       if (message.routing) extra += (window.relayModelPicker?.modelName?.(message.provider, message.routing.model) || "") + (window.relayRouting?.modeNames?.[message.routing.mode] || "");
+      if (message.role === "user" && !message.steer && !message.rewound && !state.taskId && turnCheckpoint?.files) extra += `|undo:${turnCheckpoint.runId}:${turnCheckpoint.beforeRunId || ""}:${turnCheckpoint.files}:${turnCheckpoint.undone || ""}:${running}:${Boolean(window.relayRewind)}`;
       if (message.attachments?.length && window.relayFiles) extra += "attachments";
       if (!message.provider) extra += c?.provider || "";
       return extra;
@@ -1452,9 +1500,15 @@
       const last = segmentIndex === segments.length - 1, first = messages[segment.from];
       const turnKey = segment.loose ? "loose" : String(first.id || segment.from), saved = drawn.turns.get(turnKey);
       const runIds = new Set(), extras = [];
-      for (let at = segment.from; at < segment.to; at++) { const message = messages[at]; if (message.runId) runIds.add(message.runId); const extra = messageExtra(message); if (extra) extras.push(extra); }
-      const rows = [...runIds].filter(id => lastSegmentOfRun.get(id) === segmentIndex && c?.checkpoints?.[id]?.files).map(id => [id, c.checkpoints[id].files, c.checkpoints[id].undone || null]);
-      const extra = JSON.stringify([last, extras, rows, rows.length ? [running, c?.activeRun?.id, Boolean(window.relayRewind)] : null, shownRun && runIds.has(shownRun.id) ? [shownRun.id, shownRun.provider, shownRun.effectiveModel, shownRun.model, shownRun.effectiveEffort, shownRun.effort, liveRun?.id] : null]);
+      for (let at = segment.from; at < segment.to; at++) { const message = messages[at]; if (message.runId) runIds.add(message.runId); }
+      const activeRunId = running ? c?.activeRun?.id : null;
+      let turnCheckpoint = null;
+      if (!segment.loose && !state.taskId && first?.role === "user" && !first.steer && !first.rewound) {
+        const pick = first.runId && first.runId !== activeRunId && c?.checkpoints?.[first.runId]?.files ? first.runId : [...runIds].findLast(id => id !== activeRunId && c?.checkpoints?.[id]?.files);
+        if (pick) { const cp = c.checkpoints[pick]; turnCheckpoint = { runId: pick, beforeRunId: cp.beforeRunId || pick, files: cp.files, undone: cp.undone || null }; }
+      }
+      for (let at = segment.from; at < segment.to; at++) { const extra = messageExtra(messages[at], at === segment.from ? turnCheckpoint : null); if (extra) extras.push(extra); }
+      const extra = JSON.stringify([last, extras, shownRun && runIds.has(shownRun.id) ? [shownRun.id, shownRun.provider, shownRun.effectiveModel, shownRun.model, shownRun.effectiveEffort, shownRun.effort, liveRun?.id] : null]);
       const count = segment.to - segment.from;
       if (saved && !last && !segment.loose && saved.extra === extra && saved.messages.length === count && saved.messages.every((message, index) => message === messages[segment.from + index])) {
         turns.set(turnKey, saved); rootKids.push(saved.node);
@@ -1465,10 +1519,10 @@
       if (turnNode) rootKids.push(turnNode);
       let thread = null, ordinal = 0;
       const place = node => kids.push(node);
-      const messageNode = (message, index) => {
-        const key = "message:" + (message.id || index), extra = messageExtra(message), kept = oldNodes.get(key);
+      const messageNode = (message, index, checkpoint = null) => {
+        const key = "message:" + (message.id || index), extra = messageExtra(message, checkpoint), kept = oldNodes.get(key);
         if (kept?.message === message && kept.extra === extra) { nodes.set(key, kept); return kept.node; }
-        const node = renderMessage(message, finalAnswers.has(message));
+        const node = renderMessage(message, finalAnswers.has(message), checkpoint);
         if (message.rewound) node.classList.add("message-rewound");
         nodes.set(key, { message, extra, node });
         return node;
@@ -1532,7 +1586,7 @@
         if (isContinuationPrompt(message)) continue;
         if (message.role === "user" && !message.steer) {
           thread = null;
-          place(messageNode(message, index));
+          place(messageNode(message, index, index === segment.from ? turnCheckpoint : null));
           continue;
         }
         if (message.role !== "activity") {
@@ -1576,13 +1630,6 @@
           if (!host && liveRun) host = thread && !shownRun.id ? thread : openThread(shownRun.id || "", shownRun.provider || c?.provider || "codex", shownRun.connection, null, shownRun);
         }
         if (host) host.kids.push(progress); else if (footer.firstElementChild !== progress) footer.prepend(progress);
-      }
-      // A run that changed files ends with its checkpoint line, after its status line (#20).
-      for (const item of new Map(threads.filter(entry => entry.key && lastSegmentOfRun.get(entry.key) === segmentIndex).map(entry => [entry.key, entry])).values()) {
-        const key = "rewind:" + item.key, checkpoint = c?.checkpoints?.[item.key], inputs = JSON.stringify([checkpoint?.files, checkpoint?.undone, running, c?.activeRun?.id, Boolean(window.relayRewind)]), kept = oldNodes.get(key);
-        const line = kept?.inputs === inputs ? kept.line : window.relayRewind?.row(item.key);
-        nodes.set(key, { inputs, line });
-        if (line) item.kids.push(line);
       }
       for (const item of threads) { syncChildren(item.body, item.kids); syncChildren(item.node, [item.heading, item.body]); }
       if (last) footerHost = kids;
@@ -1696,25 +1743,43 @@
     state.pending = null; renderControls();
   }
   // Auto (#12): Codeshi picks the agent, model and effort for each message when it is sent.
-  const autoRouting = () => !state.localSelections[state.projectId] && state.conversation?.routing ? state.conversation.routing : null;
+  const autoRouting = (projectId = state.projectId, conversation = state.conversation) => !state.localSelections[projectId] && conversation?.routing ? conversation.routing : null;
   // With a mode given, says what that mode would do with the text before it is chosen (Flow mode, #107). Orchestrate (#12)
   // asks the same rules who plans (plan: a read-only run) and who does each step (tier: as planned; only: the agent the
-  // person chose for that step).
-  function routeFor(text, attachments = 0, mode = null, { plan = false, tier = null, only = null } = {}) {
-    const routing = autoRouting(); if ((!routing && !mode) || !window.relayRouting) return null;
-    const project = state.projects.find(item => item.id === state.projectId);
+  // person chose for that step). `scope` routes for another workspace's chat instead, as a companion lane sends (#203).
+  function routeFor(text, attachments = 0, mode = null, { plan = false, tier = null, only = null, scope = null } = {}) {
+    const projectId = scope ? scope.projectId : state.projectId, c = scope ? scope.conversation : state.conversation;
+    const routing = autoRouting(projectId, c); if ((!routing && !mode) || !window.relayRouting) return null;
+    const project = state.projects.find(item => item.id === projectId), access = scope ? c?.mode || "edit" : state.mode;
     const candidates = ["codex", "claude", "gemini"].filter(provider => !only || provider === only).map(provider => {
       const info = connection(provider);
       const antigravity = info.account?.authMode === "google-oauth" || info.account?.source === "antigravity-acp";
-      const folderCount = state.taskId || state.taskDraft ? 1 : foldersFor(project).length;
-      const unsupportedRead = (state.mode === "read" || plan) && (antigravity || info.account?.capabilities?.readOnly === "unavailable");
+      const folderCount = !scope && (state.taskId || state.taskDraft) ? 1 : foldersFor(project).length;
+      const unsupportedRead = (access === "read" || plan) && (antigravity || info.account?.capabilities?.readOnly === "unavailable");
       const unsupportedFolders = antigravity ? folderCount > 1 && info.account?.capabilities?.additionalDirectories !== true : folderCount > 6;
       const unsupported = provider === "gemini" && (unsupportedRead || unsupportedFolders);
-      return { provider, eligible: !info.blocked && info.account?.authenticated !== false && !unsupported && (!state.conversation?.taskPolicy?.allowedProviders || state.conversation.taskPolicy.allowedProviders.includes(provider)), billingSource: info.account?.billingSource || "unknown", usage: window.relayUsage?.snapshot?.(provider), allowedModels: state.conversation?.taskPolicy?.allowedModels?.[provider] || null, models: window.relayModelPicker?.models?.(provider) || [] };
+      return { provider, eligible: !info.blocked && info.account?.authenticated !== false && !unsupported && (!c?.taskPolicy?.allowedProviders || c.taskPolicy.allowedProviders.includes(provider)), billingSource: info.account?.billingSource || "unknown", usage: window.relayUsage?.snapshot?.(provider), allowedModels: c?.taskPolicy?.allowedModels?.[provider] || null, models: window.relayModelPicker?.models?.(provider) || [] };
     });
-    const previousRequest = state.conversation?.messages?.findLast(message => message.role === 'user' && !message.reviewId && !message.steer && !isContinuationPrompt(message))?.text || state.conversation?.context?.goal || '';
-    const options = { text, attachments, context: previousRequest, mode: mode || routing.mode, allowApi: routing?.allowApi === true, candidates, current: state.conversation?.lastRun?.provider || state.provider, ...(tier ? { assessment: window.relayRouting.plannedStep(tier) } : {}) };
+    const previousRequest = c?.messages?.findLast(message => message.role === 'user' && !message.reviewId && !message.steer && !isContinuationPrompt(message))?.text || c?.context?.goal || '';
+    const options = { text, attachments, context: previousRequest, mode: mode || routing.mode, allowApi: routing?.allowApi === true, candidates, current: c?.lastRun?.provider || (scope ? c?.provider : state.provider), ...(tier ? { assessment: window.relayRouting.plannedStep(tier) } : {}) };
     return plan ? window.relayRouting.planner(options) : window.relayRouting.route(options);
+  }
+  // A message from a companion lane (#203) to another workspace's chat, with that chat's own agent, access and routing.
+  // It is sent, or queued while an agent works or waits for a limit. What needs the full view, such as a local model or
+  // choosing a folder, says so instead of guessing. The same request ID is sent again for a retry, so nothing runs twice.
+  async function sendTo(projectId, c, text, { requestId = crypto.randomUUID() } = {}) {
+    if (!c?.id || !state.projects.some(project => project.id === projectId)) throw Error("This workspace is no longer open.");
+    if (state.localSelections[projectId]) throw Object.assign(Error("This workspace uses a local model. Expand it to send."), { expand: true });
+    const routed = routeFor(text, 0, null, { scope: { projectId, conversation: c } });
+    if (routed?.error) throw Error(routed.error);
+    const provider = routed?.provider || c.provider, model = routed ? routed.model : c.model, effort = routed ? routed.effort : c.effort ?? null;
+    const routing = routed ? { mode: routed.mode, reason: routed.reason, tier: routed.tier, escalation: routed.escalation || null } : undefined;
+    const mode = c.mode || "edit", approvalPolicy = c.approvalPolicy || "ask", revision = c.executionRevision ?? 0;
+    const busy = c.status === "running" || Boolean(c.activeRun) || Boolean(c.resume);
+    if (!busy && oneFolderOnly(provider) && foldersFor(state.projects.find(project => project.id === projectId)).length > 1) throw Object.assign(Error(`${label(provider)} works in one folder here. Expand this workspace to choose one.`), { expand: true });
+    const billingConfirmed = window.relayBillingConfirmed === true;
+    if (busy) { await post(endpoint(c.id, "queue"), { executionRevision: revision, action: "add", text, provider, model: model || null, effort: effort || null, mode, approvalPolicy, attachments: [], billingConfirmed, ...(routing ? { routing } : {}) }, projectId); return { queued: true }; }
+    return post(endpoint(c.id, "messages"), { executionRevision: revision, text, attachments: [], provider, mode, approvalPolicy, requestId, model: model || undefined, effort: effort || null, routing, billingConfirmed }, projectId);
   }
   async function setRouting(choice) {
     if (!state.conversation) await ensureCanonicalConversation();
@@ -2755,12 +2820,23 @@
     finally { state.pending = null; render(); }
   }
 
-  async function selectProject(id) {
+  async function selectProject(id, { initial = false } = {}) {
     if (projectBusy() || !id || !state.projects.some((project) => project.id === id)) {
       ui.projectSelect.value = state.projectId || "";
       return;
     }
     if (id === state.projectId && state.ready) return;
+    // Each workspace shows in one window (#203): one open in another window comes forward there, and this one stays.
+    if (window.relayDesktop?.claimWorkspace) {
+      let answer = null;
+      try { answer = await window.relayDesktop.claimWorkspace({ projectId: id, initial }); } catch { /* An older desktop build: switch here. */ }
+      if (answer?.elsewhere) {
+        ui.projectSelect.value = state.projectId || "";
+        announce(`${state.projects.find(project => project.id === id)?.name || "That workspace"} is open in another window.`);
+        return;
+      }
+      if (projectBusy() || id === state.projectId && state.ready) return;
+    }
     saveDraft();
     state.taskId = null; state.taskDraft = null; state.draftCursor = null;
     closeWorkspaceMenu();
@@ -2808,15 +2884,20 @@
       state.taskId = null; state.taskDraft = null; state.draftCursor = null;
       state.projectId = null; state.status = null; state.conversation = null;
       state.ready = false; state.loading = false; state.refreshAgain = false;
-      ui.input.value = ''; activeProjectWrite('');
+      ui.input.value = ''; activeProjectWrite(''); window.relayDesktop?.claimWorkspace?.({ projectId: null, initial: true })?.catch?.(() => {});
       ui.projectPanel.hidden = true; ui.folderPanel.hidden = true;
       ui.addProject.setAttribute('aria-expanded','false');
       render(true);
     }
     if (choose && !state.projectId && state.projects.length) {
       const remembered = activeProjectRead();
-      const selected = state.projects.find((project) => project.id === remembered) || state.projects[0];
-      await selectProject(selected.id);
+      // Workspaces open in other windows (#203) are left to them, unless every one is. A workspace window shows its own.
+      let elsewhere = [];
+      if (window.relayDesktop?.workspacesElsewhere) { try { elsewhere = await window.relayDesktop.workspacesElsewhere() || []; } catch { /* Then any will do. */ } }
+      if (state.projectId || !state.projects.length) return;
+      const free = state.projects.filter(project => !elsewhere.includes(project.id)), named = state.projects.find(project => project.id === remembered);
+      const selected = (workspaceWindow ? named : free.find(project => project.id === remembered)) || free[0] || named || state.projects[0];
+      await selectProject(selected.id, { initial: true });
     }
   }
   function scheduleProjectsRefresh() {
@@ -2990,13 +3071,15 @@
       try { update = JSON.parse(event.data); } catch { return; }
       if (update.projectId === state.projectId) scheduleRefresh();
       else scheduleProjectsRefresh();
+      // Companion lanes (#203) follow the workspaces pinned beside this one.
+      if (update.projectId && update.projectId !== state.projectId) window.dispatchEvent(new CustomEvent("relay-project-update", { detail: { projectId: update.projectId } }));
     });
     state.events.addEventListener("projects", scheduleProjectsRefresh);
     state.events.addEventListener("watch", () => window.dispatchEvent(new CustomEvent("relay-watch")));
     // An alert with a sound to play (sounds.js), for any workspace.
     state.events.addEventListener("alert", (event) => { try { window.dispatchEvent(new CustomEvent("relay-alert", { detail: JSON.parse(event.data) })); } catch { /* A malformed alert plays nothing. */ } });
     state.events.addEventListener("error", () => { state.streamConnected = false; window.dispatchEvent(new CustomEvent("relay-state")); });
-    state.events.addEventListener("ready", () => { state.streamConnected = true; scheduleProjectsRefresh(); scheduleRefresh(); });
+    state.events.addEventListener("ready", () => { state.streamConnected = true; scheduleProjectsRefresh(); scheduleRefresh(); window.dispatchEvent(new CustomEvent("relay-project-update", { detail: { projectId: null } })); });
     state.events.addEventListener("open", () => { state.streamConnected = true; scheduleProjectsRefresh(); scheduleRefresh(); });
     // Recover from missed events and a sleeping browser tab.
     state.pollTimer = setInterval(() => { if (!document.hidden) { scheduleProjectsRefresh(); scheduleRefresh(); } }, 15000);
@@ -3027,7 +3110,7 @@
     { label: "Task limits…", run: () => window.relayLimits?.open?.() },
     { label: "Export task usage without prompts", run: () => window.relayLimits?.exportUsage?.() },
     { label: "Smart results", experimental: "smartResults", run: () => window.relaySmartResults?.open?.() },
-    { label: "New task beside this one", experimental: "tasks", run: () => window.relayTaskThreads?.open() },
+    { label: "New task beside this one", experimental: "tasks", workbench: true, run: () => window.relayTaskThreads?.open() },
     { label: "Timeline: review and restore checkpoints", run: () => window.relayTimeline?.open() },
     { label: "Git activity", run: () => { if (window.relayGit?.open) window.relayGit.open(); else if ($("git-panel").hidden) $("open-git").click(); } },
     { label: "Terminal", workbench: true, run: () => window.relayTerminal?.open() },
@@ -3069,7 +3152,11 @@
     const files = actionsOnly || commandFiles.query !== text ? [] : commandFiles.files.slice(0, 10).map(file => ({ group: "Files", label: file.path.split("/").pop(), detail: [state.projects.length > 1 ? file.projectName : "", file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : file.folderName].filter(Boolean).join(" · "), run: () => openFound(file) }));
     const actions = commandActions.filter(action => !action.workbench || !workbenchAway()).filter(action => !action.experimental || window.relayExperimental?.enabled(action.experimental) !== false).filter(action => !text || action.label.toLowerCase().includes(text)).filter(action => !action.id || ($(action.id) && !$(action.id).disabled && (action.id !== 'compact-context' || !$(action.id).hidden)))
       .map(action => ({ group: "Actions", label: action.label, detail: "", run: action.run || (() => $(action.id).click()) }));
-    return [...workspaces, ...files, ...actions];
+    // Companion lanes (#203): another workspace pinned beside this one, or unpinned. Listed once something is typed.
+    const lanes = window.relayLanes, laneActions = !lanes || !text ? [] : state.projects.filter(project => project.id !== state.projectId && (lanes.has(project.id) || lanes.canPin(project.id)))
+      .map(project => lanes.has(project.id) ? { label: `Unpin “${project.name}”`, run: () => lanes.unpin(project.id) } : { label: `Pin “${project.name}” beside this workspace`, run: () => lanes.pin(project.id) })
+      .filter(action => action.label.toLowerCase().includes(text) || "companion lane".includes(text)).slice(0, 6).map(action => ({ group: "Actions", detail: "", ...action }));
+    return [...workspaces, ...files, ...actions, ...laneActions];
   }
   function renderCommandResults(open) {
     // The search box is the combobox (#26): it says whether the list is open and which result the arrow keys are on.
@@ -3124,7 +3211,8 @@
     const waiting = project.id === state.projectId ? state.conversation?.pendingApprovals?.length || 0 : project.pendingApprovals || 0;
     if (project.available === false) return ["unavailable", "Folder not found"];
     if (waiting) return ["waiting", `${waiting} waiting for approval`];
-    return project.runningConversationId ? ["running", "Working"] : ["", ""];
+    if (project.runningConversationId) return ["running", "Working"];
+    return project.id !== state.projectId && state.windowsElsewhere.includes(project.id) ? ["elsewhere", "In another window"] : ["", ""];
   }
   function chooseWorkspace(id) {
     if (id !== state.projectId && workspaceMenuLeave && !workspaceMenuLeave()) return;
@@ -3140,7 +3228,11 @@
       const name = element("span", "workspace-switch-name", project.name), detail = element("span", `workspace-switch-state${kind ? " " + kind : ""}`, doing);
       name.setAttribute("aria-hidden", "true"); detail.setAttribute("aria-hidden", "true");
       item.append(name, detail);
-      item.addEventListener("click", () => chooseWorkspace(project.id));
+      item.addEventListener("click", (event) => {
+        // ⌘-click (Ctrl-click) opens it in a window of its own (#203).
+        if ((/Mac/.test(navigator.platform || "") ? event.metaKey : event.ctrlKey) && !current && openInWindow(project.id)) { workspaceMenu.hidePopover?.(); return; }
+        chooseWorkspace(project.id);
+      });
       return item;
     });
     const line = element("div", "workspace-switch-separator"); line.setAttribute("role", "separator");
@@ -3215,6 +3307,8 @@
     'compact-context': press('compact-context'),
     "open-approval": async target => {
       if (!target || typeof target.projectId !== "string" || !state.projects.some(project => project.id === target.projectId)) return false;
+      // A workspace chat's request in a companion lane (#203) is answered there, without leaving this workspace.
+      if (target.projectId !== state.projectId && !target.taskId && window.relayLanes?.reveal?.(target.projectId, target.approvalId)) return true;
       if (target.projectId !== state.projectId) await selectProject(target.projectId); else await refresh();
       // A task's approval, such as a scheduled run's (#132), is answered in that task.
       if (typeof target.taskId === "string" && window.relayTaskThreads) { await window.relayTaskThreads.select(target.taskId); await new Promise(resolve => requestAnimationFrame(resolve)); }
@@ -3222,7 +3316,7 @@
       if (card) { card.scrollIntoView?.({ behavior: "smooth", block: "center" }); card.focus?.(); card.classList.add("approval-highlight"); setTimeout(() => card.classList.remove("approval-highlight"), 2000); }
       return true;
     },
-    "open-workspace": id => { if (typeof id !== "string" || !state.projects.some(project => project.id === id)) return false; if (id !== state.projectId) selectProject(id); return true; },
+    "open-workspace": id => { if (typeof id !== "string" || !state.projects.some(project => project.id === id)) return false; if (id !== state.projectId && !window.relayLanes?.reveal?.(id)) selectProject(id); return true; },
     appearance: value => { if (!["system", "light", "dark", "graphite"].includes(value)) return false; window.relayTheme?.choose(value); return true; },
     "workspace-settings": () => { if (covered() || !state.projectId) return false; openWorkspaceOptions(state.projectId); return true; },
     "toggle-sidebar": () => !covered() && Boolean(window.relayLayout?.toggleSidebar()),
@@ -3392,7 +3486,7 @@
   window.addEventListener("beforeunload", saveDraft);
   window.relayUI = {
     jumpToRun, jumpToMessage, loadEarlierMessages, loadToRun, loadToMessage,
-    getState: () => state, describeActivity: parseActivity, api, post, refresh, renderControls, showNotice, selectProject, refreshAccounts, refreshProjects, announce, selectedFolderId: () => selectedFolderId(), selectFolder, highlightLines,
+    getState: () => state, describeActivity: parseActivity, api, post, refresh, sendTo, renderSidebar: () => renderWorkspaceList(), renderControls, showNotice, selectProject, refreshAccounts, refreshProjects, announce, selectedFolderId: () => selectedFolderId(), selectFolder, highlightLines,
     commands, isRunning, filteredProjects, openWorkspaceMenu, wireWorkspaceButton, setRouting, routeFor, planAgain: again => run(false, again), stopRun: () => stop(), showSidePanel, setTask, openTaskDraft, sidebarLevel: () => sidebarLevelFor(), showFolderLevel: () => { setSidebarLevel(state.projectId, 'folder'); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); },
     ensureConversation: ensureCanonicalConversation,
     // Sends text in the open conversation as if typed, such as an answer to a Plan card's questions (#162). A draft already

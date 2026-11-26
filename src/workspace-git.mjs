@@ -34,7 +34,61 @@ function workingChanges(run, overrides, untracked = 'normal') {
   }
   return { ok: status.status === 0, changes };
 }
-export function workspaceGit(folders, { spawnImpl = spawnSync, untracked = 'normal' } = {}) {
+// What a list of changes needs to show each file (#194): the lines it gained and lost since the last commit, and the
+// files inside a new folder, which Git reports as one entry. A file Git doesn't follow yet is counted from disk when it
+// is text of a modest size. A binary file gets no counts, and neither does anything that can't be read: the list still
+// shows the file. A new folder with many files stays one entry, with how many it holds.
+const COUNT_FILE_BYTES = 512 * 1024, COUNT_TOTAL_BYTES = 4 * 1024 * 1024, NEW_FOLDER_FILES = 30;
+function describeChanges(run, overrides, changes, spawnImpl) {
+  const counts = new Map();
+  if (run(['rev-parse', '--verify', '--quiet', 'HEAD']).status === 0) {
+    const stat = run(['diff', 'HEAD', '--numstat', '-z', '-M', '--no-relative', '--no-ext-diff', '--no-textconv', '--', '.'], overrides), parts = stat.status === 0 ? String(stat.stdout || '').split('\0') : [];
+    for (let index = 0; index < parts.length; index++) {
+      const match = parts[index].match(/^(\d+|-)\t(\d+|-)\t([\s\S]*)$/);
+      if (!match) continue;
+      // A rename's two paths follow as entries of their own: the old name, then the new one.
+      const file = match[3] === '' ? parts[index += 2] : match[3];
+      if (file && match[1] !== '-') counts.set(file, { added: Number(match[1]), removed: Number(match[2]) });
+    }
+  }
+  // Git reports paths from the repository's root, which is above the folder when a nested folder is attached.
+  const top = run(['rev-parse', '--show-toplevel']), root = top.status === 0 ? String(top.stdout || '').trim() : '';
+  if (!root) return;
+  const atRoot = runner({ path: root }, spawnImpl, { timeout: 3000, maxBuffer: 256 * 1024 });
+  let budget = COUNT_TOTAL_BYTES;
+  const fromDisk = file => {
+    const target = path.resolve(root, file), inside = path.relative(root, target);
+    if (!inside || inside === '..' || inside.startsWith('..' + path.sep) || path.isAbsolute(inside)) return null;
+    let fd;
+    try {
+      fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.size > COUNT_FILE_BYTES || stat.size > budget) return null;
+      const real = path.relative(fs.realpathSync(root), fs.realpathSync(target));
+      if (!real || real === '..' || real.startsWith('..' + path.sep) || path.isAbsolute(real)) return null;
+      // A file being written cannot make this background read grow past its budget.
+      const buffer = Buffer.alloc(stat.size + 1), length = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      budget -= length;
+      if (length !== stat.size) return null;
+      const bytes = buffer.subarray(0, length);
+      if (bytes.subarray(0, 8000).includes(0)) return null;
+      const text = bytes.toString('utf8');
+      return { added: text ? text.split('\n').length - (text.endsWith('\n') ? 1 : 0) : 0, removed: 0 };
+    } catch { return null; }
+    finally { if (fd !== undefined) fs.closeSync(fd); }
+  };
+  for (const change of changes) {
+    const known = counts.get(change.path);
+    if (known) { Object.assign(change, known); continue; }
+    if (change.code !== '??' && !change.code.includes('A')) continue;
+    if (!change.path.endsWith('/')) { Object.assign(change, fromDisk(change.path)); continue; }
+    const listed = atRoot(['ls-files', '--others', '--exclude-standard', '-z', '--', change.path]);
+    const files = listed.status === 0 && !listed.error ? String(listed.stdout || '').split('\0').filter(Boolean) : null;
+    if (files?.length && files.length <= NEW_FOLDER_FILES) change.files = files.map(file => ({ path: file, ...fromDisk(file) }));
+    else if (files?.length) change.fileCount = files.length;
+  }
+}
+export function workspaceGit(folders, { spawnImpl = spawnSync, untracked = 'normal', lines = false } = {}) {
   return { checkedAt: new Date().toISOString(), repositories: folders.map(folder => {
     const run = runner(folder, spawnImpl);
     const base = { folderId: folder.id, name: folder.displayName || folder.name, alias: folder.name };
@@ -42,6 +96,7 @@ export function workspaceGit(folders, { spawnImpl = spawnSync, untracked = 'norm
     const filters = filterOverrides(run);
     if (filters.error) return { ...base, available: false, error: filters.error };
     const status = workingChanges(run, filters.overrides, untracked);
+    if (lines && status.ok) describeChanges(run, filters.overrides, status.changes.slice(0, 100), spawnImpl);
     const branch = run(['symbolic-ref', '--quiet', '--short', 'HEAD']);
     const log = run(['log', '-15', '--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s%x00', '--', '.']);
     const origin = run(['config', '--get', 'remote.origin.url']);
@@ -104,21 +159,27 @@ export function workspaceGitDiff(folder, filePath, { spawnImpl = spawnSync, limi
   if (!file) throw fail('This file has no current changes. Refresh Git activity.', 404);
   const base = { folderId: folder.id, path: file.path, code: file.code, ...(file.originalPath ? { originalPath: file.originalPath } : {}) };
   if (file.path.endsWith('/')) return { ...base, diff: '', directory: true, truncated: false };
+  // Porcelain paths are relative to the repository root even when the attached folder is nested. Keep validation
+  // scoped to the attached folder above, then read those exact paths from the root.
+  const top = run(['rev-parse', '--show-toplevel']);
+  if (top.status !== 0 || !String(top.stdout || '').trim()) throw fail('Could not locate this file’s repository.', 500);
+  const repository = { ...folder, path: String(top.stdout).trim() };
+  const atRoot = runner(repository, spawnImpl, { timeout: 10000, maxBuffer: 8 * 1024 * 1024 });
   const options = ['--no-color', '--no-ext-diff', '--no-textconv', '-M'];
   let result;
   const head = run(['rev-parse', '--verify', '--quiet', 'HEAD']);
-  if (file.code === '??') result = run(['diff', '--no-index', ...options, '--', '/dev/null', file.path], filters.overrides);
+  if (file.code === '??') result = atRoot(['diff', '--no-index', ...options, '--', '/dev/null', file.path], filters.overrides);
   else {
     const paths = ['--', ...(file.originalPath ? [file.originalPath] : []), file.path];
     // Before the first commit, the base is empty. Include current bytes even if a new staged file was edited again.
     if (head.status !== 0 && file.code.includes('D')) return { ...base, diff: '', truncated: false };
-    result = run(head.status === 0 ? ['diff', 'HEAD', ...options, ...paths] : ['diff', '--no-index', ...options, '--', '/dev/null', file.path], filters.overrides);
+    result = atRoot(head.status === 0 ? ['diff', 'HEAD', ...options, ...paths] : ['diff', '--no-index', ...options, '--', '/dev/null', file.path], filters.overrides);
   }
   // --no-index exits 1 when the files differ; ENOBUFS keeps the output read so far.
   const overflow = result.error?.code === 'ENOBUFS';
   if ((result.error && !overflow) || (!overflow && ![0, 1].includes(result.status))) throw fail('Could not read this file’s changes.', 500);
   const diff = String(result.stdout || '');
-  const images = /^Binary files /m.test(diff) ? imagePreview(folder, file, head.status === 0, spawnImpl) : null;
+  const images = /^Binary files /m.test(diff) ? imagePreview(repository, file, head.status === 0, spawnImpl) : null;
   return { ...base, diff: diff.slice(0, limit), truncated: overflow || diff.length > limit, ...(images ? { images } : {}) };
 }
 

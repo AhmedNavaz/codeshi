@@ -1,11 +1,11 @@
 // Questions an agent asks you with choices: Claude's AskUserQuestion and Codex's request_user_input. Each arrives in
 // its own shape and is kept here in one: an id, a short header, the question, its options (an agent marks the one it
-// suggests by ending its label with "(Recommended)") and whether you may pick several, write your own answer, or
+// suggests by starting or ending its label with "(Recommended)") and whether you may pick several, write your own answer, or
 // answer without the text being shown. Answers are one list of strings per question, and go back in each agent's
 // own shape.
 
 const LIMITS = { questions: 6, options: 8, id: 100, header: 40, question: 1000, label: 200, description: 600, answer: 2000 };
-const RECOMMENDED = /\s*\(recommended\)\s*$/i;
+const RECOMMENDED = /^\s*\(recommended\)\s*|\s*\(recommended\)\s*$/i;
 const text = (value, max) => (typeof value === 'string' ? value : '').trim().slice(0, max);
 const fail = message => { throw Object.assign(new Error(message), { status: 400 }); };
 

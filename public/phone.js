@@ -17,7 +17,7 @@
     projects: [], projectId: null, thread: null, draft: null, c: null, messages: [], earlier: 0, limit: 40, cursor: null, step: null, view: 0,
     providers: {}, accounts: {}, usage: {}, models: {}, checkedAt: {},
     settings: { provider: 'claude', model: '', effort: null, mode: 'edit', approvalPolicy: 'ask' }, saving: 0, savedChain: Promise.resolve(),
-    sending: false, uploading: 0, attachments: new Map(), retry: null, online: true, loaded: false,
+    sending: false, uploading: 0, attachments: new Map(), retry: null, online: true, loaded: false, needs: null,
   };
   // The speech being listened to. It's up here because moving to a conversation, which happens while the page starts, checks it.
   let listening = null;
@@ -136,7 +136,8 @@
       offerNotifications();
     } catch (error) {
       // A task that's gone: back to the main conversation. Anything else keeps what's on screen, and the header says so.
-      if (error.status >= 400 && error.status < 500 && S.thread) { S.thread = null; rememberView(); changedView(); refreshConversation(); }
+      // 408 is only a read that waited too long while the page was away; the next one is current.
+      if (error.status >= 400 && error.status < 500 && error.status !== 408 && S.thread) { S.thread = null; rememberView(); changedView(); refreshConversation(); }
     } finally {
       refreshing = false;
       if (again) { again = false; refreshConversation(); }
@@ -148,6 +149,7 @@
     try {
       S.projects = await api('/api/projects', { project: null });
       projectsUpdatedAt = Date.now();
+      loadNeeds();
       if (!S.projectId || !S.projects.some(item => item.id === S.projectId)) {
         const saved = recall('codeshi:phone-project'), next = S.projects.find(item => item.id === saved) || S.projects[0];
         if (next) await selectProject(next.id, recall(`codeshi:phone-thread:${next.id}`) || null); else { S.projectId = null; S.c = null; S.loaded = true; }
@@ -194,12 +196,25 @@
   }
 
   // ---- The connection. Phones suspend pages, so coming back always reconnects instead of trusting the old stream.
-  let events = null, hiddenAt = 0, retryTimer = null;
+  let events = null, hiddenAt = 0, retryTimer = null, offlineSince = 0, slowTimer = null;
+  // The header says how the connection is: nothing while it works, Reconnecting… while Codeshi tries again, and
+  // Can’t reach your computer once that has gone on for a while.
+  function showConnection(state) {
+    const status = $('offline');
+    status.hidden = state === 'online';
+    status.textContent = state === 'unreachable' ? 'Can’t reach your computer' : 'Reconnecting…';
+  }
   function setOnline(online) {
+    clearTimeout(slowTimer); slowTimer = null;
+    if (online) offlineSince = 0; else offlineSince ||= Date.now();
+    // Away from home, a request fails only after waiting for its reply; on Wi-Fi a failure is immediate, so allow a few tries.
+    showConnection(online ? 'online' : transport?.remote || Date.now() - offlineSince >= 10000 ? 'unreachable' : 'reconnecting');
     if (S.online === online) return;
-    S.online = online; $('offline').hidden = online;
+    S.online = online;
     if (!online) { clearTimeout(retryTimer); retryTimer = setTimeout(checkConnection, 3000); }
   }
+  // Coming back or a dropped stream shows Reconnecting… if the computer hasn't answered within a moment.
+  function slow() { clearTimeout(slowTimer); slowTimer = setTimeout(() => { slowTimer = null; if (S.online && !document.hidden) showConnection('reconnecting'); }, 1500); }
   async function checkConnection() {
     clearTimeout(retryTimer);
     if (document.hidden) return;
@@ -219,20 +234,22 @@
     events?.close();
     events = transport ? transport.events() : new EventSource('/api/events');
     events.addEventListener('ready', () => { setOnline(true); scheduleProjects(); scheduleConversation(); });
-    events.addEventListener('update', event => { let update; try { update = JSON.parse(event.data); } catch { return; } if (!update.projectId || update.projectId === S.projectId) scheduleConversation(); if (!transport?.remote) scheduleProjects(); });
+    events.addEventListener('update', event => { let update; try { update = JSON.parse(event.data); } catch { return; } if (!update.projectId || update.projectId === S.projectId) scheduleConversation(); if (!transport?.remote) scheduleProjects(); else scheduleNeeds(); });
     events.addEventListener('projects', scheduleProjects);
     events.addEventListener('alert', event => { try { playAlert(JSON.parse(event.data)); } catch { /* A malformed alert plays nothing. */ } });
-    events.addEventListener('error', () => { if (!document.hidden) checkConnection(); });
+    events.addEventListener('error', () => { if (!document.hidden) { slow(); checkConnection(); } });
   }
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-      hiddenAt = Date.now(); clearTimeout(conversationTimer); clearTimeout(projectsTimer); clearTimeout(retryTimer);
-      conversationTimer = projectsTimer = null;
-      phoneFetch('/phone/session?active=0').catch(() => {});
+      hiddenAt = Date.now(); clearTimeout(conversationTimer); clearTimeout(projectsTimer); clearTimeout(retryTimer); clearTimeout(slowTimer);
+      conversationTimer = projectsTimer = slowTimer = null;
+      // Said on the way out without waiting: the computer stops counting this page as open, and nothing queues behind it.
+      phoneFetch('/phone/session?active=0', { keepalive: true }).catch(() => {});
       return;
     }
     if (Date.now() - hiddenAt > 3000) connect();
-    checkConnection();
+    if (Date.now() - hiddenAt > 10 * MINUTE) needsOffered = false;
+    slow(); checkConnection();
   });
   window.addEventListener('pageshow', event => { if (event.persisted) { connect(); checkConnection(); } });
   window.addEventListener('online', checkConnection);
@@ -651,11 +668,25 @@
     const elsewhere = $('elsewhere'), target = needsElsewhere();
     elsewhere.hidden = !target;
     if (target) { elsewhere.replaceChildren(icon('alert'), node('span', '', target.text), icon('right')); elsewhereGo = target.go; }
+    const needs = $('needs'), away = S.needs ? S.needs.filter(item => !needHere(item)) : [];
+    needs.hidden = !away.length;
+    if (away.length) {
+      $('needs-count').textContent = String(away.length);
+      needs.toggleAttribute('data-quiet', !away.some(urgent));
+      needs.setAttribute('aria-label', `Needs you: ${away.length} ${away.length === 1 ? 'thing' : 'things'}`);
+    }
   }
   let elsewhereGo = null;
   $('elsewhere').addEventListener('click', () => attempt(() => elsewhereGo?.()));
   function needsElsewhere() {
     const current = project(); if (!current) return null;
+    // With the list, the line names what holds an agent up elsewhere. Reviews and the like wait in Needs you.
+    if (S.needs) {
+      const away = S.needs.filter(item => urgent(item) && !needHere(item));
+      if (!away.length) return null;
+      const first = away[0], where = first.projectId === S.projectId ? first.title : `${first.workspace} · ${first.title}`;
+      return away.length === 1 ? { text: `${where}: ${NEED_WORDS[first.kind].toLowerCase()}`, go: () => openNeed(first) } : { text: `${away.length} things need you`, go: needsSheet };
+    }
     const task = tasks().find(item => item.approvals && item.id !== S.thread);
     if (task) return { text: `“${task.title}” needs you`, go: () => selectThread(task.id) };
     if (S.thread || S.draft) {
@@ -666,6 +697,59 @@
     if (other) return { text: `${other.name} needs you`, go: () => selectProject(other.id, recall(`codeshi:phone-thread:${other.id}`) || null) };
     return null;
   }
+
+  // ---- Needs you (#201): everything waiting for you across workspaces, one line each, from the computer
+  // (src/needs-you.mjs). Each opens the conversation where you can act on it. Null until the computer answers, and on
+  // a computer without the list, where the line above works from each workspace's approvals as before.
+  const NEED_WORDS = { approval: 'Needs approval', question: 'Has a question', handoff: 'Handoff', retry: 'Tests failed', plan: 'Plan to approve', check: 'Tests failed', review: 'Ready to review', card: 'Card to review', held: 'Paused', limit: 'Usage limit', schedule: 'Didn’t run' };
+  const URGENT = new Set(['approval', 'question', 'handoff', 'retry', 'plan']);
+  const urgent = item => URGENT.has(item.kind);
+  const needHere = item => !S.draft && item.projectId === S.projectId && (item.taskId || null) === (S.thread || null) && item.kind !== 'schedule';
+  // Not yet on the phone: these open their conversation, and the step itself is done on the computer for now.
+  const ON_COMPUTER = { plan: 'Approve the plan in Flow on your computer.', review: 'Review and merge it on your computer.', card: 'Accept the card on the Plan on your computer.', schedule: 'Run it now or dismiss it in Flow on your computer.' };
+  let needsLoading = false, needsAt = 0, needsOffered = false;
+  async function loadNeeds() {
+    if (needsLoading || document.hidden) return;
+    needsLoading = true;
+    try {
+      const data = await api('/api/needs-you', { project: null });
+      S.needs = Array.isArray(data.items) ? data.items.filter(item => NEED_WORDS[item?.kind] && typeof item.projectId === 'string') : [];
+      needsAt = Date.now(); render(); offerNeeds();
+    } catch (error) { if ([403, 404].includes(error.status)) S.needs = null; }
+    finally { needsLoading = false; }
+  }
+  // An update can mean something new waits elsewhere. Away from home, the list is asked for at most every 15 seconds.
+  const scheduleNeeds = () => { if (!document.hidden && S.needs !== null && Date.now() - needsAt >= (transport?.remote ? 15000 : 3000)) loadNeeds(); };
+  async function openNeed(item) {
+    closeSheet();
+    if (item.projectId !== S.projectId) await selectProject(item.projectId, item.taskId || null);
+    else if ((item.taskId || null) !== (S.thread || null) || S.draft) await selectThread(item.taskId || null);
+    if (ON_COMPUTER[item.kind]) toast(ON_COMPUTER[item.kind]);
+  }
+  function needsSheet() {
+    openSheet('Needs you', host => {
+      const items = S.needs || [];
+      if (!items.length) { host.append(node('p', 'sheet-text', 'Nothing needs you right now.')); return; }
+      let workspace = null;
+      for (const item of items) {
+        if (item.workspace !== workspace && S.projects.length > 1) { workspace = item.workspace; host.append(node('p', 'sheet-label', workspace)); }
+        const row = button('', () => attempt(() => openNeed(item)), `row row-need${needHere(item) ? ' current' : ''}`);
+        const dot = node('span', 'orb'); dot.dataset.state = urgent(item) ? 'need' : ['check', 'retry'].includes(item.kind) ? 'stopped' : ['review', 'card'].includes(item.kind) ? 'done' : 'idle'; dot.setAttribute('aria-hidden', 'true');
+        const text = node('span', 'row-need-text');
+        text.append(node('span', 'row-title', item.title || 'Workspace chat'), node('span', 'row-need-detail', item.detail || ''));
+        row.append(dot, text, node('span', `row-side${urgent(item) ? ' need' : ''}`, NEED_WORDS[item.kind]));
+        host.append(row);
+      }
+      // Sorted by the computer, most pressing first, so grouping keeps each workspace's own order.
+    }, () => JSON.stringify((S.needs || []).map(item => [item.id, item.detail, needHere(item)])));
+  }
+  // The list comes first when something waits elsewhere: once when the page opens, and again after a long time away.
+  function offerNeeds() {
+    if (needsOffered || !S.needs?.some(item => !needHere(item))) return;
+    needsOffered = true;
+    if (!sheet.open && !document.hidden) needsSheet();
+  }
+  $('needs').addEventListener('click', () => { needsSheet(); loadNeeds(); });
 
   // ---- The message box.
   const input = $('input');
@@ -1055,7 +1139,7 @@
     foot.append(segmented('Appearance', [['system', 'System'], ['light', 'Light'], ['dark', 'Dark'], ['graphite', 'Graphite']], window.relayPhoneTheme?.choice() || 'system', value => { window.relayPhoneTheme?.choose(value); drawSheet(); }));
     readAloudSetting(foot);
     foot.append(node('p', '', 'Work and sign-ins stay on your computer. Review, merging, files and the terminal are there too.'));
-    const move = button('Move to another browser', () => attempt(moveToAnotherBrowser), 'link');
+    const move = button('Move to another browser', copyConnection, 'link');
     const home = homeScreenAvailable() ? button('Add to Home Screen', () => homeScreenSheet(), 'link') : null;
     const alerts = notificationsAvailable() ? button('Notifications', () => attempt(notificationsSheet), 'link') : null;
     const leave = button('Disconnect this phone', () => attempt(async () => {
@@ -1066,23 +1150,65 @@
     }), 'link danger');
     foot.append(...(home ? [home] : []), ...(alerts ? [alerts] : []), move, leave); host.append(foot);
   }
-  async function moveToAnotherBrowser() {
-    const response = await phoneFetch('/phone/handover', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: '{}' });
-    const data = await response.json();
-    if (!response.ok || !data?.url) throw new Error(data?.error || 'Could not create a browser transfer link.');
-    try { await navigator.clipboard?.writeText?.(data.url); } catch { /* Selection works without clipboard access. */ }
+  // Move to another browser. iPhone lets a page copy only while it handles the tap itself, and the link comes back from
+  // the computer later, so the copy starts with the tap and fills in when the link arrives. The other browser then
+  // takes it with one tap on Paste (public/phone-remote.mjs, public/phone-pair.js) instead of typing a code (#201).
+  function copyConnection() {
+    const link = phoneFetch('/phone/handover', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: '{}' })
+      .then(async response => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data?.url) throw new Error(data?.error || 'Could not create a browser transfer link.');
+        return data;
+      });
+    let copied = Promise.resolve(false);
+    try {
+      if (window.ClipboardItem && navigator.clipboard?.write) {
+        copied = navigator.clipboard.write([new ClipboardItem({ 'text/plain': link.then(data => new Blob([data.url], { type: 'text/plain' })) })]).then(() => true, () => false);
+      }
+    } catch { /* Copied below once the link is here, where the browser allows it. */ }
+    link.catch(() => {});
+    return attempt(() => moveToAnotherBrowser(link, copied));
+  }
+  // An iPhone's QR scanner or another app's browser shows the page with an "Open in Safari" button that opens the
+  // address as it is now, in a browser that has no connection of its own. So a paired iPhone browser keeps a fresh
+  // one-use transfer link in its address, and Safari takes the connection over without a copy and paste. The link
+  // lasts 5 minutes, so it is renewed while the page is in front.
+  const ADDRESS_LINK_MS = 4 * 60 * 1000;
+  let addressLinkAt = 0, addressLinkBusy = false;
+  async function refreshAddressLink() {
+    if (addressLinkBusy || document.hidden || standalone() || !/iPhone|iPad|iPod/.test(navigator.userAgent) && !(/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1)) return;
+    if (Date.now() - addressLinkAt < ADDRESS_LINK_MS) return;
+    addressLinkBusy = true;
+    try {
+      const response = await phoneFetch('/phone/handover', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: '{}' });
+      const data = response.ok ? await response.json().catch(() => null) : null, hash = typeof data?.url === 'string' ? data.url.slice(data.url.indexOf('#')) : '';
+      if (/^#(remote|pair)=[a-f0-9.]{64,129}$/.test(hash)) { history.replaceState(null, '', location.pathname + location.search + hash); addressLinkAt = Date.now(); }
+    } catch { /* The copy button in Move to another browser still works. */ }
+    finally { addressLinkBusy = false; }
+  }
+  setInterval(refreshAddressLink, 30000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAddressLink(); });
+  setTimeout(refreshAddressLink, 1500);
+  async function moveToAnotherBrowser(link, copied) {
+    const data = await link;
+    let done = await copied;
+    if (!done) { try { await navigator.clipboard?.writeText?.(data.url); done = Boolean(navigator.clipboard?.writeText); } catch { /* Copy link below. */ } }
+    const spaced = data.code ? String(data.code).replace(/(.{4})/, '$1 ') : '';
     openSheet('Move to another browser', body => {
-      body.append(node('p', 'sheet-text', 'Each browser on your phone (a QR scanner, Safari, Chrome or a Home Screen icon) keeps its own connection. Open this one-use link in the browser you want to use within 5 minutes.'));
+      body.append(node('p', 'sheet-text', 'Each browser on your phone (a QR scanner, Safari, Chrome or a Home Screen icon) keeps its own connection. Within 5 minutes:'));
+      const steps = node('ol', 'home-steps');
+      for (const item of [done ? 'The link is copied.' : 'Copy the link below.', 'Open Codeshi in the other browser, or from its Home Screen icon.', 'Tap Paste from your other browser.']) steps.append(node('li', '', item));
+      body.append(steps);
       const field = node('input', 'own phone-handover-link');
       field.type = 'text'; field.readOnly = true; field.value = data.url; field.setAttribute('aria-label', 'One-use browser transfer link');
       field.addEventListener('click', () => field.select?.());
       body.append(field);
-      if (data.code) body.append(node('p', 'sheet-note', transport?.remote
-        ? `Or type code ${String(data.code).replace(/(.{4})/, '$1 ')} where that browser asks for one, such as a new Home Screen icon.`
-        : `Or enter code ${String(data.code).replace(/(.{4})/, '$1 ')} in that browser.`));
-      body.append(node('p', 'sheet-note', 'Opening it moves this connection without asking on your computer again, and disconnects this browser.'));
+      if (spaced) body.append(node('p', 'sheet-note', transport?.remote
+        ? `If Paste doesn’t work there, type code ${spaced} instead.`
+        : `If Paste doesn’t work there, enter code ${spaced} instead.`));
+      body.append(node('p', 'sheet-note', 'It moves this connection without asking on your computer again, and disconnects this browser.'));
       const actions = node('div', 'card-actions');
-      actions.append(button('Copy link', () => { field.select?.(); navigator.clipboard?.writeText?.(data.url).catch(() => {}); toast('Link copied. Paste it in your other browser.'); }, 'big primary'));
+      actions.append(button(done ? 'Copy again' : 'Copy link', () => { field.select?.(); navigator.clipboard?.writeText?.(data.url).then(() => toast('Link copied. Tap Paste in your other browser.'), () => toast('Select the link and copy it.')); }, 'big primary'));
       body.append(actions);
     });
   }
@@ -1109,8 +1235,8 @@
       const actions = node('div', 'card-actions');
       if (device === 'ios-app') {
         body.append(node('p', 'sheet-text', 'This page is open in another app’s browser, which can’t add it to your Home Screen. Move the connection to Safari first.'));
-        steps(['Choose Move to Safari and open the link in Safari.', 'In Safari, open the Share menu and choose Add to Home Screen.']);
-        actions.append(button('Move to Safari', () => attempt(moveToAnotherBrowser), 'big primary'));
+        steps(['Choose Move to Safari, open Codeshi in Safari and tap Paste.', 'In Safari, open the Share menu and choose Add to Home Screen.']);
+        actions.append(button('Move to Safari', copyConnection, 'big primary'));
       } else if (device === 'android') {
         body.append(node('p', 'sheet-text', 'Open Remote access from an icon, full screen, instead of finding this page again.'));
         const prompt = window.codeshiInstallPrompt;
@@ -1123,8 +1249,8 @@
       } else {
         body.append(node('p', 'sheet-text', 'Open Remote access from an icon, full screen, instead of finding this page again.'));
         steps([device === 'ios-safari' ? 'Open the Share menu (under ⋯ on iOS 26) and choose Add to Home Screen.' : 'Open the Share menu and choose Add to Home Screen.',
-          'Open Codeshi from your Home Screen. If it asks for a code, come back here, choose Get a code and type it there.']);
-        actions.append(button('Get a code', () => attempt(moveToAnotherBrowser), 'big primary'));
+          'Open Codeshi from your Home Screen. If it isn’t connected yet, come back here, choose Copy connection, then tap Paste there.']);
+        actions.append(button('Copy connection', copyConnection, 'big primary'));
       }
       body.append(node('p', 'sheet-note', 'You can come back to this from Add to Home Screen at the bottom of the workspace list.'));
       if (actions.childElementCount) body.append(actions);

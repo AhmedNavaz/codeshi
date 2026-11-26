@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { Broker } from '../src/broker.mjs';
-import { buildRecap, runSteps } from '../src/recap.mjs';
+import { buildRecap, outcomeOf, runSteps } from '../src/recap.mjs';
 import { createRelayServer } from '../src/server.mjs';
 import { scriptCLIs } from './platform.mjs';
 
@@ -102,6 +102,27 @@ test('the recap includes tasks and folds a plan’s steps into one entry (#88)',
   const [recap] = buildRecap({ since, now, registry: reg, git: () => ({ repositories: [] }) }).workspaces;
   assert.deepEqual(recap.tasks.map(item => [item.id, item.title, item.status, item.approvals, item.files, item.unmerged]), [['solo', 'Task solo', 'complete', 1, ['src/a.js'], true], ['live', 'Task live', 'running', 0, [], false]], 'Old, merged and closed tasks are left out; a running lane counts as working.');
   assert.deepEqual(recap.plans.map(plan => [plan.goal, plan.done, plan.total, plan.steps.map(step => [step.number, step.status, step.check])]), [['Checkout rewrite', 2, 3, [[1, 'complete', 'failed'], [2, 'running', null]]]], 'A step whose tests failed stays in the recap until it is dealt with; cancelled steps don’t count.');
+});
+
+test('a finished run’s outcome is the opening of its last reply, read as plain text (#202)', () => {
+  assert.equal(outcomeOf('Fixed the login redirect; the tests pass.\n\nDetails:\n- `auth.js`'), 'Fixed the login redirect; the tests pass.');
+  assert.equal(outcomeOf('Done. I moved the **header** into a sticky bar in `header.css`. Then more.'), 'I moved the header into a sticky bar in header.css.', 'A bare opener takes the sentence after it.');
+  assert.equal(outcomeOf('## Summary\n\n- Added [promo codes](src/promo.js) to checkout\n- Wrote tests'), 'Added promo codes to checkout Wrote tests');
+  assert.equal(outcomeOf('```js\nconst a = 1;\n```\nRenamed my_var_name in app.js and kept *every* caller.'), 'Renamed my_var_name in app.js and kept every caller.', 'Code is skipped and snake_case is left alone.');
+  assert.equal(outcomeOf('All set.'), 'All set.');
+  assert.equal(outcomeOf(''), '');
+  assert.ok(outcomeOf('word '.repeat(80)).length <= 180);
+  const since = '2026-11-02T10:00:00.000Z', now = new Date('2026-11-02T10:30:00.000Z');
+  const c = conversation('c', [
+    { id: 'ok', provider: 'claude', prompt: 'Fix login', startedAt: '2026-11-02T10:05:00.000Z', endedAt: '2026-11-02T10:08:00.000Z', status: 'complete' },
+    { id: 'quota', provider: 'codex', prompt: 'Refactor', startedAt: '2026-11-02T10:09:00.000Z', endedAt: '2026-11-02T10:10:00.000Z', status: 'incomplete', errorCategory: 'quota' },
+  ], [
+    { role: 'assistant', runId: 'ok', text: 'Looking at the login flow first.' },
+    { role: 'assistant', runId: 'ok', text: 'Fixed the login redirect.' },
+    { role: 'assistant', runId: 'quota', text: 'You have hit your usage limit.' },
+  ]);
+  const [workspace] = buildRecap({ since, now, registry: registry([{ id: 'w', name: 'shop', conversation: c }]), git: () => ({ repositories: [] }) }).workspaces;
+  assert.deepEqual(workspace.runs.map(run => [run.id, run.outcome]), [['ok', 'Fixed the login redirect.'], ['quota', '']], 'Only a finished run has an outcome, from its last reply.');
 });
 
 test('the recap route answers for every workspace and checks its starting time', async t => {

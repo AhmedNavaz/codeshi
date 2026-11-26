@@ -7,7 +7,7 @@
   // Skip lets the agent decide. In the card, number keys choose an option and Enter goes on.
   const api = () => window.relayUI;
   const names = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' };
-  const RECOMMENDED = /\s*\(recommended\)\s*$/i;
+  const RECOMMENDED = /^\s*\(recommended\)\s*|\s*\(recommended\)\s*$/i;
   const node = (tag, text, cls) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (cls) value.className = cls; return value; };
   const button = (text, cls) => { const value = node('button', text, cls); value.type = 'button'; return value; };
 
@@ -74,8 +74,10 @@
     };
   }
 
-  function card(item, conversationId) {
-    const projectId = api().getState().projectId;
+  // A companion lane (#203) shows the same card for another workspace's chat: options.projectId says which, and
+  // options.done runs after the answer instead of refreshing this one.
+  function card(item, conversationId, options = {}) {
+    const projectId = options.projectId || api().getState().projectId;
     const article = node('article', undefined, 'approval-card question-card'), head = node('header'), mark = node('span', undefined, 'approval-icon question-icon');
     mark.setAttribute('aria-hidden', 'true');
     article.dataset.approvalId = item.id; article.tabIndex = -1;
@@ -127,12 +129,14 @@
       sending = true; skip.disabled = true; changed();
       const body = { runId: item.runId, questionId: item.id, ...(answers ? { answers } : { skip: true }) };
       try {
-        const result = await api().post(`/api/conversations/${conversationId}/answer`, body);
+        const result = await api().post(`/api/conversations/${conversationId}/answer`, body, projectId);
         if (result.draft) api().prepareQuestionAnswer(conversationId, result.draft, projectId);
       }
       catch (error) { api().showNotice(error.message || 'Your answer could not be sent. Please try again.'); }
       finally {
-        sending = false; skip.disabled = false; changed(); await api().refresh();
+        sending = false; skip.disabled = false; changed();
+        if (options.done) { await options.done(); return; }
+        await api().refresh();
         if (hadFocus && (!document.activeElement || document.activeElement === document.body || !document.activeElement.isConnected)) {
           const box = document.getElementById('pending-approvals'), next = [...(box?.querySelectorAll('button') || []), ...(box?.querySelectorAll('input') || [])].find(el => !el.disabled && !el.hidden);
           const stop = document.getElementById('stop-button');

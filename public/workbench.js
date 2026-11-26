@@ -357,52 +357,59 @@
       const isNew = item.id && !announced.has(item.id); if (item.id) announced.add(item.id);
       // An agent's questions with options get their own card, with the choices and Submit or Skip.
       if (item.kind === 'question' && window.relayQuestions) { if (isNew) fresh.push(`${providerName(item.provider)} has a question for you`); host.append(window.relayQuestions.card(item, state.conversation.id)); continue; }
-      // The heading says what the agent wants to do; the exact command or file follows, and the full request stays one click away.
-      const command = item.command || item.input?.command, target = item.input?.file_path || item.input?.path, files = item.kind?.includes('fileChange') || target;
-      const card = node('article', undefined, 'approval-card'), head = node('header'), mark = node('span', undefined, 'approval-icon'); mark.setAttribute('aria-hidden', 'true');
-      card.dataset.approvalId = item.id; card.tabIndex = -1;
-      const access = item.kind === 'item/permissions/requestApproval', specific = item.connector || access;
-      const heading = `${providerName(item.provider)} ${command ? 'wants to run a command' : item.connector ? `wants to use ${item.connector}` : access ? 'wants more access' : files ? 'wants to change files' : 'needs your permission'}`;
+      const { card, heading } = approvalCard(item, state.conversation.id);
       if (isNew) fresh.push(heading);
-      head.append(mark, node('h3', heading)); card.append(head);
-      if (item.title && item.title !== command) card.append(node('p', item.title, 'approval-title'));
-      // A tool's own parameters say what it will do, so they're shown before you decide.
-      if (specific) { if (item.details) output(card, item.details).classList.add('approval-details'); }
-      else if (command) output(card, command).classList.add('approval-command'); else if (target) card.append(node('p', target, 'approval-target')); else card.append(node('p', files ? 'Review the requested file changes before continuing.' : `Requested action: ${item.kind || 'tool use'}`, 'approval-title'));
-      const choices = [['Approve', true, 'primary'], ['Deny', false]].map(([text, allow, cls]) => { const choice = node('button', text, cls); choice.type = 'button'; choice.addEventListener('click', () => answer(choices, state.conversation.id, item, allow)); return choice; });
-      const footer = node('div', undefined, 'approval-footer'); card.append(footer);
-      // An action with an exact scope can also be allowed for the rest of the run or remembered for the workspace.
-      const scoped = [];
-      if (item.scope) {
-        const more = node('button', undefined, 'primary approval-more'); more.type = 'button'; more.setAttribute('aria-label', 'More ways to allow'); more.setAttribute('aria-expanded', 'false'); more.title = 'Allow for this run or always in this workspace';
-        const menu = node('div', undefined, 'approval-scope-menu'); menu.hidden = true; menu.setAttribute('role', 'menu');
-        for (const [remember, title, detail] of [['run', 'Allow for this run', 'Until this run ends'], ['workspace', 'Always allow in this workspace', 'You can revoke it in Workspace settings']]) {
-          const option = node('button', undefined, 'approval-scope-option'); option.type = 'button'; option.setAttribute('role', 'menuitem');
-          option.append(node('strong', title), node('span', `${item.scope.label} · ${detail}`)); option.setAttribute('aria-label', title); option.setAttribute('aria-description', `${item.scope.label} · ${detail}`);
-          option.addEventListener('click', () => { menu.hidden = true; answer([...choices, ...scoped], state.conversation.id, item, true, remember); });
-          menu.append(option); scoped.push(option);
-        }
-        more.addEventListener('click', () => { menu.hidden = !menu.hidden; more.setAttribute('aria-expanded', String(!menu.hidden)); if (!menu.hidden) menu.querySelector('button')?.focus?.(); });
-        menu.addEventListener('keydown', event => {
-          if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation?.(); menu.hidden = true; more.setAttribute('aria-expanded', 'false'); more.focus(); return; }
-          if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { const list = [...menu.querySelectorAll('button')], at = list.indexOf(document.activeElement), next = window.codeshiKeyboard?.step(event.key, at, list.length); if (next >= 0) { event.preventDefault(); list[next].focus(); } }
-        });
-        scoped.push(more);
-        const split = node('span', undefined, 'approval-split'); split.append(choices[0], more, menu);
-        diagnostics(footer, item, 'Full request'); actions(footer, choices[1], split);
-      } else { diagnostics(footer, item, 'Full request'); actions(footer, choices[1], choices[0]); }
       host.append(card);
     }
     announceRequests(fresh);
   }
+  // One approval card. A companion lane (#203) builds the same card for another workspace's chat: options.projectId says
+  // which, and options.done runs after the answer instead of refreshing this one.
+  function approvalCard(item, conversationId, options = {}) {
+    // The heading says what the agent wants to do; the exact command or file follows, and the full request stays one click away.
+    const command = item.command || item.input?.command, target = item.input?.file_path || item.input?.path, files = item.kind?.includes('fileChange') || target;
+    const card = node('article', undefined, 'approval-card'), head = node('header'), mark = node('span', undefined, 'approval-icon'); mark.setAttribute('aria-hidden', 'true');
+    card.dataset.approvalId = item.id; card.tabIndex = -1;
+    const access = item.kind === 'item/permissions/requestApproval', specific = item.connector || access;
+    const heading = `${providerName(item.provider)} ${command ? 'wants to run a command' : item.connector ? `wants to use ${item.connector}` : access ? 'wants more access' : files ? 'wants to change files' : 'needs your permission'}`;
+    head.append(mark, node('h3', heading)); card.append(head);
+    if (item.title && item.title !== command) card.append(node('p', item.title, 'approval-title'));
+    // A tool's own parameters say what it will do, so they're shown before you decide.
+    if (specific) { if (item.details) output(card, item.details).classList.add('approval-details'); }
+    else if (command) output(card, command).classList.add('approval-command'); else if (target) card.append(node('p', target, 'approval-target')); else card.append(node('p', files ? 'Review the requested file changes before continuing.' : `Requested action: ${item.kind || 'tool use'}`, 'approval-title'));
+    const choices = [['Approve', true, 'primary'], ['Deny', false]].map(([text, allow, cls]) => { const choice = node('button', text, cls); choice.type = 'button'; choice.addEventListener('click', () => answer(choices, conversationId, item, allow, null, options)); return choice; });
+    const footer = node('div', undefined, 'approval-footer'); card.append(footer);
+    // An action with an exact scope can also be allowed for the rest of the run or remembered for the workspace.
+    const scoped = [];
+    if (item.scope) {
+      const more = node('button', undefined, 'primary approval-more'); more.type = 'button'; more.setAttribute('aria-label', 'More ways to allow'); more.setAttribute('aria-expanded', 'false'); more.title = 'Allow for this run or always in this workspace';
+      const menu = node('div', undefined, 'approval-scope-menu'); menu.hidden = true; menu.setAttribute('role', 'menu');
+      for (const [remember, title, detail] of [['run', 'Allow for this run', 'Until this run ends'], ['workspace', 'Always allow in this workspace', 'You can revoke it in Workspace settings']]) {
+        const option = node('button', undefined, 'approval-scope-option'); option.type = 'button'; option.setAttribute('role', 'menuitem');
+        option.append(node('strong', title), node('span', `${item.scope.label} · ${detail}`)); option.setAttribute('aria-label', title); option.setAttribute('aria-description', `${item.scope.label} · ${detail}`);
+        option.addEventListener('click', () => { menu.hidden = true; answer([...choices, ...scoped], conversationId, item, true, remember, options); });
+        menu.append(option); scoped.push(option);
+      }
+      more.addEventListener('click', () => { menu.hidden = !menu.hidden; more.setAttribute('aria-expanded', String(!menu.hidden)); if (!menu.hidden) menu.querySelector('button')?.focus?.(); });
+      menu.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation?.(); menu.hidden = true; more.setAttribute('aria-expanded', 'false'); more.focus(); return; }
+        if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { const list = [...menu.querySelectorAll('button')], at = list.indexOf(document.activeElement), next = window.codeshiKeyboard?.step(event.key, at, list.length); if (next >= 0) { event.preventDefault(); list[next].focus(); } }
+      });
+      scoped.push(more);
+      const split = node('span', undefined, 'approval-split'); split.append(choices[0], more, menu);
+      diagnostics(footer, item, 'Full request'); actions(footer, choices[1], split);
+    } else { diagnostics(footer, item, 'Full request'); actions(footer, choices[1], choices[0]); }
+    return { card, heading };
+  }
   // Approval cards sit outside the dialog, so a failed answer is shown in the page notice. The refresh afterwards removes a request that is no longer pending.
-  async function answer(choices, conversationId, item, allow, remember = null) {
+  async function answer(choices, conversationId, item, allow, remember = null, options = {}) {
     const hadFocus = Boolean($('pending-approvals')?.contains(document.activeElement) || choices.includes(document.activeElement));
     choices.forEach(choice => { choice.disabled = true; });
-    try { await api().post(`/api/conversations/${conversationId}/approval`, { runId: item.runId, approvalId: item.id, allow, ...(remember ? { remember } : {}) }); }
+    try { await api().post(`/api/conversations/${conversationId}/approval`, { runId: item.runId, approvalId: item.id, allow, ...(remember ? { remember } : {}) }, ...(options.projectId ? [options.projectId] : [])); }
     catch (e) { api().showNotice(e.message || 'This action could not be completed. Please try again.'); }
     finally {
       choices.forEach(choice => { choice.disabled = false; });
+      if (options.done) { await options.done(); return; }
       await api().refresh();
       if (hadFocus && (!document.activeElement || document.activeElement === document.body || !document.activeElement.isConnected)) {
         const box = $('pending-approvals'), next = [...(box?.querySelectorAll('button') || []), ...(box?.querySelectorAll('input') || [])].find(el => !el.disabled && !el.hidden);
@@ -415,6 +422,7 @@
   $('ask-friend').addEventListener('click', () => open('request')); $('workbench-close').addEventListener('click', () => modal.close());
   // Other parts of the app open Ask a friend on one of its tabs.
   window.relayFriend = { open: (next = 'request') => open(page[next] ? next : 'request') };
+  window.relayApprovals = { card: (item, conversationId, options) => approvalCard(item, conversationId, options).card };
   $('workbench-tabs').addEventListener('click', event => { const target = event.target.closest('[data-tab]'); if (target?.dataset.tab) perform(async () => { tab = target.dataset.tab; await render(); }); });
   // A request belongs to the workspace it was made in, so switching workspace closes the dialog.
   window.addEventListener('relay-state', () => { if (modal.open && projectScope !== api().getState().projectId) { ++renderRevision; modal.close(); } approvals(); $('ask-friend').disabled = !api().getState().projectId; }); approvals();

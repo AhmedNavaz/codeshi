@@ -34,6 +34,32 @@ test('Git activity reads real commits, branch, staged/untracked changes and safe
 
 test('Git gracefully handles empty repositories and unavailable folders', t => { const f = fixture(t); git(f.workspace, 'init', '-q'); assert.deepEqual(workspaceGit(f.folders).repositories[0].commits, []); assert.equal(workspaceGit([{ id: 'gone', path: path.join(f.root, 'gone') }]).repositories[0].available, false); });
 
+test('Git line counts and file review stay scoped to an attached nested folder', t => {
+  const f = fixture(t), nested = path.join(f.workspace, 'web'), folder = { id: 'web', name: 'web', path: nested };
+  git(f.workspace, 'init', '-q'); git(f.workspace, 'config', 'user.name', 'Fixture'); git(f.workspace, 'config', 'user.email', 'fixture@example.invalid');
+  fs.mkdirSync(nested); fs.writeFileSync(path.join(nested, 'app.js'), 'one\ntwo\nthree\n'); fs.writeFileSync(path.join(f.workspace, 'outside.js'), 'outside\n');
+  git(f.workspace, 'add', '.'); git(f.workspace, 'commit', '-qm', 'Initial'); git(f.workspace, 'config', 'diff.relative', 'true');
+  git(f.workspace, 'mv', 'web/app.js', 'web/renamed.js'); fs.appendFileSync(path.join(nested, 'renamed.js'), 'four\n'); fs.appendFileSync(path.join(f.workspace, 'outside.js'), 'private change\n');
+  fs.mkdirSync(path.join(nested, 'new')); fs.writeFileSync(path.join(nested, 'new/file.js'), 'new\nsecond'); fs.writeFileSync(path.join(nested, 'new/image.bin'), Buffer.from([0, 1, 2]));
+  const [repo] = workspaceGit([folder], { lines: true }).repositories;
+  const changed = repo.changes.find(file => file.path === 'web/renamed.js');
+  assert.equal(changed.added, 1); assert.equal(changed.removed, 0); assert.equal(changed.originalPath, 'web/app.js');
+  const fresh = repo.changes.find(file => file.path === 'web/new/').files;
+  assert.equal(fresh.find(file => file.path === 'web/new/file.js').added, 2); assert.equal(fresh.find(file => file.path === 'web/new/image.bin').added, undefined);
+  assert.match(workspaceGitDiff(folder, 'web/renamed.js').diff, /^\+four$/m);
+  assert.match(workspaceGitDiff(folder, 'web/new/file.js').diff, /^\+second$/m);
+  assert.throws(() => workspaceGitDiff(folder, 'outside.js'), error => error.status === 404);
+});
+
+test('Git line counts skip symlinks and oversized untracked files', { skip: noSymlinks }, t => {
+  const f = fixture(t); git(f.workspace, 'init', '-q');
+  fs.writeFileSync(path.join(f.root, 'outside.txt'), 'outside\n'); fs.symlinkSync(path.join(f.root, 'outside.txt'), path.join(f.workspace, 'link.txt'));
+  fs.writeFileSync(path.join(f.workspace, 'huge.txt'), Buffer.alloc(512 * 1024 + 1, 10)); fs.writeFileSync(path.join(f.workspace, 'small.txt'), 'one\ntwo\n');
+  const [repo] = workspaceGit(f.folders, { lines: true }).repositories;
+  assert.equal(repo.changes.find(file => file.path === 'link.txt').added, undefined); assert.equal(repo.changes.find(file => file.path === 'huge.txt').added, undefined);
+  assert.equal(repo.changes.find(file => file.path === 'small.txt').added, 2);
+});
+
 test('Git status cannot run configured clean filters', t => {
   const f = fixture(t), marker = path.join(f.root, 'filter-ran'); git(f.workspace, 'init', '-q'); git(f.workspace, 'config', 'user.name', 'Fixture'); git(f.workspace, 'config', 'user.email', 'fixture@example.invalid'); fs.writeFileSync(path.join(f.workspace, 'app.js'), 'const value = 1;\n'); git(f.workspace, 'add', '.'); git(f.workspace, 'commit', '-qm', 'Initial');
   git(f.workspace, 'config', 'filter.fixture.clean', `touch '${marker}'; cat`); fs.writeFileSync(path.join(f.workspace, '.gitattributes'), '*.js filter=fixture\n'); fs.appendFileSync(path.join(f.workspace, 'app.js'), '// dirty\n'); assert.equal(workspaceGit(f.folders).repositories[0].available, true); assert.equal(fs.existsSync(marker), false);

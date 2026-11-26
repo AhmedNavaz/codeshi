@@ -254,7 +254,7 @@
     head.append(all); section.append(head);
     for (const file of files) {
       const code = act === 'stage' ? file.code[1] : file.code[0], status = statusOf(code), row = el('div', undefined, 'git-file-row');
-      const open = action('', () => openDiff(repo, file, file.code === '??' ? 'untracked' : statusOf(file.code.trim()[0] || 'M')), 'git-file'); open.dataset.status = status; open.title = 'Show changes';
+      const open = action('', () => openDiff(repo, file), 'git-file'); open.dataset.status = status; open.title = 'Show changes';
       open.append(el('span', code === '?' ? 'U' : code, 'git-file-code'), el('span', file.path, 'git-file-name'), el('span', codeNames[code] || 'Changed', 'git-file-status'));
       const toggle = action('', () => gitWrite(act, repo, { paths: [file.path] }), `icon-button git-stage-button ${act}`); toggle.title = act === 'stage' ? 'Stage' : 'Unstage'; toggle.setAttribute('aria-label', `${toggle.title} ${file.path}`); toggle.disabled = gitWriting;
       row.append(open, toggle); section.append(row);
@@ -300,7 +300,7 @@
     let done = false;
     try {
       const result = await api.post(`/api/git/${act}`, { folderId: repo.folderId, ...input }, projectId);
-      if (api.getState().projectId === projectId) gitData = result.git;
+      if (api.getState().projectId === projectId) { gitData = result.git; gitChanged(); }
       if (act === 'commit') { commitDrafts.delete(repo.folderId); $('git-commit-message').value = ''; commitOutcome = { kind: 'done', folderId: repo.folderId, commit: result.commit }; }
       else if (commitOutcome?.kind === 'done') commitOutcome = null;
       done = true;
@@ -335,13 +335,20 @@
     const repo = (gitData?.repositories || []).find(row => row.folderId === folderId); if (repo) renderCommit(repo);
   });
   $('git-commit-message').addEventListener('keydown', event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.isComposing) { event.preventDefault(); if (!$('git-commit-button').disabled) commit(); } });
-  async function loadGit() {
-    const projectId = api.getState().projectId; if (!projectId || gitBusy) return;
+  // Flow's Changes card and the changes window read the same Git activity as the panel, and hear when it changes (#194).
+  const gitChanged = () => { syncReview(); window.dispatchEvent(new CustomEvent('relay-git')); };
+  let gitLoading = null;
+  // Resolves true once the activity is read, false when it couldn't be. A second caller waits for the read in progress.
+  function loadGit() {
+    const projectId = api.getState().projectId; if (!projectId) return Promise.resolve(false);
+    if (gitBusy) return gitLoading || Promise.resolve(false);
     const request = ++gitRequest; gitBusy = true; gitScope = projectId; $('refresh-git').disabled = true; $('refresh-git').setAttribute('aria-busy', 'true');
     if (!gitData) $('git-content').replaceChildren(el('p', 'Reading local Git activity…', 'inspector-empty'));
-    try { const result = await api.api('/api/git', {}, projectId); if (request === gitRequest && api.getState().projectId === projectId) { gitData = result; renderGit(); nextSteps(); } }
-    catch (error) { if (request === gitRequest) $('git-content').replaceChildren(el('p', error.message, 'inspector-empty')); }
-    finally { if (request === gitRequest) { gitBusy = false; $('refresh-git').disabled = false; $('refresh-git').setAttribute('aria-busy', 'false'); } }
+    return gitLoading = (async () => {
+      try { const result = await api.api('/api/git', {}, projectId); if (request !== gitRequest || api.getState().projectId !== projectId) return false; gitData = result; renderGit(); nextSteps(); gitChanged(); return true; }
+      catch (error) { if (request === gitRequest) $('git-content').replaceChildren(el('p', error.message, 'inspector-empty')); return false; }
+      finally { if (request === gitRequest) { gitBusy = false; $('refresh-git').disabled = false; $('refresh-git').setAttribute('aria-busy', 'false'); } }
+    })();
   }
   const sheetedGit = () => ['flow', 'plan'].includes(window.relayFlow?.view?.());
   function setGitPanel(open, remember = true) {
@@ -449,26 +456,144 @@
       entry.meta.replaceChildren(`${entry.source.folderName} · ${statusNames[kind] || 'Modified'}${staged ? ' · staged' : ''}`);
       renderDiff(result, entry); updateDiffTab(entry); window.relayTabs.select(entry.id); return;
     }
-    diffRequest++;
+    diffRequest++; reviewing = null; renderReviewList();
     $('diff-title').textContent = result.path;
     $('diff-meta').replaceChildren(`${folder.displayName || folder.name} · ${statusNames[kind] || 'Modified'}${staged ? ' · staged' : ''}`);
+    rememberDiffOpener();
     if (!diffDialog.open) diffDialog.showModal();
     renderDiff(result);
   }
-  async function openDiff(repo, file, status) {
+  async function openDiff(repo, file) {
     const projectId = api.getState().projectId;
     if (useDiffTabs()) {
       if (!projectId || !repo.folderId) return;
       const entry = makeDiffTab(projectId, { type: 'file', folderId: repo.folderId, folderName: repo.name, path: file.path });
       window.relayTabs.select(entry.id); if (!entry.loading) await loadDiffTab(entry); return;
     }
-    const request = ++diffRequest;
-    $('diff-title').textContent = file.path; $('diff-meta').replaceChildren(`${repo.name} · ${statusNames[status]}${file.staged ? ' · staged' : ''}`);
-    $('diff-content').replaceChildren(el('p', 'Loading changes…', 'inspector-empty'));
-    if (!diffDialog.open) diffDialog.showModal();
-    try { const result = await api.api(`/api/git/diff?folderId=${encodeURIComponent(repo.folderId)}&path=${encodeURIComponent(file.path)}`, {}, projectId); if (request === diffRequest && projectId === api.getState().projectId) renderDiff(result); }
+    return openReview({ folderId: repo.folderId, path: file.path });
+  }
+  // The changes window (#194): every changed file in one place. The list is on the left and the chosen file's lines are
+  // on the right, so nothing is closed to see the next file, and Up and Down move through the list. Flow and the Plan,
+  // which have no tabs, open a file's changes here.
+  const diffFiles = $('diff-files');
+  let reviewing = null, diffOpener = null;
+  function rememberDiffOpener() {
+    if (diffDialog?.open) return;
+    const active = document.activeElement;
+    diffOpener = active && active !== document.body ? {
+      element: active,
+      chip: active.classList?.contains?.('flow-chip') ? active.dataset?.card || null : null,
+      inChanges: Boolean(active.closest?.('#flow-card-changes')),
+      title: active.title || '',
+      text: active.textContent || '',
+    } : null;
+  }
+  const kindOf = file => file.code === '??' ? 'untracked' : statusOf(String(file.code || '').trim()[0] || 'M');
+  // A new folder's files stand in for the folder when Git listed them.
+  const flatChanges = repo => (repo?.changes || []).flatMap(file => file.files?.length ? file.files.map(inner => ({ ...inner, code: '??', staged: false })) : [file]);
+  const reviewEntries = () => (gitData?.repositories || []).filter(repo => repo.available).flatMap(repo => flatChanges(repo).map(file => ({ repo, file })));
+  const sameFile = target => entry => entry.repo.folderId === target.folderId && entry.file.path === target.path;
+  const lineTotals = files => files.reduce((sum, file) => ({ added: sum.added + (file.added || 0), removed: sum.removed + (file.removed || 0) }), { added: 0, removed: 0 });
+  // One changed file as a row: what happened to it, its name, where it is, and the lines it gained and lost.
+  function changeRow(repo, file, onOpen) {
+    const kind = kindOf(file), status = kind === 'untracked' ? 'added' : kind, trimmed = file.path.replace(/\/$/, ''), slash = trimmed.lastIndexOf('/');
+    const row = action('', onOpen, 'change-row'), mark = el('span', undefined, 'change-mark'), counts = el('span', undefined, 'change-counts');
+    row.dataset.status = status; mark.setAttribute('aria-hidden', 'true');
+    row.append(mark, el('span', file.path.slice(slash + 1), 'change-name'));
+    if (slash > 0) row.append(el('span', trimmed.slice(0, slash), 'change-where'));
+    if (file.fileCount) counts.append(el('span', `${file.fileCount} files`, 'change-many'));
+    if (file.added) counts.append(el('span', `+${file.added}`, 'diff-added'));
+    if (file.removed) counts.append(el('span', `−${file.removed}`, 'diff-removed'));
+    row.append(counts);
+    const lines = [file.added ? `${file.added} added` : '', file.removed ? `${file.removed} removed` : ''].filter(Boolean).join(', ');
+    row.title = `${file.path} · ${statusNames[kind] || 'Modified'}`;
+    row.setAttribute('aria-label', `${file.path}, ${(statusNames[kind] || 'Modified').toLowerCase()}${lines ? `, ${lines}` : ''}. Show its changes`);
+    return row;
+  }
+  const currentReviewRow = () => diffFiles?.querySelector('[aria-current="true"]') || null;
+  function renderReviewList() {
+    if (!diffFiles) return;
+    const entries = reviewing && diffDialog.open ? reviewing.entries : [];
+    diffFiles.hidden = !entries.length;
+    if (!entries.length) { diffFiles.replaceChildren(); return; }
+    const focused = diffFiles.contains(document.activeElement), several = new Set(entries.map(entry => entry.repo.folderId)).size > 1;
+    const totals = lineTotals(entries.map(entry => entry.file)), head = el('p', undefined, 'diff-files-head'), rows = [], clipped = (gitData?.repositories || []).some(repo => repo.available && repo.changesClipped);
+    head.append(el('span', `${entries.length}${clipped ? '+' : ''} changed file${entries.length === 1 && !clipped ? '' : 's'}`, 'diff-files-count'));
+    if (totals.added) head.append(el('span', `+${totals.added}`, 'diff-added'));
+    if (totals.removed) head.append(el('span', `−${totals.removed}`, 'diff-removed'));
+    let folder = null;
+    entries.forEach((entry, index) => {
+      if (several && entry.repo.folderId !== folder) { folder = entry.repo.folderId; rows.push(el('h3', entry.repo.name, 'diff-files-folder')); }
+      const row = changeRow(entry.repo, entry.file, () => showReviewFile(index));
+      if (index === reviewing.index) row.setAttribute('aria-current', 'true');
+      rows.push(row);
+    });
+    if (clipped) rows.push(el('p', 'Only the first 100 changes per folder are listed.', 'diff-truncated'));
+    diffFiles.replaceChildren(head, ...rows);
+    if (focused) currentReviewRow()?.focus();
+  }
+  async function showReviewFile(index, { preserveScroll = false } = {}) {
+    const entry = reviewing?.entries[index]; if (!entry) return;
+    reviewing.index = index; reviewing.want = null; renderReviewList();
+    if (!preserveScroll) currentReviewRow()?.scrollIntoView?.({ block: 'nearest' });
+    const { repo, file } = entry, projectId = reviewing.projectId, request = ++diffRequest, kind = kindOf(file), scrollTop = preserveScroll ? $('diff-content').scrollTop : 0;
+    $('diff-title').textContent = file.path; $('diff-meta').replaceChildren(`${repo.name} · ${statusNames[kind] || 'Modified'}${file.staged ? ' · staged' : ''}`);
+    if (!preserveScroll) $('diff-content').replaceChildren(el('p', 'Loading changes…', 'inspector-empty'));
+    try { const result = await api.api(`/api/git/diff?folderId=${encodeURIComponent(repo.folderId)}&path=${encodeURIComponent(file.path)}`, {}, projectId); if (request === diffRequest && projectId === api.getState().projectId) { renderDiff(result); $('diff-content').scrollTop = scrollTop; } }
     catch (error) { if (request === diffRequest && projectId === api.getState().projectId) $('diff-content').replaceChildren(el('p', error.message, 'inspector-empty')); }
   }
+  function reviewMessage(title, text) { diffRequest++; renderReviewList(); $('diff-title').textContent = title; $('diff-meta').replaceChildren(); $('diff-content').replaceChildren(el('p', text, 'inspector-empty')); }
+  // The list follows Git activity as it is read again. The file being read stays if it's still changed.
+  function syncReview() {
+    if (!reviewing || !diffDialog?.open) return;
+    const shown = reviewing.want ? null : reviewing.entries[reviewing.index], entries = reviewing.entries = reviewEntries();
+    const wanted = reviewing.want ? entries.findIndex(sameFile(reviewing.want)) : -1;
+    if (wanted >= 0) { showReviewFile(wanted); return; }
+    const again = shown ? entries.findIndex(sameFile({ folderId: shown.repo.folderId, path: shown.file.path })) : -1;
+    if (again >= 0) { showReviewFile(again, { preserveScroll: true }); return; }
+    if (entries.length) showReviewFile(Math.min(reviewing.index, entries.length - 1));
+    else reviewMessage('Changes', 'There are no uncommitted changes.');
+  }
+  async function openReview(target = {}) {
+    const projectId = api.getState().projectId; if (!projectId || !diffDialog) return;
+    const mine = reviewing = { projectId, entries: gitScope === projectId ? reviewEntries() : [], index: 0, want: target.path ? { folderId: target.folderId, path: target.path } : null };
+    rememberDiffOpener();
+    if (!diffDialog.open) diffDialog.showModal();
+    const index = mine.want ? mine.entries.findIndex(sameFile(mine.want)) : mine.entries.length ? 0 : -1;
+    if (index >= 0) showReviewFile(index); else reviewMessage(target.path || 'Changes', 'Reading changes…');
+    (currentReviewRow() || $('close-diff'))?.focus();
+    // Read again, so a file changed since the list was last read shows as it is now.
+    const read = await loadGit();
+    if (reviewing !== mine || !diffDialog.open) return;
+    if (!read && !mine.entries.length) { reviewMessage(target.path || 'Changes', 'Could not read the changes. Close this and try again.'); return; }
+    if (mine.want) { mine.want = null; syncReview(); }
+    if (!diffFiles?.contains(document.activeElement)) currentReviewRow()?.focus();
+  }
+  diffFiles?.addEventListener('keydown', event => {
+    if (!reviewing || event.altKey || event.metaKey || event.ctrlKey || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const last = reviewing.entries.length - 1, next = event.key === 'Home' ? 0 : event.key === 'End' ? last : Math.max(0, Math.min(last, reviewing.index + (event.key === 'ArrowDown' ? 1 : -1)));
+    event.preventDefault();
+    if (next !== reviewing.index) showReviewFile(next).catch(() => {});
+    currentReviewRow()?.focus();
+  });
+  diffDialog?.addEventListener('close', () => {
+    reviewing = null; diffRequest++; renderReviewList();
+    const saved = diffOpener; diffOpener = null;
+    if (!saved || document.querySelector?.('dialog[open]')) return;
+    let target = saved.element?.isConnected && !saved.element.hidden && !saved.element.closest?.('[hidden]') ? saved.element : null;
+    if (!target && saved.chip) {
+      const strip = $('flow-strip');
+      if (strip && !strip.hidden) target = [...(strip.querySelectorAll?.('.flow-chip') || [])].find(chip => chip.dataset?.card === saved.chip && !chip.hidden) || null;
+    }
+    if (!target && saved.inChanges) {
+      const card = $('flow-card-changes');
+      if (card && !card.hidden && !card.closest?.('[hidden]')) {
+        const buttons = [...(card.querySelectorAll?.('button') || [])].filter(item => !item.disabled && !item.hidden);
+        target = buttons.find(item => (saved.title && item.title === saved.title) || (saved.text && item.textContent === saved.text)) || buttons[0] || null;
+      }
+    }
+    target?.focus?.({ preventScroll: true });
+  });
   function restoreDiffTabs(projectId) {
     if (!projectId || !window.relayTabs) return;
     const folders = api.getState().projects?.find(project => project.id === projectId)?.folders || [];
@@ -480,8 +605,10 @@
     }
   }
   // The pull request dialog reads the folder shown here and hands back Git activity after it pushes.
-  const updateGit = (data, projectId) => { if (data && api.getState().projectId === projectId) { gitData = data; if (commitOutcome?.kind === 'done') commitOutcome = null; renderGit(); nextSteps(); } };
-  window.relayGit = { open: () => setGitPanel(true), close: () => { if (!$('git-panel').hidden) setGitPanel(false, false); }, openDiff, showDiff, openCommit, update: updateGit, refresh: loadGit };
+  const updateGit = (data, projectId) => { if (data && api.getState().projectId === projectId) { gitData = data; if (commitOutcome?.kind === 'done') commitOutcome = null; renderGit(); nextSteps(); gitChanged(); } };
+  // data() is the Git activity last read for this workspace; files() lists a folder's changed files one by one;
+  // changeRow() draws one; review() opens the changes window at a file, or at the first one.
+  window.relayGit = { open: () => setGitPanel(true), close: () => { if (!$('git-panel').hidden) setGitPanel(false, false); }, openDiff, showDiff, openCommit, update: updateGit, refresh: loadGit, data: () => gitScope === api.getState().projectId ? gitData : null, files: flatChanges, totals: lineTotals, changeRow, review: openReview };
   // A changed image shows as pictures: before and after side by side, or the one side an added or deleted image has.
   function renderImages(images, target = diffTarget()) {
     const view = el('div', undefined, 'diff-images'), size = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -682,12 +809,12 @@
     if (state.ready && (state.status?.providers?.[state.provider]?.available || state.accounts?.[state.provider]?.available || state.accounts?.[state.provider]?.installed) && state.accounts?.[state.provider]?.authenticated === true && !catalog[state.provider] && !attemptedModels[state.provider] && !loadingModels[state.provider]) loadModels();
     $('open-git').disabled = !state.projectId;
     if (lastProject !== state.projectId) {
-      lastProject = state.projectId; $('custom-model-editor').hidden = true; gitData = null; gitRequest++; gitBusy = false; $('git-repository').replaceChildren(); $('git-summary').replaceChildren(); $('git-updated').textContent = '';
+      lastProject = state.projectId; $('custom-model-editor').hidden = true; gitData = null; gitRequest++; gitBusy = false; gitLoading = null; gitChanged(); $('git-repository').replaceChildren(); $('git-summary').replaceChildren(); $('git-updated').textContent = '';
       // There is nothing to inspect without a workspace.
       if (!state.projectId) { $('git-panel').hidden = true; $('open-git').setAttribute('aria-expanded', 'false'); }
       else if (!$('git-panel').hidden) loadGit();
       else if (wantsGitPanel()) setGitPanel(true, false);
-      if (diffDialog?.open) { diffRequest++; diffDialog.close(); }
+      if (diffDialog?.open) { diffOpener = null; diffRequest++; diffDialog.close(); }
       restoreDiffTabs(state.projectId);
     }
     const completed = state.conversation?.lastRun;

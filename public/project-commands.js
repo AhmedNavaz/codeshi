@@ -98,18 +98,28 @@
       if (command.test) { const mark = node('span', 'command-test-mark'); mark.title = 'Used by Check with tests'; mark.setAttribute('aria-label', 'Used by Check with tests'); pick.append(mark); }
       pick.title = `${command.command}${place(command) ? ` · runs in ${place(command)}` : ''}`;
       pick.addEventListener('click', () => { selected.set(scope, command.id); form = null; error(''); openOutput(command, scope); refresh(scope); render(); });
-      const running = active(session), quick = node('button', `icon-button command-quick ${running ? 'stop' : 'start'}`);
+      const running = active(session), actions = node('div', 'command-row-actions');
+      const edit = node('button', 'icon-button command-icon command-row-edit'); edit.type = 'button'; edit.dataset.icon = 'edit';
+      edit.setAttribute('aria-label', `Edit ${command.name}`); edit.title = 'Edit command'; edit.disabled = pending;
+      edit.addEventListener('click', () => openForm(command));
+      actions.append(edit);
+      if (window.relayTabs && session) {
+        const restart = node('button', 'icon-button command-icon command-row-restart'); restart.type = 'button'; restart.dataset.icon = 'restart';
+        restart.setAttribute('aria-label', `Restart ${command.name}`); restart.title = 'Restart'; restart.disabled = pending || session.status === 'stopping';
+        restart.addEventListener('click', () => perform(id => api.post('/api/commands/restart', { id: command.id }, id), scope));
+        actions.append(restart);
+      }
+      const quick = node('button', `icon-button command-quick ${running ? 'stop' : 'start'}`);
       quick.type = 'button'; quick.setAttribute('aria-label', `${running ? 'Stop' : 'Start'} ${command.name}`); quick.title = running ? 'Stop' : 'Start';
       quick.disabled = pending || session?.status === 'stopping';
       quick.addEventListener('click', () => { selected.set(scope, command.id); running ? stop(command, scope) : start(command, scope); });
-      row.append(pick, quick);
+      actions.append(quick);
+      row.append(pick, actions);
       if (window.relayTabs) {
-        const status = node('span', 'command-row-state', describe(session)); row.append(status);
-        if (session) {
-          const restart = node('button', 'icon-button command-icon command-row-restart'); restart.type = 'button'; restart.dataset.icon = 'restart';
-          restart.setAttribute('aria-label', `Restart ${command.name}`); restart.title = 'Restart'; restart.disabled = pending || session.status === 'stopping';
-          restart.addEventListener('click', () => perform(id => api.post('/api/commands/restart', { id: command.id }, id), scope)); row.append(restart);
-        }
+        const status = node('span', 'command-row-state', session ? describe(session) : command.command);
+        if (!session) status.classList.add('idle-command');
+        status.title = session ? describe(session) : command.command;
+        row.append(status);
         if (failed(session)) {
           const ask = node('button', 'text-link command-row-fix', 'Ask the agent'); ask.type = 'button';
           ask.addEventListener('click', () => askAgent(command, scope)); row.append(ask);
@@ -236,12 +246,17 @@
   function chips(host, suggestions, choose) {
     host.replaceChildren(...suggestions.map(suggestion => {
       const chip = node('button', 'command-chip'); chip.type = 'button';
+      chip.dataset.command = suggestion.command; chip.title = suggestion.command;
       chip.append(node('span', 'command-chip-name', suggestion.name), node('code', 'command-chip-line', suggestion.command));
       chip.disabled = pending;
       chip.addEventListener('click', () => choose(suggestion));
       return chip;
     }));
     host.hidden = !suggestions.length;
+  }
+  function syncSuggestionSelection() {
+    const typed = $('command-text').value.trim();
+    for (const chip of $('command-suggestions').querySelectorAll('.command-chip')) chip.setAttribute('aria-pressed', String(Boolean(typed) && chip.dataset.command === typed));
   }
   async function detect(folderId, directory = '') {
     const scope = projectId, cacheKey = `${scope}:${folderId}:${directory}`;
@@ -286,9 +301,11 @@
     if (panel.hidden) return;
     const commands = state().commands;
     renderList();
+    $('command-list').hidden = Boolean(form) || !commands.length;
     $('command-form').hidden = !form;
     $('command-empty').hidden = Boolean(form) || commands.length > 0;
     $('command-view').hidden = Boolean(window.relayTabs) || Boolean(form) || !commands.length;
+    if ($('run-tools')) $('run-tools').hidden = Boolean(form);
     $('command-add').disabled = pending || !projectId || commands.length >= 12;
     if (form) return;
     if (!commands.length) renderEmpty(); else if (!window.relayTabs) renderView();
@@ -349,7 +366,10 @@
     $('command-name').value = command?.name || ''; $('command-directory').value = command?.directory || ''; $('command-text').value = command?.command || '';
     $('command-test').checked = command ? command.test === true : test;
     $('command-remove').hidden = !command;
-    $('command-suggestions').replaceChildren(); $('command-detection').textContent = ''; $('command-detection').hidden = true;
+    $('command-suggestions').replaceChildren(); $('command-suggestions').hidden = true;
+    $('command-detection').textContent = ''; $('command-detection').hidden = true;
+    if ($('command-suggestions-count')) $('command-suggestions-count').hidden = true;
+    if ($('command-suggestions-wrap')) $('command-suggestions-wrap').hidden = true;
     error(''); render(); suggest();
     (command ? $('command-text') : $('command-name')).focus();
   }
@@ -363,23 +383,38 @@
       try {
         const value = await detect(folderId, directory);
         if (scope !== projectId || opened !== form) return;
-        // The suggestions speak for themselves; the note only says when there are none.
-        $('command-detection').textContent = value.suggestions.length ? '' : value.message; $('command-detection').hidden = Boolean(value.suggestions.length);
-        chips($('command-suggestions'), unused(value.suggestions), suggestion => {
+        const items = unused(value.suggestions);
+        $('command-detection').textContent = items.length ? '' : value.suggestions.length ? 'All detected scripts in this folder are already added.' : value.message;
+        $('command-detection').hidden = Boolean(items.length);
+        chips($('command-suggestions'), items, suggestion => {
           $('command-name').value = suggestion.name; $('command-text').value = suggestion.command;
           if (suggestion.test && !state().commands.some(command => command.test && command.id !== form?.id)) $('command-test').checked = true;
+          syncSuggestionSelection();
           $('command-text').focus();
         });
-      } catch (failure) { if (scope === projectId && opened === form) { $('command-detection').textContent = failure.message; $('command-detection').hidden = false; chips($('command-suggestions'), [], () => {}); } }
+        if ($('command-suggestions-count')) { $('command-suggestions-count').textContent = items.length ? String(items.length) : ''; $('command-suggestions-count').hidden = !items.length; }
+        if ($('command-suggestions-wrap')) $('command-suggestions-wrap').hidden = !items.length && $('command-detection').hidden;
+        syncSuggestionSelection();
+      } catch (failure) {
+        if (scope === projectId && opened === form) {
+          $('command-detection').textContent = failure.message; $('command-detection').hidden = false;
+          chips($('command-suggestions'), [], () => {});
+          if ($('command-suggestions-count')) $('command-suggestions-count').hidden = true;
+          if ($('command-suggestions-wrap')) $('command-suggestions-wrap').hidden = false;
+        }
+      }
     }, 150);
   }
   $('command-folder').addEventListener('change', suggest);
   $('command-directory').addEventListener('input', suggest);
+  $('command-text').addEventListener('input', syncSuggestionSelection);
+  $('command-form').addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); closeForm(); } });
   $('command-form').addEventListener('submit', event => {
     event.preventDefault();
     const input = { ...(form?.id ? { id: form.id } : {}), name: $('command-name').value.trim(), folderId: $('command-folder').value, directory: $('command-directory').value.trim(), command: $('command-text').value.trim(), test: $('command-test').checked };
     perform(async (scope, still) => { const saved = await api.post('/api/commands/save', input, scope); if (still()) { selected.set(scope, saved.id); form = null; await refresh(scope); openOutput(saved, scope); } });
   });
+  $('command-back')?.addEventListener('click', closeForm);
   $('command-cancel').addEventListener('click', closeForm);
   $('command-remove').addEventListener('click', () => { const id = form?.id; if (id) perform(async (scope, still) => { await api.post('/api/commands/remove', { id }, scope); if (still()) { selected.delete(scope); form = null; } }); });
   $('command-add').addEventListener('click', () => openForm());

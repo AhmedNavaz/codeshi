@@ -1,7 +1,8 @@
 (() => {
   'use strict';
-  // Flow mode (#107, #128): just the chat, with plain-language cards in the space either side. Each card reads what
-  // Codeshi has already recorded, with no extra model call: how routing and handoff are working, what's left on each plan, the plan and the queue, and the files changed with Undo.
+  // Flow mode (#107, #128, #194): the chat in the middle, with a few plain-language panels either side. Each reads what
+  // Codeshi has already recorded, with no extra model call: what the agent is doing and why it was chosen, the tasks beside
+  // the chat, what's left on each plan, the files that changed with Undo, and running the app.
   // Entering hides the sidebar and the panels behind a short seal moment; leaving brings them back as they were.
   // Approvals, questions and Stop stay in the chat, so they are never hidden.
   const $ = id => document.getElementById(id), api = window.relayUI, shell = $('app-shell');
@@ -16,29 +17,23 @@
   const clip = (text, length) => { const value = String(text || '').replace(/\s+/g, ' ').trim(); return value.length > length ? value.slice(0, length - 1) + '…' : value; };
   const agentNames = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
   const agentName = (provider, local = false) => local ? 'The local model' : agentNames[provider] || 'The agent';
-  // The same three answers as the Agents panel, said in terms of what happens rather than which model does it. Flow
-  // always routes, so there is no manual mode here; leaving Flow is how you choose the agent and model by hand.
-  // Handoff follows the mode too, with no separate setting: the task moves to another agent at the mode's share of a limit.
-  const modes = [
-    { mode: 'saver', name: 'Saver', does: 'Codeshi uses local rules with light and standard models at low effort, spends allowance where it resets soonest, and hands off autonomously as capacity tightens.' },
-    { mode: 'smart', name: 'Smart', does: 'Codeshi matches the model and effort to each message, spends allowance where it resets soonest, and hands off adaptively as limits approach.' },
-    { mode: 'ultra', name: 'Ultra', does: 'Codeshi uses the strongest models and deepest reasoning first, stepping down one tier only when needed, and preserves task continuity before handing off.' },
-  ];
+  // Flow always routes, so there is no manual mode here; the mode is chosen and shown in the message box's model picker.
+  const modes = [{ mode: 'saver', name: 'Saver' }, { mode: 'smart', name: 'Smart' }, { mode: 'ultra', name: 'Ultra' }];
   const canonicalMode = mode => window.relayRouting?.normalizeMode?.(mode) || mode || null;
-  // The cards, always present: each has a job, so none can be closed.
+  // The panels (#194). Each names itself in its head, shows what it holds on its face and acts in one click. The left rail
+  // is the agents and work: what the agent is doing, the tasks beside the chat, and what's left on each plan. The right
+  // rail is your project: the files that changed and running the app. The chat stays in the middle.
   const CARDS = [
-    { id: 'next', title: 'What’s next', side: left },
-    { id: 'tasks', title: 'Tasks side by side', side: left },
-    { id: 'plans', title: 'What’s left on your plans', side: left },
-    { id: 'working', title: 'How it’s working now', side: right },
-    { id: 'happened', title: 'What happened', side: right },
-    { id: 'files', title: 'Files changed', side: right },
-    { id: 'preview', title: 'Run and review your project', side: right },
+    { id: 'activity', title: 'Activity', side: 'left' },
+    { id: 'tasks', title: 'Tasks', side: 'left' },
+    { id: 'usage', title: 'Usage', side: 'left' },
+    { id: 'changes', title: 'Changes', side: 'right' },
+    { id: 'app', title: 'Your app', side: 'right' },
   ];
   // The window shows one of three views: Normal, Flow or the Plan (#162). on is true in Flow alone. Routing is its own
   // setting: Flow turns it on, Normal turns it off, and the Plan keeps it as it was, so the Plan never waits for work.
   const VIEW_KEY = 'throughline:view';
-  let view = 'normal', on = false, routed = false, saved = null, testingPending = false, peeking = null, scheduled = false, ticker = null;
+  let view = 'normal', on = false, routed = false, saved = null, peeking = null, scheduled = false, ticker = null;
   let checkingMode = false, transitioning = false, restored = false;
   const normalButton = $('view-normal'), planButton = $('open-plan');
   const LOCK_MESSAGE = 'Finish or stop workspace work, cancel its reset wait, or pause its queue before changing views.';
@@ -160,7 +155,7 @@
     releaseDetail();
     if (name === 'review') panelAPI(name)?.closePanel?.(); else if (name) panelAPI(name)?.close?.();
     if (detail?.open) detail.close();
-    if (on && narrow() && detailCard) peekCard(detailCard);
+    if (on && detailCard) peekCard(detailCard);
     if (detailFocus?.isConnected && !detailFocus.closest?.('[hidden]')) detailFocus.focus();
     else if (on) $('message-input')?.focus();
     detailFocus = null;
@@ -181,44 +176,74 @@
   }
   function scheduleDetail() { if (!detailScheduled) { detailScheduled = true; Promise.resolve().then(syncDetail); } }
 
-  // ---- The cards. Each is built once; renders replace only its body and footer.
-  // Tasks side by side and Run and review your project are experimental (#176); off, their cards leave both rails and the strip.
-  const cardOff = id => (id === 'tasks' && window.relayExperimental?.enabled('tasks') === false) || (id === 'preview' && window.relayExperimental?.enabled('review') === false);
+  // ---- The panels (#194). Each is built once: a head with its name, how many it holds and a word for where it stands,
+  // then its rows, then its actions. What it holds shows on its face and one click acts on it, so nothing opens a second
+  // window to be useful. Tasks side by side and Your app are experimental (#176); off, they leave the rails and the strip.
+  const cardOff = id => (id === 'tasks' && window.relayExperimental?.enabled('tasks') === false) || (id === 'app' && window.relayExperimental?.enabled('review') === false);
   const cards = new Map(CARDS.map(card => {
-    const element = node('section', 'flow-card'), head = node('div', 'flow-card-head'), title = node('h2'), body = node('div', 'flow-card-body'), foot = node('div', 'flow-card-foot');
-    title.append(node('span', 'flow-card-title', card.title));
-    element.id = `flow-card-${card.id}`; title.id = `flow-card-${card.id}-title`; element.setAttribute('aria-labelledby', title.id);
-    if (card.hidden) element.hidden = true; if (['tasks', 'preview'].includes(card.id)) title.append(window.relayExperimental?.badge() || ''); head.append(title); element.append(head, body, foot);
-    return [card.id, { ...card, element, body, foot, signature: null }];
+    const element = node('section', 'flow-card flow-panel'), head = node('header', 'flow-panel-head'), icon = node('i', 'flow-panel-icon'), title = node('h2', 'flow-panel-title', card.title);
+    const count = node('span', 'flow-panel-count'), state = node('span', 'flow-panel-state'), tools = node('span', 'flow-panel-tools'), body = node('div', 'flow-panel-body'), foot = node('div', 'flow-panel-foot');
+    element.id = `flow-card-${card.id}`; element.dataset.card = card.id; element.dataset.state = 'idle'; title.id = `flow-card-${card.id}-title`; element.setAttribute('aria-labelledby', title.id);
+    icon.setAttribute('aria-hidden', 'true'); count.hidden = true;
+    if (card.id === 'tasks') title.append(window.relayExperimental?.badge() || '');
+    head.append(icon, title, count, state, tools); element.append(head, body, foot);
+    return [card.id, { ...card, element, head, count, state, tools, body, foot, signature: null, shown: true, quiet: false, attention: false, live: false, label: card.title }];
   }));
-  // Quiet utility areas anchor the two rails, separate from the live task cards.
+  // A panel's head: how many it holds and a word for where it stands. Live is the accent; attention is amber, and comes
+  // first among a narrow window's chips. A quiet panel has nothing to say, so it gets no chip there.
+  function headline(card, { shown = true, count = '', word = '', live = false, attention = false, quiet = false, label = '' } = {}) {
+    card.shown = shown; card.live = shown && live; card.attention = shown && attention; card.quiet = quiet; card.label = label || card.title;
+    card.element.hidden = !shown; card.element.dataset.state = card.attention ? 'attention' : card.live ? 'live' : 'idle';
+    const total = count ? String(count) : '';
+    card.count.hidden = !total; if (card.count.textContent !== total) card.count.textContent = total;
+    if (typeof word === 'string' && card.state.textContent !== word) card.state.textContent = word;
+  }
+  const mark = (cls, icon) => { const value = node('i', cls); if (icon) value.dataset.icon = icon; value.setAttribute('aria-hidden', 'true'); return value; };
+  const actionButton = (text, handler, { icon = '', hint = '', primary = false, disabled = false } = {}) => {
+    const value = button(`flow-action${primary ? ' flow-action-primary' : ''}`, undefined, handler);
+    if (icon) value.append(mark('flow-action-icon', icon));
+    value.append(node('span', undefined, text)); if (hint) value.title = hint; value.disabled = Boolean(disabled);
+    return value;
+  };
+  const toolButton = (icon, label, handler) => { const value = button('icon-button flow-tool', undefined, handler); value.dataset.icon = icon; value.setAttribute('aria-label', label); value.title = label; return value; };
+  // A panel redrawn while one of its buttons has the focus gives it back to the button that says the same.
+  const buttonName = item => item?.dataset?.key || item?.getAttribute?.('aria-label') || item?.textContent || '';
+  function redraw(card, draw) {
+    const focused = card.element.contains(document.activeElement) ? document.activeElement : null, name = buttonName(focused);
+    draw();
+    if (!focused || focused.isConnected || !name) return;
+    [...card.element.querySelectorAll('button')].find(item => buttonName(item) === name && !item.disabled)?.focus({ preventScroll: true });
+  }
+  // Quiet utility areas anchor the rails, apart from the panels: your preferences on the left, staying connected on the right.
   const space = node('section', 'flow-utility flow-space'), connect = node('section', 'flow-utility flow-connect');
   space.id = 'flow-space'; connect.id = 'flow-connect';
   space.setAttribute('aria-label', 'Your space'); connect.setAttribute('aria-label', 'Stay connected');
-  space.append(node('h2', undefined, 'Your space'), node('p', 'flow-utility-hint', 'Appearance, weather and preferences.'));
+  space.append(node('h2', undefined, 'Your space'));
   // Each preference is one row: its name on the left, a small control on the right. The Lounge fills in the weather.
   const appearance = node('div', 'flow-pref flow-appearance'); appearance.append(node('span', 'flow-utility-label', 'Appearance'));
   const weather = node('div', 'flow-pref flow-weather'); weather.id = 'flow-weather';
   space.append(appearance, weather);
-  connect.append(node('h2', undefined, 'Stay connected'), node('p', 'flow-utility-hint', 'Pick up the conversation on your phone, or share it live with a teammate.'));
+  connect.append(node('h2', undefined, 'Stay connected'));
   // Remote access, Share live and Keep awake sit side by side in one row.
   const connectRow = node('div', 'flow-connect-row'); connect.append(connectRow);
   const preferences = node('div', 'flow-preferences');
-  // Move the actual controls so connection counts, update progress and theme state keep updating in Flow.
+  // Move the actual controls so connection counts, update progress and theme state keep updating in Flow. The status
+  // line moves too: it leads the chips of a narrow window, and in a wide one it stays for screen readers alone, as
+  // Activity shows the same thing.
   const movedControls = [];
   function moveControls() {
     for (const id of ['flow-status', 'connect-phone', 'status-watch', 'status-watch-menu', 'relay-settings', 'appearance-options', 'keep-awake', 'update-status', 'update-more']) {
       const control = $(id); if (!control) continue;
       const marker = node('span'); marker.hidden = true;
       control.parentNode.insertBefore(marker, control); movedControls.push({ control, marker });
-      if (id === 'flow-status') cards.get('working').element.insertBefore(control, cards.get('working').body);
+      if (id === 'flow-status') left.append(control);
       else if (id === 'appearance-options') appearance.append(control);
       else if (id === 'relay-settings') space.append(control);
       else if (['connect-phone', 'status-watch', 'keep-awake'].includes(id)) connectRow.append(control);
       else connect.append(control);
     }
   }
-  // Moving an element takes focus off it. When the button or control in use moves with the header or into a card,
+  // Moving an element takes focus off it. When the button or control in use moves with the header or into a panel,
   // focus goes back to it so the keyboard and screen readers stay where they were (#26).
   function keepFocus(move) {
     const focused = document.activeElement;
@@ -240,26 +265,17 @@
     if (!headerMarker) return;
     headerMarker.parentNode.insertBefore(header, headerMarker); headerMarker.remove(); headerMarker = null;
   }
-  // Each rail scrolls its cards in their own area, so the utility section under the divider stays put at the foot.
-  const scrollers = new Map([left, right].map(side => { const scroller = node('div', 'flow-side-cards'); scroller.id = `${side.id}-cards`; return [side, scroller]; }));
+  // The panels scroll in their own area of each rail, so the utility section under the rule stays at its foot. A panel
+  // keeps its place whatever it says, so each is always found where it was.
+  const rails = { left: node('div', 'flow-side-cards'), right: node('div', 'flow-side-cards') };
+  rails.left.id = 'flow-left-cards'; rails.right.id = 'flow-right-cards';
   function place() {
-    for (const side of [left, right]) {
-      const scroller = scrollers.get(side);
-      scroller.replaceChildren(...CARDS.filter(card => card.side === side && peeking !== card.id).map(card => cards.get(card.id).element));
-      side.replaceChildren(scroller);
-    }
+    const tight = narrow();
+    for (const side of ['left', 'right']) rails[side].replaceChildren(...CARDS.filter(card => card.side === side && card.id !== peeking).map(card => cards.get(card.id).element));
+    left.replaceChildren(...(status && movedControls.length && !tight ? [status] : []), rails.left); right.replaceChildren(rails.right);
     if (peeking !== 'space') { left.append(space); right.append(connect); }
   }
 
-  // How it's working now: the routing mode first, with what it does and when it hands off in plain words, what the next
-  // message would do, and an inline testing preference. Routing changes live in Agent settings.
-  function modeSentence(current) {
-    const mode = canonicalMode(current?.mode), option = modes.find(item => item.mode === mode), extras = [];
-    if (!option) return routingPending ? 'Turning routing on…' : 'Routing is off. Flow turns it on when the workspace is idle.';
-    if (current?.allowApi) extras.push('Agents billed by use can be chosen.');
-    if (current?.check) extras.push(api.getState().status?.verificationCadence === 'review-first' ? 'Routine automatic tests wait while you review. A selected build/review workflow still checks.' : 'After a run changes files, your tests run; if they fail, it tries once more, one step up.');
-    return [option.does, ...extras].join(' ');
-  }
   const limitParts = label => { const [period, ...scope] = String(label || "").split(" · "); return { period, scope: scope.join(" · ") }; };
   function limitName(label) {
     const { period, scope } = limitParts(label), name = /^(?:\d+-hour|Weekly|Daily|Current)$/.test(period) ? `${period} limit` : period;
@@ -280,135 +296,6 @@
     }
     return working;
   }
-  const draft = () => ({ text: $('message-input')?.value.trim() || '', files: window.relayFiles?.ids?.().length || 0 });
-  const continuationPattern = /^Continue the unfinished task from this shared conversation\.[^.]*\.?\s*/i;
-  function cleanRouteError(error) {
-    if (!error) return '';
-    let msg = String(error).trim();
-    msg = msg.replace(/\bContinue the unfinished task from this shared conversation\.[^.]*\./gi, '').trim();
-    msg = msg.replace(/^Auto found no connected agent within your rules/i, 'No connected agent is available within your rules');
-    msg = msg.replace(/\s*API-billed agents need separate consent\.?$/i, '');
-    return msg || 'No connected agent is available.';
-  }
-  function updateWorkingFacts(state, c, current) {
-    workingFacts.replaceChildren();
-    const run = c?.activeRun, running = api.isRunning();
-    const runningLanes = (c?.parallelTasks || []).filter(task => task.status === "running" && !task.managed);
-
-    if (running && run) {
-      const agent = agentName(run.provider, run.connection === "local");
-      const model = run.model ? (window.relayModelPicker?.modelName?.(run.provider, run.model) || run.model) : "";
-      // The status line above this list already says which step the agent is on and for how long; these rows add the
-      // model, effort and phase, so nothing is said twice.
-
-      if (run.purpose === "routing") {
-        const row = node("div");
-        row.append(node("dt", undefined, "Assessor"), node("dd", undefined, `${agent}${model ? ` (${model})` : ""}: ${run.phase === "probing" ? "checking account & plan usage" : "assessing task"}`));
-        workingFacts.append(row);
-      } else if (run.purpose === "review") {
-        const row = node("div");
-        row.append(node("dt", undefined, "Reviewer"), node("dd", undefined, `${agent}${model ? ` (${model})` : ""}: reviewing changes`));
-        workingFacts.append(row);
-      } else {
-        const row = node("div");
-        const phaseText = phaseWords[run.phase] || run.phase || "working";
-        row.append(node("dt", undefined, "Running"), node("dd", undefined, `${agent}${model ? ` · ${model}` : ""}${run.effort ? ` (${run.effort} effort)` : ""}: ${phaseText}`));
-        workingFacts.append(row);
-      }
-      // Flow hands a routed task off by itself and says so in the conversation; an offer left here waits for you (#12).
-      const offer = c.handoffOffer;
-      if (offer) {
-        const row = node("div"), charges = offer.to?.billingSource !== "subscription";
-        row.append(node("dt", undefined, "Handoff"), node("dd", undefined, `Waiting for you: ${agentName(offer.from.provider)} has used ${Math.round(offer.from.usedPercent)}% of its limit. Hand off to ${agentName(offer.to.provider)}${charges ? " and accept its charges" : ""} in the conversation.`));
-        workingFacts.append(row);
-      }
-    } else if (c?.resume || c?.limitSwitching) {
-      const row = node("div");
-      const waitAgent = agentName(c?.resume?.providers?.[0] || "agent");
-      const reset = c?.resume?.resetsAt ? resetWords(c.resume.resetsAt) : "";
-      row.append(node("dt", undefined, "Waiting"), node("dd", undefined, `${waitAgent} usage limit to reset${reset ? ` (${reset})` : ""}`));
-      workingFacts.append(row);
-    } else {
-      const row = node("div");
-      const composerAgent = agentNames[state.provider] || state.provider;
-      const composerModel = state.model ? (window.relayModelPicker?.modelName?.(state.provider, state.model) || state.model) : "";
-      row.append(node("dt", undefined, "Composer"), node("dd", undefined, `${composerAgent}${composerModel ? ` · ${composerModel}` : ""}${routing() ? " (routed on Send)" : ""}`));
-      workingFacts.append(row);
-    }
-
-    if (runningLanes.length) {
-      const row = node("div");
-      const laneNames = runningLanes.map(t => `“${t.title}” (${agentNames[t.runningProvider || t.provider] || "agent"})`).join(", ");
-      row.append(node("dt", undefined, "Task lanes"), node("dd", undefined, laneNames));
-      workingFacts.append(row);
-    }
-
-    const testRow = node("div"), testVal = node("dd");
-    testVal.append(testingControl);
-    testRow.append(node("dt", undefined, "Testing"), testVal);
-    workingFacts.append(testRow);
-  }
-  async function setReviewFirst(enabled) {
-    if (testingPending) return;
-    testingPending = true; render();
-    try {
-      await api.post('/api/preferences', { verificationCadence: enabled ? 'review-first' : 'as-needed' });
-      await api.refresh();
-      api.announce?.(enabled ? 'Review first enabled for new turns.' : 'Checks as needed enabled for new turns.');
-    } catch (error) { api.showNotice?.(`Testing preference could not be saved. ${error.message}`); }
-    finally { testingPending = false; render(); }
-  }
-  // Keep the switch mounted as live routing and draft previews change, including while a save is pending.
-  const testingControl = node('div', 'flow-testing'), testingLabel = node('div', 'flow-testing-label');
-  const testingName = node('span', undefined, 'Review first'), testingDescription = node('p', 'flow-testing-description');
-  testingDescription.id = 'flow-testing-description';
-  const testingSwitch = button('flow-switch', '', () => setReviewFirst(api.getState().status?.verificationCadence !== 'review-first'));
-  testingSwitch.id = 'flow-testing-toggle'; testingSwitch.setAttribute('role', 'switch'); testingSwitch.setAttribute('aria-label', 'Review first');
-  testingSwitch.setAttribute('aria-describedby', testingDescription.id);
-  const switchThumb = node('span'); switchThumb.setAttribute('aria-hidden', 'true'); testingSwitch.append(switchThumb);
-  testingLabel.append(testingName, testingSwitch); testingControl.append(testingLabel, testingDescription);
-  const workingMode = node('div', 'flow-mode'), workingModeHeader = node('div', 'flow-mode-header');
-  const workingModeBadge = node('span', 'flow-mode-badge'); workingModeBadge.setAttribute('aria-hidden', 'true');
-  const workingModeIcon = node('i', 'flow-mode-icon'); workingModeIcon.setAttribute('aria-hidden', 'true');
-  workingModeBadge.append(workingModeIcon);
-  const workingModeTitles = node('div', 'flow-mode-titles');
-  const workingModeEyebrow = node('span', 'flow-mode-eyebrow', 'Routing');
-  const workingModeName = node('strong', 'flow-mode-name');
-  workingModeTitles.append(workingModeEyebrow, workingModeName);
-  const workingModeTag = node('span', 'flow-mode-tag'); workingModeTag.setAttribute('aria-hidden', 'true');
-  workingModeHeader.append(workingModeBadge, workingModeTitles, workingModeTag);
-  const workingModeText = node('p', 'flow-mode-text');
-  workingMode.append(workingModeHeader, workingModeText);
-  const workingFacts = node('dl', 'flow-facts');
-  for (const [term, detail] of [['Testing', testingControl]]) {
-    const row = node('div'), value = detail.tagName === 'DD' ? detail : node('dd');
-    if (value !== detail) value.append(detail);
-    row.append(node('dt', undefined, term), value); workingFacts.append(row);
-  }
-  function renderWorking(card) {
-    const state = api.getState(), c = state.conversation, current = routing(), currentMode = canonicalMode(current?.mode);
-    const running = api.isRunning() ? (c?.activeRun?.connection === "local" ? "local" : c?.activeRun?.provider) : null;
-    const runningLanes = (c?.parallelTasks || []).filter(task => task.status === "running" && !task.managed).map(t => [t.id, t.runningProvider, t.status]);
-        const signature = JSON.stringify([current, routingPending, state.provider, state.model, state.ready, testingPending, state.status?.verificationCadence, running, c?.activeRun?.phase, c?.activeRun?.purpose, c?.resume, c?.handoffOffer, runningLanes]);
-    if (signature === card.signature) return;
-    card.signature = signature;
-    if (!card.body.childNodes.length) {
-      card.body.append(workingMode, workingFacts);
-      card.foot.append(button("flow-button", "Agent settings", () => window.relayAgents?.open?.()));
-    }
-    updateWorkingFacts(state, c, current);
-    const option = modes.find(item => item.mode === currentMode);
-    workingMode.dataset.mode = option ? option.mode : routingPending ? "pending" : "off";
-    workingModeName.textContent = option ? option.name : routingPending ? "Turning on…" : "Off";
-    workingModeText.textContent = modeSentence(current);
-    const reviewFirst = state.status?.verificationCadence === "review-first";
-    testingSwitch.setAttribute("aria-checked", String(reviewFirst));
-    testingSwitch.disabled = testingPending || !state.ready || !state.status;
-    testingSwitch.setAttribute("aria-busy", String(testingPending));
-    testingDescription.textContent = reviewFirst ? "Small safeguards now; verify when you ask to finalize." : "Checks as needed, focused on what changed.";
-    testingDescription.title = "Applies to new turns in every workspace. Running agents keep their starting setting. Required checks and selected build/review workflows still apply.";
-  }
-
   // The same model-aware five-hour headline and secondary allowance shown in Agents.
   const resetWords = value => { const at = new Date(value || ''); if (Number.isNaN(at.getTime())) return ''; return 'resets ' + at.toLocaleString(undefined, at.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit', hour12: true } : { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true }); };
   const remaining = row => Math.max(0, Math.min(100, Math.round(100 - row.usedPercent)));
@@ -420,82 +307,15 @@
       return { provider, reported: usage?.available !== false, primary: summary?.primary || null, secondary: summary?.secondary || null, warning: summary?.warning || null };
     });
   }
-  function renderPlans(card) {
-    const state = api.getState(), rows = planRows();
-    const working = activeWorkingProviders();
-    const signature = JSON.stringify([rows, state.provider, [...working].sort()]);
-    if (signature === card.signature) return;
-    card.signature = signature;
-    const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
-    if (!rows.length) {
-      body.append(node('p', 'flow-empty', 'Connect an agent in Settings to see what’s left on its plan.'));
-      card.foot.append(button('flow-button', 'Open Settings', () => window.relaySettings?.open?.('accounts')));
-      return;
-    }
-    const list = node('ul', 'flow-plans');
-    for (const row of rows) {
-      const item = node('li', 'flow-plan'), head = node('div', 'flow-plan-head'), icon = node('i', `agent-icon ${row.provider}`);
-      item.dataset.provider = row.provider; icon.setAttribute('aria-hidden', 'true');
-      head.append(icon, node('strong', undefined, agentNames[row.provider]));
-      const isWorking = working.has(row.provider);
-      if (isWorking) {
-        item.classList.add('flow-plan-active');
-        const badge = node('span', 'flow-plan-working-badge');
-        badge.setAttribute('aria-label', `${agentNames[row.provider]} is working`);
-        const dot = node('span', 'flow-pulse-dot');
-        dot.setAttribute('aria-hidden', 'true');
-        badge.append(dot);
-        head.append(badge);
-      }
-      if (!row.primary) {
-        head.append(node('span', 'flow-plan-value', row.reported ? 'No reading yet' : 'Not reported'));
-        item.append(head);
-        if (window.relayUsage?.load) item.append(button('flow-button', 'Check now', () => window.relayUsage.load(row.provider)));
-      } else {
-        const percent = remaining(row.primary);
-        item.dataset.level = level(percent);
-        head.append(node('span', 'flow-plan-value', `${percent}% left`));
-        const meter = node('div', 'flow-meter');
-        meter.style.setProperty('--left', `${percent}%`);
-        meter.setAttribute('role', 'img');
-        meter.setAttribute('aria-label', `${percent}% of ${agentNames[row.provider]}’s ${row.primary.label} allowance left`);
-        const reset = resetWords(row.primary.resetsAt);
-        const bindingName = limitName(row.primary.label);
-        item.append(head, meter, node('span', 'flow-plan-when', `${bindingName}${reset ? ` · ${reset}` : ''}`));
-        if (row.secondary) {
-          const otherReset = resetWords(row.secondary.resetsAt);
-          const other = node('span', 'flow-plan-secondary', `${row.secondary.label} · ${remaining(row.secondary)}% left${otherReset ? ` · ${otherReset}` : ''}`);
-          other.dataset.level = level(remaining(row.secondary));
-          item.append(other);
-        }
-      }
+  const leftOf = row => Math.min(...[row.primary, row.secondary].filter(Boolean).map(remaining));
+  const when = value => { const at = new Date(value || ''); if (Number.isNaN(at.getTime())) return ''; return at.toLocaleString(undefined, at.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit', hour12: true } : { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true }); };
+  const cap = text => text ? text[0].toUpperCase() + text.slice(1) : '';
+  const selectTask = id => { if (peeking) closePeek(); return window.relayTaskThreads?.select?.(id)?.catch?.(error => api.showNotice?.(error.message)); };
+  const workspaceFolders = () => api.getState().projects?.find(project => project.id === api.getState().projectId)?.folders || [];
 
-      item.tabIndex = 0;
-      item.setAttribute('role', 'button');
-      item.setAttribute('aria-label', `${agentNames[row.provider]} limits. Click to view all limits in overlay.`);
-      item.title = `Click to view ${agentNames[row.provider]}’s full limits in an overlay window`;
-      item.addEventListener('click', (e) => {
-        if (e.target.closest('button')) return;
-        window.relayUsage?.open?.(row.provider, item);
-      });
-      item.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          if (e.target.closest('button')) return;
-          e.preventDefault();
-          window.relayUsage?.open?.(row.provider, item);
-        }
-      });
-      list.append(item);
-    }
-    body.append(list);
-    const runningProvider = [...working][0];
-    const chosen = (runningProvider && rows.some(row => row.provider === runningProvider)) ? runningProvider : (rows.some(row => row.provider === state.provider) ? state.provider : rows[0].provider);
-    const allLimitsBtn = button('flow-button', 'All limits', (e) => window.relayUsage?.open?.(chosen, e.currentTarget || allLimitsBtn));
-    allLimitsBtn.title = 'View detailed limits in an overlay window';
-    card.foot.append(allLimitsBtn);
-  }
-
-    // What's next: the agent's plan for the task, then what's queued. The plan stays while the task can still go on.
+  // ---- Activity: what's happening in the conversation that's open. While an agent works it leads with who, on what
+  // and for how long, then the steps of its plan. While it waits for you it says so first. Afterwards it keeps how the
+  // last run ended. Why Codeshi chose the agent is under it, as recorded at the time, with earlier runs behind a fold.
   function planFor() {
     const c = api.getState().conversation, last = c?.lastRun, running = api.isRunning();
     const held = !running && last && last.status !== 'complete' && last.plan?.steps?.some(step => step.status !== 'done');
@@ -514,253 +334,6 @@
     // A draft that ended without cards shows on the Plan, beside the cards you already have, with Draft again and Dismiss.
     if (window.relayOrchestration?.notReady?.()) return { chip: 'Draft not used', board: true, text: plan.status === 'interrupted' ? 'Drafting cards stopped, so nothing was added to the Plan.' : `${agentName(plan.planner?.provider)}’s drafted cards couldn’t be used, so nothing was added to the Plan. Draft again or dismiss it there.` };
     return null;
-  }
-  function renderNext(card) {
-    const state = api.getState(), c = state.conversation, { steps, held, running, run } = planFor(), queue = c?.queue || [], tasks = c?.parallelTasks || [];
-    const plan = waitingPlan();
-    const lastUserMsg = c?.messages?.filter(m => m.role === 'user').at(-1);
-    const activeTitle = state.taskId ? (tasks.find(t => t.id === state.taskId)?.title || 'Task thread') : null;
-    const signature = JSON.stringify([plan, steps, held, running, run?.provider, run?.phase, lastUserMsg?.id, lastUserMsg?.text, queue, c?.queuePaused, state.projectId, state.taskId, state.taskDraft, activeTitle]);
-    if (signature === card.signature) return;
-    card.signature = signature;
-    const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
-    if (plan) body.append(node('p', 'flow-lead flow-plan-waiting', plan.text));
-    // The plan opens full window from here, while it's being made, waits or runs as tasks.
-    if (window.relayOrchestration?.snapshot?.()) {
-      const openChart = node('button', 'secondary-button flow-plan-open', 'Open plan'); openChart.type = 'button';
-      openChart.addEventListener('click', () => window.relayPlanView?.open());
-      body.append(openChart);
-    }
-    else if (plan?.board) {
-      const openBoard = node('button', 'secondary-button flow-plan-open', 'Open the Plan'); openBoard.type = 'button';
-      openBoard.addEventListener('click', () => window.relayBoard?.open?.());
-      body.append(openBoard);
-    }
-    else if (running && !steps.length) {
-      const activeItem = node('div', 'flow-current-work flow-task-running flow-plan-active');
-      const head = node('div', 'flow-task-head');
-      const titleWrapper = node('div', 'flow-current-work-title-wrap');
-      const icon = node('i', `agent-icon ${run?.provider || state.provider}`);
-      icon.setAttribute('aria-hidden', 'true');
-      const prompt = lastUserMsg?.text;
-      const title = state.taskId ? activeTitle : (prompt ? clip(prompt, 95) : 'Current task');
-      const titleEl = node('strong', 'flow-task-title', title);
-      titleEl.title = prompt || title;
-      titleWrapper.append(icon, titleEl);
-
-      head.append(titleWrapper);
-
-      const hint = node('p', 'flow-current-work-hint', 'The agent’s plan appears here as it makes one.');
-      activeItem.append(head, hint);
-      body.append(activeItem);
-    } else if (!steps.length && !queue.length) {
-      body.append(node('p', 'flow-empty', state.taskDraft ? 'Describe the new task in the message box. Nothing starts until you send it.' : state.taskId ? 'This task runs beside the workspace chat. Ask a follow-up below, or switch back in Tasks side by side.' : 'Describe what you want in the chat to get started. This card tracks the agent’s steps and your queued follow-ups.'));
-    }
-    if (steps.length) {
-      const done = steps.filter(step => step.status === 'done').length, current = currentStep(steps);
-      body.append(node('p', 'flow-lead', done === steps.length ? 'All steps done.' : `${done} of ${steps.length} done${held ? ' · stopped' : ''}.`));
-      const list = node('ol', 'flow-steps');
-      for (const step of steps) {
-        const item = node('li', `flow-step ${step.status}`), mark = node('span', 'flow-step-mark'); mark.setAttribute('aria-hidden', 'true');
-        item.append(mark, node('span', 'flow-step-text', step.text));
-        if (step === current && !held && step.status === 'active') item.setAttribute('aria-current', 'step');
-        item.setAttribute('aria-label', `${step.status === 'done' ? 'Done' : step.status === 'active' ? (held ? 'Stopped at' : 'Now') : 'To do'}: ${step.text}`);
-        list.append(item);
-      }
-      body.append(list);
-    }
-    if (queue.length) {
-      body.append(node('h3', 'flow-subhead', `Then · ${plural(queue.length, 'queued message')}${plan && !plan.board ? ' · waiting for the plan' : c.queuePaused ? ' · paused' : ''}`));
-      const list = node('ol', 'flow-queue');
-      for (const item of queue.slice(0, 5)) list.append(node('li', 'flow-queue-item', clip(item.text, 110)));
-      if (queue.length > 5) list.append(node('li', 'flow-queue-more', `and ${queue.length - 5} more`));
-      body.append(list);
-    }
-  }
-
-  // Tasks side by side (#88, #107): the workspace chat and every folder task running alongside it, with approvals,
-  // copy/merge state and direct switching without leaving Flow.
-  // A split's parts that Flow is finishing by itself (task.managed) show above the message box instead (split-progress.js)
-  // and never appear in Flow's Tasks side by side card, Plan row, or outside Flow.
-  // The Plan chat (#162) shows only when it waits for an approval; the Plan view lists it with the cards' tasks.
-  const visibleTasks = state => (state.conversation?.parallelTasks || []).filter(task => !task.managed && (task.purpose === 'plan-chat' ? Boolean(task.approvals || task.id === state.taskId) : task.purpose !== 'project-review' || task.id === state.taskId || task.approvals));
-  const taskMergeable = task => Boolean(task.hasWorktree && ['complete', 'stopped', 'failed'].includes(task.status));
-  const taskEnded = task => !['running', 'waiting'].includes(task.status) && !taskMergeable(task);
-  const TASK_STATUS_WORDS = { complete: 'finished', stopped: 'stopped', failed: 'didn’t finish', discarded: 'discarded', cancelled: 'cancelled', blocked: 'blocked', lost: 'copy gone', detached: 'folder removed' };
-  let pickingTaskFolder = false, tasksProjectId = null;
-  function taskStatusText(task) {
-    if (task.testing) return 'Checking combined result…';
-    if (task.status === 'waiting') return task.held ? 'paused — ready to start' : 'waiting to start';
-    if (task.status === 'integrated') return task.integration?.files ? `${plural(task.integration.files, 'file')} merged` : 'merged';
-    if (task.status === 'kept') return task.integration?.branch ? `kept on ${task.integration.branch}` : 'kept as branch';
-    return TASK_STATUS_WORDS[task.status] || task.status;
-  }
-  function renderTasks(card) {
-    const state = api.getState(), c = state.conversation, tasks = visibleTasks(state);
-    const folders = state.projects?.find(project => project.id === state.projectId)?.folders || [];
-    if (state.projectId !== tasksProjectId || state.taskDraft) { tasksProjectId = state.projectId; pickingTaskFolder = false; }
-    const mainRunning = Boolean(state.taskId || state.taskDraft ? state.status?.runningConversationId : api.isRunning());
-    const mainApprovals = !state.taskId && !state.taskDraft ? (c?.pendingApprovals?.length || 0) : 0;
-    const hasThreads = Boolean(window.relayTaskThreads);
-    const signature = JSON.stringify([
-      state.projectId, state.taskId, state.taskDraft, pickingTaskFolder, hasThreads, mainRunning, mainApprovals,
-      folders.map(folder => [folder.id, folder.displayName || folder.name]),
-      tasks.map(task => [task.id, task.title, task.status, task.folderName, task.mode, task.provider, task.runningProvider, task.runningModel, task.model, task.managed, task.runningPhase, task.runningStep, task.approvals, task.testing, task.hasWorktree, task.held, task.reason, task.conversationId, task.integration?.files, task.integration?.branch, task.cardColumn]),
-    ]);
-    if (signature === card.signature) return;
-    card.signature = signature;
-    const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
-    const selectTask = id => { if (peeking) closePeek(); return window.relayTaskThreads?.select?.(id)?.catch?.(error => api.showNotice?.(error.message)); };
-    const startDraft = folderId => { pickingTaskFolder = false; if (peeking) closePeek(); return window.relayTaskThreads?.open?.(folderId); };
-
-    // A Plan's cards and the Plan chat run as tasks too, but they're followed and read on the Plan, so they share one row
-    // here that opens the Plan view instead of keeping the Plan chat or a card inside Flow.
-    const isPlanTask = task => Boolean(task && !task.managed && (task.board || task.purpose === 'plan-chat'));
-    const planChatTask = tasks.find(task => task.purpose === 'plan-chat') || null;
-    const planOpen = tasks.filter(task => task.board && (['doing', 'review'].includes(task.cardColumn) || task.id === state.taskId || task.approvals > 0));
-    const ownTasks = tasks.filter(task => !isPlanTask(task));
-    if (ownTasks.length || planOpen.length || planChatTask) {
-      const runningCount = ownTasks.filter(task => task.status === 'running').length + planOpen.filter(task => task.status === 'running').length + (planChatTask?.status === 'running' ? 1 : 0);
-      const approvalCount = ownTasks.filter(task => task.approvals > 0).length + planOpen.filter(task => task.approvals > 0).length + (planChatTask?.approvals ? 1 : 0);
-      const mergeCount = ownTasks.filter(taskMergeable).length;
-      const waitingCount = ownTasks.filter(task => task.status === 'waiting').length;
-      const parts = [ownTasks.length ? plural(ownTasks.length, 'task') : '', planOpen.length ? `Plan: ${plural(planOpen.length, 'card')}` : planChatTask ? 'Plan chat' : ''].filter(Boolean);
-      if (runningCount) parts.push(`${runningCount} working`);
-      if (approvalCount) parts.push(`${approvalCount} needing you`);
-      if (mergeCount) parts.push(`${mergeCount} ready to merge`);
-      if (waitingCount) parts.push(`${waitingCount} waiting`);
-      body.append(node('p', 'flow-lead', parts.slice(0, 4).join(' · ')));
-    } else if (!state.taskDraft) {
-      body.append(node('p', 'flow-empty', 'No tasks beside the chat yet. Start one in a folder to work in parallel, with its own output, approvals and review.'));
-    }
-
-    if (state.taskDraft) {
-      const draftFolder = folders.find(folder => folder.id === state.taskDraft.folderId);
-      const draftName = draftFolder?.displayName || draftFolder?.name || 'folder';
-      const draftItem = node('div', 'flow-task flow-task-selected');
-      const head = node('div', 'flow-task-head');
-      head.append(node('strong', 'flow-task-title', `New task in ${draftName}`));
-      const meta = node('div', 'flow-task-meta');
-      meta.append(node('span', 'flow-task-status', 'Drafting in the message box'));
-      const actions = node('div', 'flow-task-actions');
-      actions.append(button('flow-button flow-task-action', 'Cancel', () => selectTask(null)));
-      draftItem.append(head, meta, actions);
-      body.append(draftItem);
-    }
-
-    if (ownTasks.length || planOpen.length || planChatTask || state.taskId) {
-      // One row per conversation. The whole row switches to it; the one you're in has the accent bar and isn't a
-      // button. Working is a small dot, needing you is the amber badge, so the three never look alike.
-      const list = node('ul', 'flow-tasks');
-      const row = ({ key, title, place, live, liveText, still, approvals, pill, here, onOpen, openLabel, kind }) => {
-        const item = node('li', 'flow-task');
-        if (key) item.dataset.taskId = key; else item.dataset.role = 'main';
-        if (here) { item.classList.add('flow-task-selected'); item.setAttribute('aria-current', 'true'); }
-        if (live) item.classList.add('flow-task-running');
-        if (approvals) item.classList.add('flow-task-needs');
-        const face = here ? node('div', 'flow-task-row') : button('flow-task-row', undefined, onOpen);
-        if (!here) { face.title = openLabel; face.setAttribute('aria-label', `${openLabel}${approvals ? `, ${plural(approvals, 'approval')} waiting` : ''}`); }
-        const mark = node('span', `flow-task-mark ${kind}`); mark.setAttribute('aria-hidden', 'true');
-        const text = node('span', 'flow-task-text'), titleEl = node('strong', 'flow-task-title', title); titleEl.title = title;
-        const meta = node('span', 'flow-task-meta');
-        if (place) meta.append(node('span', 'flow-task-folder', live || still ? `${place} · ` : place));
-        if (live) { const status = node('span', 'flow-task-status flow-task-status-running'), dot = node('span', 'flow-pulse-dot'); dot.setAttribute('aria-hidden', 'true'); status.append(dot, node('span', 'flow-task-status-text', liveText)); meta.append(status); }
-        else if (still) meta.append(node('span', 'flow-task-status', still));
-        text.append(titleEl, meta);
-        const side = node('span', 'flow-task-side');
-        if (approvals) side.append(node('span', 'flow-task-badge', plural(approvals, 'approval')));
-        else if (pill) side.append(node('span', 'flow-task-pill', pill));
-        face.append(mark, text, side);
-        item.append(face);
-        return item;
-      };
-
-      list.append(row({ title: 'Workspace chat', place: 'Whole workspace', live: mainRunning, liveText: 'Working', approvals: mainApprovals, here: !state.taskId && !state.taskDraft, onOpen: () => selectTask(null), openLabel: 'Switch to the workspace chat', kind: 'main' }));
-
-      if (planOpen.length || planChatTask) {
-        const working = planOpen.filter(task => task.status === 'running').length + (planChatTask?.status === 'running' ? 1 : 0);
-        const waiting = planOpen.filter(task => task.status === 'waiting').length;
-        const needs = planOpen.reduce((sum, task) => sum + (task.approvals || 0), 0) + (planChatTask?.approvals || 0);
-        const review = planOpen.filter(task => task.cardColumn === 'review').length;
-        const targetId = (planChatTask && (planChatTask.approvals > 0 || state.taskId === planChatTask.id))
-          ? planChatTask.id
-          : (state.taskId && planOpen.some(task => task.id === state.taskId))
-            ? state.taskId
-            : (planOpen.find(task => task.approvals > 0)?.id || (planOpen.length === 1 ? planOpen[0].id : null));
-        const still = [waiting ? `${waiting} waiting` : '', review ? `${review} to review` : ''].filter(Boolean).join(' · ') || (planOpen.length ? plural(planOpen.length, 'card') : (planChatTask?.approvals ? 'Needs approval' : 'Chat'));
-        list.append(row({ key: 'plan', title: 'Plan', place: planOpen.length ? plural(planOpen.length, 'card') : 'Plan chat', live: working > 0, liveText: `${working} working${waiting ? ` · ${waiting} waiting` : ''}`, still: working ? '' : still, approvals: needs, pill: review && !working ? 'Results' : '', here: false, onOpen: () => { if (peeking) closePeek(); return window.relayBoard?.openTask?.(targetId ?? null) ?? window.relayBoard?.open?.(); }, openLabel: 'Open the Plan to follow its cards and read their results', kind: 'plan' }));
-      }
-
-      for (const task of ownTasks) {
-        const provider = task.runningProvider || task.provider, running = task.status === 'running';
-        const modelId = task.runningModel || task.model, modelName = provider && modelId ? window.relayModelPicker?.modelName?.(provider, modelId) || modelId : '';
-        const liveText = task.runningStep ? `on “${clip(task.runningStep, 35)}”` : task.runningPhase ? (phaseWords[task.runningPhase] || task.runningPhase) : 'Working';
-        const item = row({ key: task.id, title: task.title, place: provider ? [agentNames[provider] || provider, modelName].filter(Boolean).join(' · ') : '', live: running, liveText, still: running ? '' : taskStatusText(task), approvals: task.approvals || 0, pill: taskMergeable(task) && !task.managed ? 'Review' : '', here: !state.taskDraft && state.taskId === task.id, onOpen: () => selectTask(task.id), openLabel: `Switch to “${task.title}”`, kind: `agent-icon ${provider || ''}` });
-        if (task.reason && ['waiting', 'failed', 'stopped', 'blocked'].includes(task.status)) {
-          const note = node('p', 'flow-task-note', clip(task.reason, 110)); note.title = task.reason; item.append(note);
-        }
-        const actions = node('div', 'flow-task-actions');
-        if (task.status === 'waiting' && task.held && window.relayTaskThreads?.resume) actions.append(button('flow-button flow-task-action', 'Start', () => window.relayTaskThreads.resume(task.id)));
-        if (task.managed) { /* Flow finishes it */ }
-        else if (taskMergeable(task) && window.relayTaskThreads?.review) actions.append(button('flow-button flow-task-action', 'Review & merge', () => window.relayTaskThreads.review(task.id)));
-        else if (taskEnded(task) && window.relayTaskThreads?.close) { const remove = button('flow-button flow-task-action', window.relayTaskThreads.removeLabel || 'Remove from list', () => window.relayTaskThreads.close(task.id)); remove.title = window.relayTaskThreads.removeHint?.(task.id) || ''; actions.append(remove); }
-        if (actions.querySelector('button')) item.append(actions);
-        list.append(item);
-      }
-      body.append(list);
-    }
-
-    if (pickingTaskFolder && folders.length > 1 && !state.taskDraft) {
-      const picker = node('div', 'flow-task-folders');
-      picker.append(node('span', 'flow-subhead', 'Start in folder'));
-      const row = node('div', 'flow-task-actions');
-      for (const folder of folders) {
-        const name = folder.displayName || folder.name;
-        row.append(button('flow-button flow-task-action', name, () => startDraft(folder.id)));
-      }
-      row.append(button('flow-button flow-task-action', 'Cancel', () => { pickingTaskFolder = false; render(); }));
-      picker.append(row);
-      body.append(picker);
-    }
-
-    const newTaskBtn = button('flow-button flow-task-new', 'New task', () => {
-      if (folders.length > 1) { pickingTaskFolder = !pickingTaskFolder; render(); }
-      else startDraft(folders[0]?.id);
-    });
-    newTaskBtn.disabled = !state.projectId || !folders.length || !hasThreads || Boolean(state.taskDraft);
-    newTaskBtn.title = 'Start a task in a folder beside the workspace chat';
-    const limitsBtn = button('flow-button', 'Task limits', () => window.relayLimits?.open?.());
-    limitsBtn.title = 'Set working time, token, spend and agent limits for tasks';
-    card.foot.append(newTaskBtn, limitsBtn);
-  }
-
-  // Files changed: each run that changed files, newest first, with the same Undo as the run's line in the chat.
-  const when = value => { const at = new Date(value || ''); if (Number.isNaN(at.getTime())) return ''; return at.toLocaleString(undefined, at.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit', hour12: true } : { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true }); };
-  function changedRuns() {
-    const c = api.getState().conversation, saved = c?.checkpoints || {}, runs = c?.runs || [];
-    return Object.entries(saved).filter(([, entry]) => entry?.files).map(([runId, entry]) => ({ runId, files: entry.files, undone: entry.undone || null, run: runs.find(run => run.id === runId) || null }))
-      .sort((a, b) => String(b.run?.startedAt || '').localeCompare(String(a.run?.startedAt || '')));
-  }
-  function renderFiles(card) {
-    const rows = changedRuns(), running = api.isRunning();
-    const signature = JSON.stringify([rows.map(row => [row.runId, row.files, row.undone, row.run?.provider, row.run?.startedAt]), running]);
-    if (signature === card.signature) return;
-    card.signature = signature;
-    const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
-    card.foot.append(button('flow-button', 'Timeline', () => window.relayTimeline?.open?.()), button('flow-button', 'Review changes', () => window.relayGit?.open?.()));
-    if (!rows.length) { body.append(node('p', 'flow-empty', 'No files changed in this conversation yet. Each run that changes files appears here, with Undo.')); return; }
-    const total = rows.filter(row => !row.undone).reduce((sum, row) => sum + row.files, 0);
-    body.append(node('p', 'flow-lead', `${plural(total, 'file')} changed, across ${plural(rows.length, 'run')}.`));
-    const list = node('ul', 'flow-runs');
-    for (const row of rows.slice(0, 3)) {
-      const item = node('li', 'flow-run');
-      item.append(node('span', 'flow-run-title', row.undone ? 'Changes undone' : `${plural(row.files, 'file')} changed`));
-      item.append(node('span', 'flow-run-meta', [agentName(row.run?.provider, row.run?.local), when(row.run?.startedAt)].filter(Boolean).join(' · ')));
-      const action = button('flow-button flow-run-action', row.undone ? 'Redo' : 'Undo', () => window.relayRewind?.open?.(row.undone ? { kind: 'rewind', id: row.undone } : { kind: 'run', id: row.runId }));
-      action.disabled = running || !window.relayRewind; action.title = running ? 'Available when the current run finishes' : row.undone ? 'Put this run’s changes back' : 'Review this run’s changes, then undo them';
-      item.append(action); list.append(item);
-    }
-    body.append(list);
   }
   // What happened (#107): the decisions Codeshi made on the latest finished runs, each with the reason it recorded at the
   // time and how the run ended. Read from the saved runs, with no model call; a reason is shown as recorded, never invented.
@@ -790,35 +363,362 @@
     if (check === 'running') return { text: 'Testing…', tone: 'muted' };
     return { text: 'Done', tone: 'muted' };
   }
-  function happenings() {
-    const runs = api.getState().conversation?.runs || [];
-    return runs.filter(run => run.endedAt && run.relation !== 'assessment').slice(-3).reverse().map(run => ({ run, ...decision(run), outcome: outcome(run) }));
+  // Why this agent (#107): the run working now leads, or the latest finished run.
+  function happening() {
+    const c = api.getState().conversation, runs = c?.runs || [], active = api.isRunning() ? c?.activeRun : null;
+    if (active && !active.purpose && active.routing) return { run: active, ...decision(active) };
+    const finished = runs.filter(run => run.endedAt && run.relation !== 'assessment');
+    const last = finished[finished.length - 1];
+    return last ? { run: last, ...decision(last) } : null;
   }
-  function renderHappened(card) {
-    const rows = happenings();
-    const signature = JSON.stringify(rows.map(row => [row.run.id, row.title, row.why, row.outcome.text]));
+  const phaseWords = { starting: 'starting', probing: 'checking usage', reasoning: 'thinking', responding: 'writing', tool: 'running tools', compacting: 'organizing its context', approval: 'waiting for you' };
+  const elapsedWords = since => { const seconds = Math.max(0, Math.round((Date.now() - Date.parse(since || '')) / 1000)); if (!Number.isFinite(seconds)) return ''; const minutes = Math.floor(seconds / 60); return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`; };
+  const modelLabel = run => run?.model ? (window.relayModelPicker?.modelName?.(run.provider, run.model) || run.model) : '';
+  const runIcon = run => run?.connection === 'local' || run?.local === true ? 'local' : run?.provider || '';
+  // The approval, question or offer is in the chat: this brings it into view.
+  const showLatest = () => { const jump = $('jump-latest'), scroller = $('messages-scroll'); if (jump && !jump.hidden) jump.click(); else if (scroller) scroller.scrollTop = scroller.scrollHeight; };
+  function activityView(state) {
+    const c = state.conversation, view = { tone: 'idle', word: '', lead: null, notices: [], steps: [], held: false, queue: 0, paused: false, label: '' };
+    if (!c) return view;
+    const approvals = c.pendingApprovals || [], running = api.isRunning() && c.activeRun ? c.activeRun : null, plan = waitingPlan(), { steps, held } = planFor();
+    const split = (c.splitRuns || []).findLast?.(run => run.status === 'working'), last = running ? null : c.lastRun || null, done = steps.filter(step => step.status === 'done').length;
+    const agent = run => agentName(run?.provider, run?.connection === 'local' || run?.local === true);
+    view.queue = (c.queue || []).length; view.paused = Boolean(c.queuePaused);
+    if (c.handoffOffer) { const offer = c.handoffOffer; view.notices.push({ text: `${agentName(offer.from.provider)} has used ${Math.round(offer.from.usedPercent)}% of its limit. Hand off to ${agentName(offer.to.provider)}${offer.to?.billingSource !== 'subscription' ? ' and accept its charges' : ''} in the chat.`, label: 'Show', run: showLatest }); }
+    if (plan?.chip === 'Plan waiting') view.notices.push({ text: plan.text, label: 'Open plan', run: () => window.relayPlanView?.open?.() });
+    else if (plan?.board) view.notices.push({ text: plan.text, label: 'Open the Plan', run: () => window.relayBoard?.open?.() });
+    if (approvals.length) {
+      const asking = approvals.every(item => item.kind === 'question');
+      view.tone = 'attention'; view.word = 'Needs you'; view.steps = steps;
+      view.lead = { icon: runIcon(running), title: running ? agent(running) : 'The agent', model: modelLabel(running), detail: asking ? (approvals.length === 1 ? 'Has a question for you' : `Has ${approvals.length} questions for you`) : approvals.length === 1 ? 'Waiting for your approval' : `Waiting for ${approvals.length} approvals`, since: running?.startedAt || null, action: { label: asking ? 'Answer' : 'Review', run: showLatest, hint: 'Show it in the chat' } };
+    } else if (running) {
+      view.tone = 'live'; view.word = 'Working'; view.steps = steps;
+      if (running.purpose === 'routing') view.lead = { icon: runIcon(running), title: 'Choosing an agent', detail: `${agent(running)} is ${running.phase === 'probing' ? 'checking usage' : 'rating the task'}`, since: running.startedAt };
+      else if (running.purpose === 'review') view.lead = { icon: runIcon(running), title: agent(running), model: modelLabel(running), detail: 'Reviewing the changes', since: running.startedAt };
+      else view.lead = { icon: runIcon(running), title: agent(running), model: modelLabel(running), detail: cap(phaseWords[running.phase] || 'working'), since: running.startedAt, progress: steps.length ? { done, total: steps.length } : null };
+    } else if (c.resume || c.limitSwitching) {
+      const waiting = c.resume?.providers?.[0], reset = c.resume?.resetsAt ? resetWords(c.resume.resetsAt) : '';
+      view.tone = 'live'; view.word = 'Waiting';
+      view.lead = { icon: waiting || '', title: `Waiting for ${agentName(waiting)}’s limit`, detail: reset ? cap(reset) : 'Continues when it resets' };
+    } else if (plan) {
+      view.tone = plan.chip === 'Planning' ? 'live' : plan.chip === 'Plan waiting' ? 'attention' : 'idle';
+      view.word = plan.chip === 'Planning' ? 'Planning' : plan.chip === 'Plan waiting' ? 'Needs you' : '';
+      if (plan.chip === 'Planning') view.lead = { icon: '', title: 'Drafting a plan', detail: 'Its cards show on the Plan when they’re ready' };
+    } else if (split) {
+      view.tone = 'live'; view.word = 'Working';
+      view.lead = { icon: '', title: `Working in ${plural(split.cards?.length || 2, 'part')}`, detail: 'Side by side, above the message box' };
+    } else if (last && !state.taskDraft) {
+      const files = c.checkpoints?.[last.id]?.files, ended = outcome(last), stopped = last.status !== 'complete';
+      // A finished run keeps the steps it worked through as a recap, when it marked every one of them done.
+      const recap = last.plan?.steps || [];
+      view.steps = held ? steps : !stopped && recap.every(step => step.status === 'done') ? recap : []; view.held = Boolean(held);
+      view.tone = stopped && last.status !== 'interrupted' ? 'attention' : 'idle';
+      view.word = last.status === 'interrupted' ? 'Stopped' : last.errorCategory === 'quota' ? 'At a limit' : stopped ? 'Didn’t finish' : 'Done';
+      const detail = held && steps.length ? `Stopped at step ${Math.min(done + 1, steps.length)} of ${steps.length}` : [ended.text, files && !stopped ? `${plural(files, 'file')} changed` : ''].filter(Boolean).join(' · ');
+      view.lead = { icon: runIcon(last), title: agent(last), model: modelLabel(last), detail, at: when(last.endedAt) };
+    }
+    if (!view.lead && !view.notices.length) view.word = view.queue ? (view.paused ? 'Queue paused' : 'Queued') : 'Idle';
+    if (c.handoffOffer) { view.tone = 'attention'; view.word = 'Needs you'; }
+    view.label = c.handoffOffer ? 'Handoff needs your approval' : view.lead ? [view.lead.title, view.lead.detail, view.lead.progress ? `step ${Math.min(view.lead.progress.done + 1, view.lead.progress.total)} of ${view.lead.progress.total}` : ''].filter(Boolean).join(' · ') : view.notices[0]?.text || (view.queue ? `${plural(view.queue, 'message')} queued${view.paused ? ' · paused' : ''}` : '');
+    return view;
+  }
+  // Under the lead, which already names the agent and model, why it was chosen is said without them.
+  function shortDecision(row) {
+    const run = row.run;
+    if (row.kind === 'route') return tierWords[run.routing?.tier] ? `Chosen for ${tierWords[run.routing.tier]}` : 'Chosen by routing';
+    if (row.kind === 'retry') return 'A second try, after tests failed';
+    if (row.kind === 'handoff') { const from = run.fallback?.from || run.previousProvider; return from ? `Took over from ${agentName(from)}` : 'Took over the task'; }
+    if (row.kind === 'refresh') return 'Continued in a fresh session';
+    return row.title;
+  }
+  // The time an agent has worked moves each second without redrawing the panel.
+  let clock = null, activityScope = '';
+  function tickClock() { if (!clock?.element) return; const text = elapsedWords(clock.since); if (text && clock.element.textContent !== text) clock.element.textContent = text; }
+  // A long plan shows the steps around where the agent is: the one it just finished, the one it's on and what comes next.
+  const STEPS_SHOWN = 7, STEPS_AROUND = 5;
+  function stepList(steps, held) {
+    const list = node('ol', 'flow-steps'), current = currentStep(steps), long = steps.length > STEPS_SHOWN;
+    const at = current ? steps.indexOf(current) : steps.length - 1, from = long ? Math.max(0, Math.min(at - 1, steps.length - STEPS_AROUND)) : 0, to = long ? from + STEPS_AROUND : steps.length;
+    const more = (cls, text) => { const item = node('li', `flow-step flow-step-more ${cls}`), tick = node('span', 'flow-step-mark'); tick.setAttribute('aria-hidden', 'true'); item.append(tick, node('span', 'flow-step-text', text)); return item; };
+    if (from) list.append(more('done', `${plural(from, 'earlier step')} done`));
+    for (const step of steps.slice(from, to)) {
+      const item = node('li', `flow-step ${step.status}`), tick = node('span', 'flow-step-mark'); tick.setAttribute('aria-hidden', 'true');
+      item.append(tick, node('span', 'flow-step-text', step.text));
+      if (held && step.status === 'active') item.dataset.held = 'true';
+      if (step === current && !held && step.status === 'active') item.setAttribute('aria-current', 'step');
+      item.setAttribute('aria-label', `${step.status === 'done' ? 'Done' : step.status === 'active' ? (held ? 'Stopped at' : 'Now') : 'To do'}: ${step.text}`);
+      list.append(item);
+    }
+    if (to < steps.length) list.append(more(steps.slice(to).every(step => step.status === 'done') ? 'done' : 'pending', `${plural(steps.length - to, 'more step')}`));
+    return list;
+  }
+  function renderActivity(card) {
+    const state = api.getState(), nextScope = scope();
+    if (nextScope !== activityScope) { activityScope = nextScope; }
+    const view = activityView(state), row = happening(), reason = row && row.kind !== 'manual' ? row : null;
+    headline(card, { word: view.word, live: view.tone === 'live', attention: view.tone === 'attention', quiet: !view.lead && !view.notices.length && !view.queue, label: view.label });
+    const signature = JSON.stringify([state.projectId, state.taskId, view, reason ? [reason.run.id, reason.kind, reason.title, reason.why] : null]);
+    if (signature === card.signature) { tickClock(); return; }
+    card.signature = signature; clock = null;
+    const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
+    if (view.lead) {
+      const lead = node('div', 'flow-now'), line = node('div', 'flow-now-line'), who = node('span', 'flow-now-who'), sub = node('div', 'flow-now-sub');
+      lead.dataset.tone = view.tone;
+      who.append(node('strong', undefined, view.lead.title)); if (view.lead.model) who.append(node('span', 'flow-now-model', view.lead.model));
+      line.append(mark(view.lead.icon ? `agent-icon ${view.lead.icon}` : 'flow-now-mark'), who);
+      if (view.lead.since) { const time = node('span', 'flow-now-time', elapsedWords(view.lead.since)); clock = { element: time, since: view.lead.since }; line.append(time); }
+      else if (view.lead.at) line.append(node('span', 'flow-now-time', view.lead.at));
+      sub.append(node('span', 'flow-now-detail', view.lead.detail));
+      if (view.lead.progress) sub.append(node('span', 'flow-now-count', `${view.lead.progress.done} of ${view.lead.progress.total} done`));
+      if (view.lead.action) { const act = button('flow-now-action', view.lead.action.label, () => view.lead.action.run()); if (view.lead.action.hint) act.title = view.lead.action.hint; sub.append(act); }
+      lead.append(line, sub);
+      if (view.lead.progress) {
+        const bar = node('div', 'flow-progress'), { done, total } = view.lead.progress;
+        bar.style.setProperty('--done', `${Math.round(done / total * 100)}%`);
+        bar.setAttribute('role', 'progressbar'); bar.setAttribute('aria-valuemin', '0'); bar.setAttribute('aria-valuemax', String(total)); bar.setAttribute('aria-valuenow', String(done)); bar.setAttribute('aria-label', `${done} of ${plural(total, 'step')} done`);
+        lead.append(bar);
+      }
+      body.append(lead);
+    }
+    for (const notice of view.notices) {
+      const item = node('div', 'flow-notice'); item.append(node('span', 'flow-notice-text', notice.text));
+      if (notice.label) item.append(button('flow-now-action', notice.label, () => notice.run()));
+      body.append(item);
+    }
+    if (view.steps.length) body.append(stepList(view.steps, view.held));
+    if (view.queue) body.append(node('p', 'flow-queued', `${plural(view.queue, 'message')} queued after this${view.paused ? ' · paused' : ''}`));
+    // Why this agent: the run that's working or the last one, as recorded when it was chosen.
+    if (reason && view.lead) {
+      const why = node('div', 'flow-why'), title = node('span', 'flow-why-title');
+      why.dataset.kind = reason.kind; title.append(mark('flow-why-icon'), node('span', undefined, shortDecision(reason))); why.append(title);
+      if (reason.why) { const text = node('span', 'flow-why-reason', clip(reason.why, 200)); text.title = reason.why; why.append(text); }
+      body.append(why);
+    }
+  }
+
+  // ---- Tasks: the workspace chat and every task running beside it (#88, #107), in the sidebar's own order and words:
+  // what needs you first, then what's working, then what finished. A row switches to its conversation, and a task that
+  // is ready offers its review there and then.
+  // A split's parts that Flow is finishing by itself (task.managed) show above the message box instead (split-progress.js)
+  // and never appear here, on the Plan row, or outside Flow.
+  // The Plan chat (#162) shows only when it waits for an approval; the Plan view lists it with the cards' tasks.
+  const visibleTasks = state => (state.conversation?.parallelTasks || []).filter(task => !task.managed && (task.purpose === 'plan-chat' ? Boolean(task.approvals || task.id === state.taskId) : task.purpose !== 'project-review' || task.id === state.taskId || task.approvals));
+  const taskMergeable = task => Boolean(task.hasWorktree && ['complete', 'stopped', 'failed'].includes(task.status));
+  const taskEnded = task => !['running', 'waiting'].includes(task.status) && !taskMergeable(task);
+  const TASK_STATUS_WORDS = { complete: 'finished', stopped: 'stopped', failed: 'didn’t finish', discarded: 'discarded', cancelled: 'cancelled', blocked: 'blocked', lost: 'copy gone', detached: 'folder removed' };
+  function taskStatusText(task) {
+    if (task.testing) return 'Checking combined result…';
+    if (task.status === 'waiting') return task.held ? 'paused — ready to start' : 'waiting to start';
+    if (task.status === 'integrated') return task.integration?.files ? `${plural(task.integration.files, 'file')} merged` : 'merged';
+    if (task.status === 'kept') return task.integration?.branch ? `kept on ${task.integration.branch}` : 'kept as branch';
+    return TASK_STATUS_WORDS[task.status] || task.status;
+  }
+  const TASKS_SHOWN = 6;
+  let tasksProjectId = null, tasksAll = false;
+  const describeTask = task => window.relayTaskThreads?.describe?.(task) || {
+    state: task.approvals > 0 ? 'approval' : taskMergeable(task) ? 'review' : task.status === 'running' ? 'working' : task.status === 'waiting' ? (task.held ? 'paused' : 'waiting') : ['complete', 'integrated', 'kept'].includes(task.status) ? 'finished' : ['failed', 'blocked', 'lost'].includes(task.status) ? 'failed' : 'stopped',
+    word: task.approvals > 0 ? plural(task.approvals, 'approval') : taskMergeable(task) ? 'Ready to review' : cap(taskStatusText(task)), time: '', rank: 0, mergeable: taskMergeable(task),
+    bucket: task.approvals > 0 || taskMergeable(task) || (task.status === 'waiting' && task.held) ? 0 : ['running', 'waiting'].includes(task.status) ? 1 : 2,
+  };
+  // In Flow the agent creates tasks automatically, so this panel lists them without a manual New task button.
+  function renderTasks(card) {
+    const state = api.getState(), c = state.conversation, folders = workspaceFolders();
+    if (state.projectId !== tasksProjectId) { tasksAll = false; tasksProjectId = state.projectId; }
+    if (cardOff('tasks')) { headline(card, { shown: false }); card.signature = null; card.body.replaceChildren(); card.foot.replaceChildren(); card.tools.replaceChildren(); return; }
+    const tasks = visibleTasks(state);
+    // A Plan's cards and the Plan chat run as tasks too, but they're followed and read on the Plan, so they share one row
+    // here that opens the Plan view instead of keeping the Plan chat or a card inside Flow.
+    const isPlanTask = task => Boolean(task && !task.managed && (task.board || task.purpose === 'plan-chat'));
+    const planChatTask = tasks.find(task => task.purpose === 'plan-chat') || null;
+    const planOpen = tasks.filter(task => task.board && (['doing', 'review'].includes(task.cardColumn) || task.id === state.taskId || task.approvals > 0));
+    const own = tasks.filter(task => !isPlanTask(task)).map((task, index) => ({ task, about: describeTask(task), index })).sort((a, b) => a.about.bucket - b.about.bucket || a.about.rank - b.about.rank || a.index - b.index);
+    const elsewhere = Boolean(state.taskId), mainRunning = Boolean(elsewhere ? state.status?.runningConversationId : api.isRunning());
+    const mainPending = elsewhere ? (Array.isArray(state.status?.pendingApprovals) ? state.status.pendingApprovals : []) : (c?.pendingApprovals || []);
+    const planWorking = planOpen.filter(task => task.status === 'running').length + (planChatTask?.status === 'running' ? 1 : 0), planWaiting = planOpen.filter(task => task.status === 'waiting').length;
+    const planNeeds = planOpen.reduce((sum, task) => sum + (task.approvals || 0), 0) + (planChatTask?.approvals || 0), planReview = planOpen.filter(task => task.cardColumn === 'review').length;
+    const needs = own.filter(item => item.about.bucket === 0).length + (planNeeds ? 1 : 0), working = own.filter(item => item.task.status === 'running').length + planWorking;
+    const total = own.length + planOpen.length, listed = Boolean(own.length || planOpen.length || planChatTask || state.taskId);
+    headline(card, { count: total, word: listed ? '' : 'None', live: working > 0, attention: needs > 0, quiet: !listed, label: `Tasks${needs ? ` · ${needs} need${needs === 1 ? 's' : ''} you` : working ? ` · ${working} working` : total ? ` · ${total}` : ''}` });
+    const signature = JSON.stringify([
+      state.projectId, state.taskId, mainRunning, mainPending.map(item => item.kind), tasksAll, total ? Math.floor(Date.now() / 60000) : 0,
+      folders.map(folder => [folder.id, folder.displayName || folder.name]),
+      tasks.map(task => [task.id, task.title, task.status, task.folderName, task.mode, task.provider, task.runningProvider, task.runningModel, task.model, task.managed, task.runningPhase, task.runningStep, task.approvals, task.questions, task.testing, task.hasWorktree, task.held, task.reason, task.conversationId, task.integration?.files, task.integration?.branch, task.cardColumn]),
+    ]);
     if (signature === card.signature) return;
     card.signature = signature;
     const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
-    if (!rows.length) { body.append(node('p', 'flow-empty', 'Nothing yet. After each run, the agent Codeshi chose, any handoff or retry, and how it ended appear here.')); return; }
-    const list = node('ul', 'flow-happened');
-    for (const row of rows) {
-      const item = node('li', 'flow-happened-item'); item.dataset.kind = row.kind;
-      item.append(node('span', 'flow-happened-title', row.title));
-      const meta = node('span', 'flow-happened-meta'), result = node('span', 'flow-happened-outcome', row.outcome.text);
-      result.dataset.tone = row.outcome.tone; meta.append(result);
-      const at = when(row.run.endedAt); if (at) meta.append(document.createTextNode(` · ${at}`));
-      item.append(meta);
-      if (row.why) { const why = node('span', 'flow-happened-why', clip(row.why, 140)); why.title = row.why; item.append(why); }
-      list.append(item);
+    // Task limits live in Settings › Routing & handoffs (#190); this is one click from the tasks they limit.
+    card.tools.replaceChildren(...(total && window.relayLimits?.open ? [toolButton('sliders', 'Task limits: working time, tokens, spend and agents', () => window.relayLimits.open())] : []));
+    if (!listed) return;
+    // One row per conversation, drawn as the sidebar draws it. The whole row switches to it; the one you're in is marked
+    // and isn't a button.
+    const list = node('ul', 'flow-tasks');
+    const row = ({ key, title, visual, word, sub, badge, here, main, onOpen, openLabel, note, actions = [], end = null }) => {
+      const item = node('li', 'flow-task'), face = here ? node('div', 'task-row flow-task-row') : button('task-row flow-task-row', undefined, onOpen), icon = node('span', main ? 'task-row-main-icon' : 'task-row-icon');
+      if (key) item.dataset.taskId = key; else item.dataset.role = 'main';
+      if (main) face.classList.add('task-row-main');
+      if (here) { item.classList.add('flow-task-selected'); item.setAttribute('aria-current', 'true'); face.classList.add('active'); }
+      else { face.title = openLabel; face.setAttribute('aria-label', `${openLabel}${word ? `, ${word.toLowerCase()}` : ''}`); }
+      face.dataset.state = visual; icon.setAttribute('aria-hidden', 'true');
+      const name = node('span', 'task-row-title', title); name.title = title;
+      if (word) {
+        const text = node('span', 'task-row-body'), top = node('span', 'task-row-head'), meta = node('span', 'task-row-meta');
+        face.classList.add('task-row-detailed'); top.append(name);
+        if (badge) top.append(node('span', 'task-row-badge flow-task-badge', String(badge)));
+        meta.append(node('span', 'task-row-state', word)); if (sub) meta.append(node('span', 'task-row-sub', ` · ${sub}`));
+        text.append(top, meta); face.append(icon, text);
+      } else face.append(icon, name);
+      item.append(face); if (end) item.append(end);
+      if (note) { const line = node('p', 'flow-task-note', clip(note, 110)); line.title = note; item.append(line); }
+      if (actions.length) { const offers = node('div', 'flow-task-actions'); offers.append(...actions); item.append(offers); }
+      return item;
+    };
+    const asking = mainPending.length > 0 && mainPending.every(item => item.kind === 'question');
+    list.append(row({ title: 'Workspace chat', main: true, visual: mainPending.length ? (asking ? 'question' : 'approval') : mainRunning ? 'working' : 'idle', word: mainPending.length ? (asking ? (mainPending.length === 1 ? 'Needs your answer' : `${mainPending.length} questions`) : mainPending.length === 1 ? 'Needs approval' : `${mainPending.length} approvals`) : mainRunning ? 'Working' : '', badge: mainPending.length, here: !elsewhere, onOpen: () => selectTask(null), openLabel: 'Switch to the workspace chat' }));
+    if (planOpen.length || planChatTask) {
+      const targetId = (planChatTask && (planChatTask.approvals > 0 || state.taskId === planChatTask.id)) ? planChatTask.id
+        : (state.taskId && planOpen.some(task => task.id === state.taskId)) ? state.taskId
+          : (planOpen.find(task => task.approvals > 0)?.id || (planOpen.length === 1 ? planOpen[0].id : null));
+      const word = planNeeds ? (planNeeds === 1 ? 'Needs approval' : `${planNeeds} approvals`) : planWorking ? `${planWorking} working` : planReview ? `${planReview} to review` : planWaiting ? `${planWaiting} waiting` : planOpen.length ? plural(planOpen.length, 'card') : 'Chat';
+      const sub = [planWorking && planNeeds ? `${planWorking} working` : '', planWaiting && (planWorking || planNeeds) ? `${planWaiting} waiting` : '', planReview && (planWorking || planNeeds) ? `${planReview} to review` : ''].filter(Boolean).join(' · ');
+      list.append(row({ key: 'plan', title: 'Plan', visual: planNeeds ? 'approval' : planWorking ? 'working' : planReview ? 'review' : 'waiting', word, sub, badge: planNeeds, here: false, onOpen: () => { if (peeking) closePeek(); return window.relayBoard?.openTask?.(targetId ?? null) ?? window.relayBoard?.open?.(); }, openLabel: 'Open the Plan to follow its cards and read their results' }));
+    }
+    const several = folders.length > 1;
+    for (const { task, about } of tasksAll ? own : own.slice(0, TASKS_SHOWN)) {
+      const provider = (task.status === 'running' && task.runningProvider) || task.provider, running = task.status === 'running', actions = []; let end = null;
+      const doing = running && task.runningStep ? `on “${clip(task.runningStep, 32)}”` : '';
+      if (task.status === 'waiting' && task.held && window.relayTaskThreads?.resume) actions.push(button('flow-row-action', 'Start', () => window.relayTaskThreads.resume(task.id)));
+      if (task.managed) { /* Flow finishes it. */ }
+      else if (about.mergeable && window.relayTaskThreads?.review) { const act = button('flow-row-action', 'Review & merge', () => window.relayTaskThreads.review(task.id)); act.title = `Review and merge “${task.title}”`; actions.push(act); }
+      else if (taskEnded(task) && window.relayTaskThreads?.close) { const remove = toolButton('close', `${window.relayTaskThreads.removeLabel || 'Remove from list'}: ${task.title}`, () => window.relayTaskThreads.close(task.id)); remove.title = [window.relayTaskThreads.removeLabel || 'Remove from list', window.relayTaskThreads.removeHint?.(task.id) || ''].filter(Boolean).join('. '); remove.classList.add('flow-row-remove'); end = remove; }
+      list.append(row({ key: task.id, title: task.title, visual: about.state, word: about.bucket < 2 ? about.word : '', sub: [doing || agentNames[provider] || '', several ? task.folderName : '', about.time].filter(Boolean).join(' · '), badge: task.approvals || 0, here: !state.taskDraft && state.taskId === task.id, onOpen: () => selectTask(task.id), openLabel: `Switch to “${task.title}”`, note: task.reason && ['waiting', 'failed', 'stopped', 'blocked'].includes(task.status) ? task.reason : '', actions, end }));
     }
     body.append(list);
+    if (own.length > TASKS_SHOWN) {
+      const toggle = button('flow-fold', tasksAll ? 'Show fewer' : `${own.length - TASKS_SHOWN} more`, () => { tasksAll = !tasksAll; render(); });
+      toggle.dataset.key = 'more-tasks'; toggle.setAttribute('aria-expanded', String(tasksAll)); card.foot.append(toggle);
+    }
   }
-  const renderers = { working: renderWorking, plans: renderPlans, next: renderNext, tasks: renderTasks, files: renderFiles, happened: renderHappened, preview: card => window.relayProjectReview?.render(card) };
 
-  // ---- Live status in the working card. Remote access and Settings sit below it; no footer is needed.
-  const phaseWords = { starting: 'starting', probing: 'checking usage', reasoning: 'thinking', responding: 'writing', tool: 'running tools', compacting: 'organizing its context', approval: 'waiting for you' };
-  const elapsedWords = since => { const seconds = Math.max(0, Math.round((Date.now() - Date.parse(since || '')) / 1000)); if (!Number.isFinite(seconds)) return ''; const minutes = Math.floor(seconds / 60); return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`; };
+  // ---- Usage: what's left on each connected agent's plan, one row each. A row opens all of that agent's limits. When
+  // an agent runs low the panel says so, with what Flow does about it.
+  function renderUsage(card) {
+    const state = api.getState(), rows = planRows(), working = activeWorkingProviders(), read = rows.filter(row => row.primary);
+    const low = read.filter(row => leftOf(row) <= 25).sort((a, b) => leftOf(a) - leftOf(b)), worst = low[0] || null, others = read.filter(row => leftOf(row) > 25).map(row => agentNames[row.provider]);
+    headline(card, { word: worst ? `${agentNames[worst.provider]} ${leftOf(worst) ? 'is low' : 'is at its limit'}` : '', attention: Boolean(worst && leftOf(worst) <= 10), quiet: !rows.length, label: read.map(row => `${agentNames[row.provider]} ${leftOf(row)}% left`).join(' · ') || 'Usage' });
+    card.element.dataset.level = worst ? level(leftOf(worst)) : 'ok';
+    const signature = JSON.stringify([rows, state.provider, [...working].sort()]);
+    if (signature === card.signature) return;
+    card.signature = signature;
+    const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
+    if (!rows.length) {
+      body.append(node('p', 'flow-empty', 'No agent is connected.'));
+      card.foot.append(actionButton('Connect an agent', () => window.relaySettings?.open?.('accounts')));
+      return;
+    }
+    const list = node('ul', 'flow-plans');
+    for (const row of rows) {
+      const name = agentNames[row.provider], item = node('li', 'flow-plan'), open = button('flow-usage-row', undefined, event => window.relayUsage?.open?.(row.provider, event.currentTarget || open));
+      const top = node('span', 'flow-plan-head'), icon = node('i', `agent-icon ${row.provider}`); icon.setAttribute('aria-hidden', 'true');
+      item.dataset.provider = row.provider; open.dataset.provider = row.provider; open.dataset.key = `usage-${row.provider}`;
+      top.append(icon, node('strong', undefined, name));
+      if (working.has(row.provider)) { item.classList.add('flow-plan-active'); const badge = node('span', 'flow-plan-working-badge'), dot = node('span', 'flow-pulse-dot'); dot.setAttribute('aria-hidden', 'true'); badge.setAttribute('aria-label', `${name} is working`); badge.append(dot); top.append(badge); }
+      if (!row.primary) {
+        top.append(node('span', 'flow-plan-value', row.reported ? 'No reading yet' : 'Not reported'));
+        open.append(top); open.title = `${name}: check its limits`;
+      } else {
+        const limits = [row.primary, row.secondary].filter(Boolean).sort((a, b) => remaining(a) - remaining(b)), [primary, secondary] = limits;
+        const percent = remaining(primary), reset = resetWords(primary.resetsAt), meter = node('span', 'flow-meter'), foot = node('span', 'flow-plan-foot');
+        item.dataset.level = level(percent); open.dataset.level = level(percent);
+        top.append(node('span', 'flow-plan-value', `${percent}% left`));
+        meter.style.setProperty('--left', `${percent}%`); meter.setAttribute('role', 'img'); meter.setAttribute('aria-label', `${percent}% of ${name}’s ${primary.label} allowance left`);
+        foot.append(node('span', 'flow-plan-when', `${limitName(primary.label)}${reset ? ` · ${reset}` : ''}`));
+        if (secondary) { const other = node('span', 'flow-plan-secondary', `${secondary.label} · ${remaining(secondary)}% left`), otherReset = resetWords(secondary.resetsAt); other.dataset.level = level(remaining(secondary)); if (otherReset) other.title = cap(otherReset); foot.append(other); }
+        open.append(top, meter, foot); open.title = `All of ${name}’s limits`;
+      }
+      open.setAttribute('aria-label', `${name}${row.primary ? `: ${leftOf(row)}% left at its closest limit` : ''}. Show all its limits`);
+      item.append(open); list.append(item);
+    }
+    body.append(list);
+    if (worst) body.append(node('p', 'flow-usage-note', others.length ? `Flow moves new work to ${others.join(' or ')} before ${agentNames[worst.provider]} runs out.` : 'No other agent has much left. Flow waits for the reset, or offers a local model.'));
+  }
+
+  // ---- Changes: the files that differ from the last commit, one row each with what happened to it and the lines it
+  // gained and lost. A row opens that file's changes, with the other files beside it. Undo takes the last run back out
+  // after showing what would change. A folder without Git lists what each run changed instead.
+  function changedRuns() {
+    const c = api.getState().conversation, saved = c?.checkpoints || {}, runs = c?.runs || [];
+    return Object.entries(saved).filter(([, entry]) => entry?.files).map(([runId, entry]) => ({ runId, files: entry.files, undone: entry.undone || null, run: runs.find(run => run.id === runId) || null }))
+      .sort((a, b) => String(b.run?.startedAt || '').localeCompare(String(a.run?.startedAt || '')));
+  }
+  const FILES_SHOWN = 8;
+  let gitKey = '', gitAsked = 0, gitCost = 0;
+  // Git is read again when a run changes files, and now and then while Flow shows: more often while an agent works,
+  // and less often in a folder where reading it is slow.
+  function watchGit() {
+    if (!on || document.hidden || !window.relayGit?.refresh) return;
+    const state = api.getState(); if (!state.projectId || !state.ready) return;
+    const key = `${state.projectId}:${JSON.stringify(state.conversation?.checkpoints || {})}`, age = Date.now() - gitAsked;
+    if (key === gitKey && age < Math.max(api.isRunning() ? 10000 : 45000, gitCost * 25)) return;
+    const asked = gitAsked = Date.now(); gitKey = key;
+    Promise.resolve(window.relayGit.refresh()).then(() => { if (asked === gitAsked) gitCost = Date.now() - asked; }, () => {});
+  }
+  const undoRun = runId => window.relayRewind?.open?.({ kind: 'run', id: runId }), redoRun = rewindId => window.relayRewind?.open?.({ kind: 'rewind', id: rewindId });
+  function renderChanges(card) {
+    const state = api.getState(), git = window.relayGit?.data?.() || null, runs = changedRuns(), running = api.isRunning(), latest = runs[0] || null;
+    const repos = (git?.repositories || []).filter(repo => repo.available), groups = repos.map(repo => ({ repo, files: window.relayGit.files(repo) })).filter(group => group.files.length);
+    const files = groups.flatMap(group => group.files.map(file => ({ repo: group.repo, file }))), clipped = repos.some(repo => repo.changesClipped), noGit = Boolean(git) && !repos.length;
+    const totals = files.length ? window.relayGit.totals(files.map(entry => entry.file)) : { added: 0, removed: 0 };
+    const locked = running || !window.relayRewind || Boolean(state.taskId), lockHint = running ? 'Available when the current run finishes' : state.taskId ? 'Open the workspace chat to undo its runs' : '';
+    const fallback = !files.length && noGit ? runs.slice(0, 5) : [];
+    card.openDirect = files.length ? () => { closePeek(); window.relayGit.review({}); } : null;
+    headline(card, { count: files.length ? `${files.length}${clipped ? '+' : ''}` : '', word: null, quiet: !files.length && !fallback.length, label: files.length ? `${plural(files.length, 'file')} changed` : fallback.length ? `${plural(fallback.filter(row => !row.undone).reduce((sum, row) => sum + row.files, 0), 'file')} changed` : latest?.undone ? 'Changes undone' : 'No changes' });
+    const signature = JSON.stringify([state.projectId, state.taskId, running, Boolean(git), noGit, clipped, Boolean(window.relayRewind), groups.map(group => [group.repo.folderId, group.repo.name, group.files.map(file => [file.path, file.code, file.added, file.removed, file.fileCount])]), runs.map(row => [row.runId, row.files, row.undone, row.run?.provider, row.run?.startedAt])]);
+    if (signature === card.signature) return;
+    card.signature = signature;
+    const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
+    card.state.replaceChildren(...(files.length ? [totals.added ? node('span', 'diff-added', `+${totals.added}`) : '', totals.removed ? node('span', 'diff-removed', `−${totals.removed}`) : ''].filter(Boolean) : [document.createTextNode(git && !fallback.length ? (latest?.undone ? 'Undone' : 'None') : '')]));
+    card.tools.replaceChildren(...(runs.length && !state.taskId && window.relayTimeline?.open ? [toolButton('history', 'Timeline: every checkpoint, to look at or restore', () => window.relayTimeline.open())] : []));
+    if (files.length) {
+      const list = node('div', 'flow-files'); let shown = 0;
+      for (const group of groups) {
+        if (shown >= FILES_SHOWN) break;
+        if (groups.length > 1) list.append(node('h3', 'flow-subhead', group.repo.name));
+        for (const file of group.files) { if (shown >= FILES_SHOWN) break; shown++; list.append(window.relayGit.changeRow(group.repo, file, () => window.relayGit.review({ folderId: group.repo.folderId, path: file.path }))); }
+      }
+      if (files.length > shown) { const next = files[shown], more = button('flow-fold', `${files.length - shown}${clipped ? '+' : ''} more`, () => window.relayGit.review({ folderId: next.repo.folderId, path: next.file.path })); more.dataset.key = 'more-files'; more.title = 'See the rest in the changes window'; list.append(more); }
+      body.append(list);
+    } else if (fallback.length) {
+      // No Git here: what each run changed, newest first, with the same Undo as the run's line in the chat.
+      const list = node('ul', 'flow-runs');
+      for (const row of fallback) {
+        const item = node('li', 'flow-run'), text = node('span', 'flow-run-text');
+        text.append(node('span', 'flow-run-title', row.undone ? 'Changes undone' : `${plural(row.files, 'file')} changed`), node('span', 'flow-run-meta', [agentName(row.run?.provider, row.run?.local), when(row.run?.startedAt)].filter(Boolean).join(' · ')));
+        const act = button('flow-row-action', row.undone ? 'Redo' : 'Undo', () => row.undone ? redoRun(row.undone) : undoRun(row.runId));
+        act.dataset.key = `run-${row.runId}`; act.disabled = locked; act.title = lockHint || (row.undone ? 'Put this run’s changes back' : 'Review this run’s changes, then undo them');
+        item.append(text, act); list.append(item);
+      }
+      body.append(list);
+    }
+    if (files.length) card.foot.append(actionButton('Review', () => window.relayGit.review({}), { hint: 'Read every changed file, one after another' }));
+    if (latest && !fallback.length) card.foot.append(latest.undone
+      ? actionButton('Redo', () => redoRun(latest.undone), { hint: lockHint || 'Put the last run’s changes back', disabled: locked })
+      : actionButton('Undo last run', () => undoRun(latest.runId), { hint: lockHint || 'See what the last run changed, then take it back out', disabled: locked }));
+    if (files.length) card.foot.append(actionButton('Commit…', () => window.relayGit.open(), { hint: 'Write a message and commit these changes' }));
+  }
+
+  // ---- Your app: the launch map's services and how they stand, with Start, Stop and the preview on its face
+  // (project-review.js draws them).
+  function renderApp(card) {
+    const review = window.relayProjectReview, app = !cardOff('app') && review?.glance ? review.glance() : null;
+    if (!app) { headline(card, { shown: false }); return; }
+    review.render(card);
+    const word = app.approvals ? 'Needs you' : app.failed ? 'Didn’t start' : app.ready ? 'Running' : app.starting ? 'Starting' : app.preparing ? 'Preparing' : '';
+    const label = app.approvals ? 'Preparing your app needs your approval' : app.preparing ? 'Preparing how to run your app' : app.failed ? 'Your app didn’t start' : app.ready ? (app.address ? `Running at ${app.address}` : 'Your app is running') : app.starting ? 'Starting your app' : app.profile ? 'Start your app' : 'Set up your app';
+    headline(card, { word, live: Boolean(app.ready || app.starting || app.preparing), attention: Boolean(app.approvals || app.failed), label });
+  }
+
+  // ---- The status line. A narrow window shows it before the chips; a wide one keeps it for screen readers.
   function statusLine() {
     const state = api.getState(), c = state.conversation;
     if (!c) return { text: 'Ready', live: false };
@@ -868,40 +768,54 @@
     status.dataset.provider = (api.isRunning() && run?.provider) || (workingProviders.size ? [...workingProviders][0] : '');
   }
 
-  // ---- A narrow window: the cards leave the sides and become a row of chips under the header; one opens at a time.
-  function chipText(id) {
-    const state = api.getState();
-    if (id === 'preview') return window.relayProjectReview?.label() || 'Run and review your project';
-    if (id === 'happened') { const latest = happenings()[0]; return latest ? clip(latest.title, 48) : 'What happened'; }
-    if (id === 'working') return modes.find(item => item.mode === canonicalMode(routing()?.mode))?.name || 'Routing';
-    if (id === 'plans') { const rows = planRows(), row = rows.find(item => item.provider === state.provider) || rows[0]; return row?.primary ? `${agentNames[row.provider]} · ${row.primary.label} · ${remaining(row.primary)}% left${row.warning ? ` · ${row.warning.label} · ${remaining(row.warning)}% left` : ''}` : 'Plans'; }
-    if (id === 'next') { const { steps } = planFor(), queue = state.conversation?.queue || [], plan = waitingPlan(); if (plan) return plan.chip; return steps.length ? `${steps.filter(step => step.status === 'done').length} of ${steps.length} steps` : queue.length ? plural(queue.length, 'queued message') : 'What’s next'; }
-    if (id === 'tasks') { const list = visibleTasks(state), working = list.filter(t => t.status === 'running').length, attention = list.filter(t => t.approvals > 0).length; if (attention) return `${plural(attention, 'task')} need${attention === 1 ? 's' : ''} you`; if (working) return `${working} working`; return list.length ? plural(list.length, 'task') : 'Tasks'; }
-    const total = changedRuns().filter(row => !row.undone).reduce((sum, row) => sum + row.files, 0);
-    return total ? `${plural(total, 'file')} changed` : 'Files';
+  const renderers = { activity: renderActivity, tasks: renderTasks, usage: renderUsage, changes: renderChanges, app: renderApp };
+  function renderCards() {
+    for (const { id } of CARDS) { const card = cards.get(id); redraw(card, () => renderers[id](card)); }
+    // A panel that leaves while it's open in a narrow window closes.
+    if (peeking && peeking !== 'space' && !cards.get(peeking)?.shown) closePeek();
   }
+
+  // ---- A narrow window: the rails step aside and the panels become a row of chips under the header, after the status
+  // line. A chip opens its panel over the chat; one opens at a time. What needs you comes first.
   function renderStrip() {
     if (strip.hidden) return;
-    strip.replaceChildren(...CARDS.filter(card => !card.hidden && !cardOff(card.id)).map(card => {
-      const chip = button('flow-chip', chipText(card.id), () => peekCard(card.id));
-      chip.setAttribute('aria-pressed', String(peeking === card.id)); chip.setAttribute('aria-label', `${card.title}: ${chipText(card.id)}`);
+    const focusedChip = strip.contains(document.activeElement) ? document.activeElement.dataset.card : null;
+    const shown = CARDS.map(card => cards.get(card.id)).filter(card => card.shown && (!card.quiet || peeking === card.id));
+    const chips = [...shown.filter(card => card.attention), ...shown.filter(card => !card.attention)].map(card => {
+      const chip = button('flow-chip', undefined, () => card.openDirect ? card.openDirect() : peekCard(card.id)); chip.append(node('span', 'flow-chip-text', card.label)); chip.dataset.card = card.id; chip.dataset.attention = String(card.attention); chip.dataset.live = String(card.live);
+      if (card.openDirect) chip.setAttribute('aria-haspopup', 'dialog'); else chip.setAttribute('aria-pressed', String(peeking === card.id));
+      chip.setAttribute('aria-label', `${card.title}: ${card.label}${card.openDirect ? '. Review changes' : ''}`); chip.title = card.openDirect ? 'Review changes' : card.title;
       return chip;
-    }));
-    const options = button('flow-chip flow-space-chip', 'Your space', () => peekCard('space'));
+    });
+    const options = button('flow-chip flow-space-chip', 'Your space', () => peekCard('space')); options.dataset.card = 'space';
     options.setAttribute('aria-pressed', String(peeking === 'space')); options.setAttribute('aria-label', 'Your space: appearance, weather, settings and phone access');
-    strip.append(options);
+    strip.replaceChildren(...(status && movedControls.length ? [status] : []), ...chips, options);
+    if (focusedChip) [...strip.querySelectorAll('.flow-chip')].find(chip => chip.dataset.card === focusedChip)?.focus({ preventScroll: true });
   }
+  // In a narrow window a panel opens in the peek, over the chat. In a wide one every panel is already on its rail, so
+  // this only brings it into view.
+  const peekTitle = $('flow-peek-title'), peekClose = $('flow-peek-close');
+  const inPeek = target => Boolean(target && (target === peekClose || peek.contains(target) || peekBody?.contains(target)));
   function peekCard(id) {
     if (peeking === id) { closePeek(); return; }
+    const card = id === 'space' ? null : cardOff(id) ? null : cards.get(id);
+    if (id !== 'space' && !card) return;
+    if (!narrow()) { (card?.element || space).scrollIntoView?.({ block: 'nearest' }); (card?.element || space).querySelector('button')?.focus(); return; }
     closePeek();
-    const card = id === 'space' ? { element: preferences, title: 'Your space' } : cardOff(id) ? null : cards.get(id); if (!card) return;
     if (id === 'space') preferences.replaceChildren(space, connect);
-    peeking = id; peekBody.replaceChildren(card.element); peek.hidden = false; peek.setAttribute('aria-label', card.title);
-    renderStrip(); $('flow-peek-close')?.focus();
+    peeking = id; peekBody.replaceChildren(id === 'space' ? preferences : card.element);
+    const title = id === 'space' ? 'Your space' : card.title;
+    if (peekTitle) peekTitle.textContent = title;
+    peek.hidden = false; peek.setAttribute('aria-label', title); peek.dataset.card = id;
+    render(); peekClose?.focus();
   }
   function closePeek() {
     if (!peeking) return;
-    peeking = null; peek.hidden = true; place(); renderStrip();
+    const id = peeking, returnFocus = inPeek(document.activeElement);
+    peeking = null; peek.hidden = true; delete peek.dataset.card;
+    if (on) { keepFocus(place); renderStrip(); }
+    const back = returnFocus && !strip.hidden ? [...strip.querySelectorAll('.flow-chip')].find(chip => chip.dataset.card === id) : null;
+    if (back && !back.hidden && !back.closest('[hidden]')) back.focus({ preventScroll: true });
   }
 
   // ---- The way in and out. A veil covers the change of layout; going in, the seal appears on it for a moment.
@@ -925,8 +839,8 @@
       fadeOut.onfinish = () => { veil.hidden = true; veil.classList.remove('with-seal'); for (const animation of shown) animation.cancel?.(); done(); };
     };
   }
-  // The status line's elapsed time moves while a run works.
-  function tick() { clearTimeout(ticker); if (!on) return; if (api.isRunning()) renderStatus(); ticker = setTimeout(tick, 1000); }
+  // The status line's and Activity's elapsed time move while a run works, and Git is read again now and then.
+  function tick() { clearTimeout(ticker); if (!on) return; if (api.isRunning()) { renderStatus(); renderCards(); renderStrip(); } watchGit(); ticker = setTimeout(tick, 1000); }
   // Changing view. Normal keeps every panel; Flow and the Plan lift the header across the window and set the panels
   // aside, to come back as they were in Normal. Only a change of routing waits for the workspace to be idle.
   const routedIn = target => target === 'flow' ? true : target === 'normal' ? false : routed;
@@ -953,7 +867,7 @@
         if (previous?.panel) api.showSidePanel?.(previous.panel);
         if (previous?.bottom) window.relayPanel?.show?.(previous.bottom);
       } else keepFocus(liftHeader);
-      if (target === 'flow') { on = true; shell.classList.add('flow'); keepFocus(moveControls); place(); tick(); }
+      if (target === 'flow') { on = true; shell.classList.add('flow'); keepFocus(moveControls); keepFocus(place); tick(); }
       if (target === 'plan') { shell.classList.add('plan'); window.relayBoard?.show?.(); }
       if (routed) ensureRouting(); else releaseRouting();
       if (remember) { write(KEY, routed ? 'on' : 'off'); write(VIEW_KEY, view === 'plan' ? 'plan' : 'chat'); }
@@ -1038,11 +952,15 @@
     const loungeToggle = $('toggle-flow-lounge');
     if (loungeToggle) loungeToggle.hidden = !on;
     if (window.relayFlowLounge?.sync) window.relayFlowLounge.sync(on);
-    left.hidden = right.hidden = !on || tight || Boolean(window.relayFlowLounge?.isActive?.());
+    const lounging = Boolean(window.relayFlowLounge?.isActive?.());
+    left.hidden = right.hidden = !on || tight || lounging;
+    // Narrow, the panels become chips after the status line; wide, each is on its rail.
+    const wasTight = !strip.hidden;
     strip.hidden = !on || !tight;
-    if (!on || !tight) closePeek();
-    if (!on) return;
-    for (const card of CARDS) renderers[card.id](cards.get(card.id));
+    if (!on) { closePeek(); return; }
+    if (wasTight !== tight) { if (peeking) closePeek(); keepFocus(place); }
+    watchGit();
+    renderCards();
     renderStrip();
   }
   function schedule() { if (scheduled) return; scheduled = true; Promise.resolve().then(() => { scheduled = false; render(); }); }
@@ -1064,12 +982,19 @@
   });
   window.addEventListener('relay-side-panel', scheduleDetail);
   window.addEventListener('relay-project-review', schedule);
+  window.addEventListener('relay-git', schedule);
   if (typeof MutationObserver === 'function') {
     const observer = new MutationObserver(scheduleDetail);
     // Watch Git too: whether it lives in the side panel or the left sidebar is only known once sidebar-tools.js loads.
     for (const name of ['agents', 'git', 'brief', 'timeline', 'review']) if ($(`${name}-panel`)) observer.observe($(`${name}-panel`), { attributes: true, attributeFilter: ['hidden'] });
   }
   $('flow-peek-close')?.addEventListener('click', closePeek);
+  // A card's details close when you go back to the chat, as a menu does. Dialogs they open, such as Undo's preview, don't count.
+  document.addEventListener('pointerdown', event => {
+    const target = event.target;
+    if (!peeking || !target?.closest || inPeek(target) || target.closest('.flow-strip, dialog, [popover]')) return;
+    closePeek();
+  });
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && peeking && !event.isComposing) { event.preventDefault(); closePeek(); } });
   narrowQuery?.addEventListener?.('change', schedule);
   window.addEventListener('relay-state', () => {
@@ -1096,6 +1021,6 @@
   // remoteAccess: the phone entry asks Flow first; true means the sheet opened, so Settings need not.
   // view() is normal, flow or plan; isOn() is true in Flow alone; isRouted() says whether Codeshi chooses the agent and model.
   // isLocked() says whether the Flow toggle, ⇧⌘F, would have to wait for work.
-  window.relayFlow = { toggle: toggleFlow, enter: () => changeView('flow'), leave: () => changeView('normal'), plan: () => changeView('plan'), setView: changeView, view: () => view, isPlan: () => view === 'plan', isRouted: () => routed, isOn: () => on, isLocked: () => blocked(on ? 'normal' : 'flow'), peek: peekCard, cards: () => CARDS.map(card => ({ id: card.id, title: card.title })), remoteAccess: showPhone, lounge: () => window.relayFlowLounge };
+  window.relayFlow = { toggle: toggleFlow, enter: () => changeView('flow'), leave: () => changeView('normal'), plan: () => changeView('plan'), setView: changeView, view: () => view, isPlan: () => view === 'plan', isRouted: () => routed, isOn: () => on, isLocked: () => blocked(on ? 'normal' : 'flow'), peek: peekCard, cards: () => CARDS.map(card => ({ id: card.id, title: card.title, side: card.side, shown: cards.get(card.id).shown, quiet: cards.get(card.id).quiet, attention: cards.get(card.id).attention, label: cards.get(card.id).label })), remoteAccess: showPhone, lounge: () => window.relayFlowLounge };
   render();
 })();

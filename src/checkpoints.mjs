@@ -384,24 +384,30 @@ export class RunCheckpoints {
 
   // Public history contains descriptions and targets, never private object-store paths or blob identities.
   timeline(c) {
-    const entries = [], current = this.folders();
+    const entries = [], current = this.folders(), summary = this.summary(c);
     const point = (id, phase, folders, at) => {
       const available = folders?.length === current.length && folders?.length > 0 && folders.every(item => item.commit && current.some(folder => folder.id === item.folderId && folder.path === item.path));
       return { target: { kind: 'checkpoint', id, phase }, at, available: Boolean(available),
         ...(!available ? { reason: folders?.some(item => !item.commit) ? 'Not every folder was saved.' : 'Workspace folders changed since this checkpoint.' } : {}) };
     };
+    const rootMessageOf = (run, message, isContinuation) => isContinuation
+      ? (c.messages?.find(m => m.role === 'user' && !/^\s*Continue the unfinished task from this shared conversation/i.test(m.text || '') && (m.runId === run.taskId || c.taskOfRun?.[m.runId] === run.taskId || m.runId === run.parentRunId)) || null)
+      : (message || null);
     for (const [id, saved] of Object.entries(c.snapshots || {})) {
       const message = c.messages?.find(item => item.runId === id && item.role === 'user');
       const run = c.runs?.find(item => item.id === id) || c.activeRun?.id === id && c.activeRun || {};
       const rawPrompt = run.prompt || message?.text?.slice(0, 200) || '';
       const isContinuation = /^\s*Continue the unfinished task from this shared conversation/i.test(rawPrompt);
+      const rootMessage = rootMessageOf(run, message, isContinuation);
       const taskPrompt = isContinuation
-        ? (c.messages?.find(m => m.role === 'user' && !/^\s*Continue the unfinished task from this shared conversation/i.test(m.text || '') && (m.runId === run.taskId || c.taskOfRun?.[m.runId] === run.taskId || m.runId === run.parentRunId))?.text?.slice(0, 200)
+        ? (rootMessage?.text?.slice(0, 200)
            || (c.runs || []).find(r => r.taskId === run.taskId && r.prompt && !/^\s*Continue the unfinished task from this shared conversation/i.test(r.prompt))?.prompt?.slice(0, 200)
            || '')
         : rawPrompt;
-      entries.push({ id, kind: 'run', runId: id, provider: run.provider || message?.provider || null, local: Boolean(run.local || run.connection === 'local' || message?.connection === 'local'), prompt: taskPrompt,
+      const info = summary[id] || null;
+      entries.push({ id, kind: 'run', runId: id, ...(rootMessage?.id ? { messageId: rootMessage.id } : {}), provider: run.provider || message?.provider || null, local: Boolean(run.local || run.connection === 'local' || message?.connection === 'local'), prompt: taskPrompt,
         at: saved.before?.at || saved.after?.at, status: run.status || (c.activeRun?.id === id ? 'running' : 'unknown'), files: saved.files ?? null,
+        ...(info ? { canUndo: true, ...(info.undone ? { undone: info.undone } : {}), ...(info.beforeRunId ? { beforeRunId: info.beforeRunId } : {}) } : {}),
         checkpoints: ['before', 'after'].filter(phase => saved[phase]).map(phase => point(id, phase, saved[phase].folders, saved[phase].at)) });
     }
     for (const rewind of c.rewinds || []) entries.push({ id: rewind.id, kind: rewind.target.kind === 'checkpoint' ? 'restore' : 'undo', runId: rewind.runId, at: rewind.at, pending: Boolean(rewind.pending),
@@ -419,7 +425,12 @@ export class RunCheckpoints {
     for (const [runId, saved] of Object.entries(c.snapshots || {})) {
       if (!saved.before || !saved.after || !saved.files) continue;
       const undo = recent.findLast(item => item.target.kind === 'run' && item.target.id === runId && !reverted.has(item.id));
-      result[runId] = { files: saved.files, ...(undo ? { undone: undo.id } : {}) };
+      const run = c.runs?.find(item => item.id === runId);
+      const rootRunId = run && (run.taskId || run.parentRunId)
+        ? (c.messages?.find(m => m.role === 'user' && !/^\s*Continue the unfinished task from this shared conversation/i.test(m.text || '') && (m.runId === run.taskId || c.taskOfRun?.[m.runId] === run.taskId || m.runId === run.parentRunId))?.runId || null)
+        : null;
+      const beforeRunId = rootRunId && rootRunId !== runId && c.snapshots?.[rootRunId]?.before ? rootRunId : null;
+      result[runId] = { files: saved.files, ...(undo ? { undone: undo.id } : {}), ...(beforeRunId ? { beforeRunId } : {}) };
     }
     return result;
   }

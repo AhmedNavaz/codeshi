@@ -359,3 +359,23 @@ test('a phone shows a planner’s reply as the plan it proposed, says where to a
   out.lastRun.purpose = undefined;
   assert.equal(context.canContinue(), true, 'An ordinary run that stopped can be continued.');
 });
+
+test('on Same Wi-Fi a phone is open only while its page asks for things, not while a live-updates connection lingers (#200)', async t => {
+  const f = await fixture(t, { handle: (req, res) => { if (req.url.startsWith('/api/events')) { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.write(':\n\n'); return; } res.end('{}'); } });
+  const phone = await f.pair();
+  await f.access.manage({ action: 'allow', id: phone.device.id });
+  const stream = new AbortController(); t.after(() => stream.abort());
+  await fetch(`${f.url}/api/events`, { headers: { Cookie: phone.cookie }, signal: stream.signal });
+  assert.equal(f.access.status().devices[0].activeNow, true);
+  // The phone locked without saying so: its connection is still there, but it stopped asking.
+  f.time(26_000);
+  assert.equal(f.access.status().devices[0].activeNow, false);
+  assert.equal((await fetch(`${f.url}/api/projects`, { headers: { Cookie: phone.cookie } })).status, 200);
+  assert.equal(f.access.status().devices[0].activeNow, true);
+  // Leaving says so, and last seen is when it left.
+  const opened = f.access.status().devices[0].lastSeenAt;
+  f.time(5000);
+  await fetch(`${f.url}/phone/session?active=0`, { headers: { Cookie: phone.cookie } });
+  assert.equal(f.access.status().devices[0].activeNow, false);
+  assert.equal(f.access.status().devices[0].lastSeenAt, opened + 5000, 'Last seen is the moment it left.');
+});

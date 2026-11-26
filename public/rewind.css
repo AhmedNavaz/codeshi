@@ -1,10 +1,16 @@
-/* Rewind (#20): a run's checkpoint line on its timeline, and the undo preview. */
-.activity-icon.icon-checkpoint { --activity-icon: var(--icon-history); }
-.run-checkpoint-header { gap: 8px; min-height: 26px; color: var(--muted); }
-.run-checkpoint .activity-entry-title { color: var(--muted); font-weight: 400; }
-.run-checkpoint-action { height: 22px; padding: 0 6px; border-radius: 5px; font-size: 12px; }
-.run-checkpoint-action:hover:enabled { background: var(--hover); text-decoration: none; }
-.run-checkpoint-action:disabled { color: var(--faint); cursor: default; }
+/* Rewind (#20, #196): message Undo menu, undo preview dialog, and simplified Timeline. */
+.message-undo { display: inline-flex; align-items: center; gap: 4px; }
+.message-undo::before { content: ""; flex: none; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--icon-history) center / contain no-repeat; mask: var(--icon-history) center / contain no-repeat; }
+.message-undo[aria-expanded="true"] { opacity: 1; color: var(--text); background: var(--hover); }
+.message-redo { opacity: 1; color: var(--muted); }
+.message-undo:disabled { color: var(--faint); cursor: default; }
+.message-undo:disabled:hover { color: var(--faint); background: transparent; }
+
+.message-undo-menu { position: fixed; position-anchor: none; position-area: none; inset: auto; width: 288px; max-width: calc(100vw - 16px); margin: 0; padding: 4px; }
+.message-undo-option { display: grid; gap: 2px; height: auto; padding: 7px 10px; white-space: normal; }
+.message-undo-option-title { color: var(--text-strong); font-size: 12.5px; font-weight: 500; line-height: 1.3; }
+.message-undo-option-detail { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.message-undo-option:disabled .message-undo-option-title, .message-undo-option:disabled .message-undo-option-detail { color: var(--faint); }
 
 .rewind-dialog {
   width: min(760px, calc(100vw - 48px)); max-height: min(720px, calc(100vh - 48px)); max-width: none; padding: 0;
@@ -61,24 +67,47 @@
 .timeline-content { flex: 1; min-height: 0; overflow: auto; padding: 0 18px 18px; }
 .checkpoint-card { position: relative; margin: 0 0 12px 5px; padding: 0 0 14px 17px; border-left: 1px solid var(--border); }
 .checkpoint-card::before { content: ''; position: absolute; left: -4px; top: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
-.checkpoint-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 5px 12px; font-size: 12px; }
+.checkpoint-heading { display: flex; flex-wrap: nowrap; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12px; }
 .checkpoint-heading strong { color: var(--text-strong); font-weight: 600; }
-.checkpoint-heading time, .checkpoint-meta { color: var(--muted); font-size: 11px; }
-.checkpoint-prompt { margin: 7px 0; color: var(--text); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.checkpoint-heading time, .checkpoint-meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.checkpoint-prompt { margin: 0; color: var(--text); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.timeline-prompt { flex: 1; min-width: 0; padding: 0; border: 0; background: none; color: var(--text-strong); font-family: inherit; font-weight: 500; text-align: left; cursor: pointer; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.timeline-prompt:hover { text-decoration: underline; text-underline-offset: 2px; }
+.timeline-prompt:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: 2px; border-radius: 2px; }
+.timeline-meta-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0 0; }
+.timeline-meta-row .checkpoint-meta { margin: 0; white-space: normal; }
+.timeline-undo { flex: none; min-height: 25px; padding: 2px 9px; font-size: 11px; }
 .checkpoint-meta { margin: 5px 0 9px; }
-/* Commits sit on the same line as checkpoints, with a hollow dot, and open read only. */
-.commit-entry::before { background: var(--sidebar); box-shadow: inset 0 0 0 1.5px var(--muted); }
-.commit-subject { display: block; width: 100%; padding: 0; border: 0; background: none; text-align: left; font-family: inherit; font-weight: inherit; cursor: pointer; }
+
+/* Collapsible checkpoints, restores and commits nested inside each message row. */
+.timeline-details { margin-top: 8px; }
+.timeline-details-summary { display: inline-flex; align-items: center; gap: 5px; padding: 2px 0; color: var(--muted); font-size: 11.5px; list-style: none; cursor: pointer; }
+.timeline-details-summary::-webkit-details-marker { display: none; }
+.timeline-details-summary::before { content: ""; flex: none; width: 10px; height: 10px; background: var(--faint); -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; mask: var(--icon-chevron-right) center / contain no-repeat; transition: transform .12s ease; }
+.timeline-details[open] > .timeline-details-summary::before { transform: rotate(90deg); }
+.timeline-details-summary:hover { color: var(--text); }
+.timeline-details-summary:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: 2px; border-radius: 3px; }
+.timeline-details-body { display: grid; gap: 10px; margin-top: 8px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.timeline-subrow, .timeline-commit-row { display: grid; gap: 4px; }
+.timeline-subrow + .timeline-subrow, .timeline-subrow + .timeline-commit-row, .timeline-commit-row + .timeline-commit-row, .timeline-commit-row + .timeline-subrow { padding-top: 9px; border-top: 1px solid var(--border); }
+.timeline-subrow-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.timeline-subrow-kind { color: var(--text); font-size: 11.5px; font-weight: 500; }
+.timeline-subrow-recovery .timeline-subrow-kind { color: var(--warning); }
+.timeline-subrow-time { color: var(--faint); font-size: 10.5px; white-space: nowrap; }
+.timeline-subrow .checkpoint-meta { margin: 0 0 2px; white-space: normal; }
+.timeline-commit-meta { margin: 0; white-space: normal; }
+.timeline-commits-only, .timeline-earlier-commits { margin-top: 4px; }
+
+.commit-subject { display: block; width: 100%; padding: 0; border: 0; background: none; text-align: left; font-family: inherit; font-weight: inherit; font-size: 12px; cursor: pointer; }
 .commit-subject:hover { color: var(--text-strong); text-decoration: underline; text-underline-offset: 2px; }
 .commit-subject:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: 2px; border-radius: 2px; }
-.commit-entry .checkpoint-meta { margin-bottom: 0; }
-.commit-entry .commit-hash { color: var(--muted); }
+.commit-hash { color: var(--muted); font-family: var(--mono); font-size: 11px; }
 .commit-body { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 120px; overflow: auto; }
 .rewind-file[data-status="added"] .rewind-action { color: var(--success); }
 .rewind-file[data-status="deleted"] .rewind-action { color: var(--danger); }
 .rewind-file[data-status="renamed"] .rewind-action { color: var(--link); }
 .checkpoint-actions { display: flex; flex-wrap: wrap; gap: 7px; }
-.checkpoint-actions .secondary-button { min-height: 27px; padding: 3px 9px; font-size: 11px; }
+.checkpoint-actions .secondary-button { min-height: 26px; padding: 2px 9px; font-size: 11px; }
 /* Five tabs fit at the smallest inspector width by keeping only the selected label. */
 @container (max-width: 390px) { .panel-tabs .panel-tab:not([aria-selected="true"]) .panel-tab-label { display: none; } }
 @media (max-width: 1100px) { .timeline-panel { position: fixed; z-index: 30; top: 0; right: 0; bottom: var(--statusbar-height); width: min(var(--inspector-width, var(--inspector-width-default)), 80vw); box-shadow: var(--shadow-lg); } }

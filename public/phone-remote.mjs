@@ -7,16 +7,22 @@ const panel = document.createElement('main'); panel.className = 'phone-pair-card
 const title = document.createElement('h1'), note = document.createElement('p'), code = document.createElement('strong');
 code.id = 'phone-match-code';
 title.textContent = 'Connect to Codeshi'; note.setAttribute('role', 'status');
-// An unpaired browser, such as a new Home Screen icon, can take over a connection with the code from Move to another browser.
+// An unpaired browser, such as a new Home Screen icon, takes over a connection with one tap on Paste: Move to another
+// browser in the paired one copies its link (#201). Typing the code from that sheet still works.
 const form = document.createElement('form'), field = document.createElement('input'), label = document.createElement('label'), submit = document.createElement('button');
-label.append('Code from Move to another browser', field); form.append(label, submit); form.hidden = true;
-Object.assign(field, { id: 'phone-handover-code', autocomplete: 'off', spellcheck: false, required: true, maxLength: 11, placeholder: 'XXXX XXXX' });
+const paste = document.createElement('button'); paste.type = 'button'; paste.id = 'phone-handover-paste'; paste.textContent = 'Paste from your other browser';
+label.append('Or type the code from Move to another browser', field); form.append(paste, label, submit); form.hidden = true;
+Object.assign(field, { id: 'phone-handover-code', autocomplete: 'off', spellcheck: false, required: true, maxLength: 2000, placeholder: 'XXXX XXXX' });
 field.setAttribute('autocapitalize', 'characters'); field.setAttribute('autocorrect', 'off');
-submit.type = 'submit'; submit.textContent = 'Connect';
+submit.type = 'submit'; submit.textContent = 'Connect'; submit.className = 'secondary';
 panel.append(title, note, code, form); document.body.prepend(panel);
 // Chromium offers installation only through this event, often before the app has loaded. Keep it for the Home Screen step.
 window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); window.codeshiInstallPrompt = event; window.dispatchEvent(new Event('codeshi-install-ready')); });
-let client, stopWatching, key, room, config, sessionKey, active = false, canWatch = false, chain = Promise.resolve(), awaiting = null, conversation = null;
+let client, stopWatching, key, room, config, sessionKey, active = false, canWatch = false, chain = Promise.resolve(), awaiting = null, conversation = null, heard = 0;
+// How long a request waits for its reply while the page is in front, how often it asks again, and the least it gets
+// back after the page was away. The computer accepts a new request for 30 seconds after it was made.
+const WAIT_MS = 25000, ASK_AGAIN_MS = 4000, RETURN_MS = 8000;
+const UNREACHABLE = 'Can’t reach your computer. Check that it’s awake, online and running Codeshi.';
 const listeners = new Set();
 const read = key => { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } };
 const write = (key, value) => { try { if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, JSON.stringify(value)); } catch { /* An open session works without storage. */ } };
@@ -47,46 +53,89 @@ async function watchAfterClaim(uid, requestId) {
   }
 }
 
-async function packet(value) {
+// Seals a fresh copy each time, so Firebase passes even a repeat on to the computer.
+async function put(request) {
   const identity = await client.identity();
-  const request = { ...value, id: token(16), at: Date.now() };
+  await client.request(`rooms/${room}/request`, 'PUT', { uid: identity.uid, box: await seal(key, room, 'request', request) });
+  return identity;
+}
+// A reply can go missing: written while this page was away or its stream reconnecting, or replaced by a progress
+// update before the page read it. So an unanswered request is asked again with the same ID, never left to wait.
+// The computer acts on an ID once and answers a repeat from the reply it kept, so Send, Stop and approvals still
+// run only once. The wait counts only time the page is in front; a phone may pause a page it left at any moment.
+async function packet(value) {
+  await client.identity();
+  const request = { ...value, id: token(16), at: Date.now(), ...(document.hidden ? { hidden: true } : {}) };
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (awaiting?.id === request.id) awaiting = null;
-      reject(Error('Can’t reach your computer. Check that it’s awake, online and running Codeshi.'));
-    }, 25000);
-    awaiting = { id: request.id, resolve: value => { clearTimeout(timer); awaiting = null; resolve(value); }, reject: error => { clearTimeout(timer); awaiting = null; reject(error); } };
-    seal(key, room, 'request', request).then(async box => {
-      await client.request(`rooms/${room}/request`, 'PUT', { uid: identity.uid, box });
+    let left = WAIT_MS, since = 0, timer = null, again = null, sent = false, sentAt = 0;
+    const finish = (settle, result) => { clearTimeout(timer); clearTimeout(again); if (awaiting === entry) awaiting = null; settle(result); };
+    const send = () => put(request).then(identity => { sent = true; sentAt ||= Date.now(); return identity; }, error => {
+      // Firebase refused it, so it isn't there. Anything else is uncertain: the next copy settles it either way.
+      if (error?.status) entry.reject(error);
+      else if (awaiting === entry && !document.hidden) { clearTimeout(again); again = setTimeout(entry.resend, 1000); }
+    });
+    const entry = {
+      id: request.id, resolve: value => finish(resolve, value), reject: error => finish(reject, error),
+      resend() {
+        clearTimeout(again);
+        if (awaiting !== entry || document.hidden || (!canWatch && sent)) return;
+        again = setTimeout(entry.resend, ASK_AGAIN_MS);
+        // A stream that went quiet without failing, as after a network change, is reopened, and asks again as it opens.
+        if (canWatch && sent && heard < sentAt && Date.now() - sentAt > 3 * ASK_AGAIN_MS) { watch(); return; }
+        send();
+      },
+      pause() { if (!timer) return; clearTimeout(timer); clearTimeout(again); timer = null; left = Math.max(0, left - (Date.now() - since)); },
+      // Coming back reopens the stream, which asks again as it opens.
+      resume() { if (timer) return; left = Math.max(left, RETURN_MS); arm(); if (canWatch) again = setTimeout(entry.resend, ASK_AGAIN_MS); else entry.resend(); },
+    };
+    const arm = () => { since = Date.now(); timer = setTimeout(() => entry.reject(Error(UNREACHABLE)), left); };
+    awaiting = entry;
+    if (document.hidden) since = Date.now(); else arm();
+    send().then(async identity => {
+      if (!identity || awaiting !== entry) return;
+      again = setTimeout(entry.resend, ASK_AGAIN_MS);
       if (value.kind === 'pair' || value.kind === 'meet') await watchAfterClaim(identity.uid, request.id);
-    })
-      .catch(error => { if (awaiting?.id === request.id) awaiting.reject(error); });
+    }).catch(error => { if (awaiting === entry) entry.reject(error); });
   });
 }
 // One mailbox per phone bounds cloud storage. Serialize API calls so simultaneous model/account checks cannot
-// overwrite another request. Mutations are never retried automatically after an uncertain network failure.
+// overwrite another request.
 function request(value) {
   const next = chain.then(() => packet(value)); chain = next.catch(() => {}); return next;
+}
+// Said once, without waiting for a reply or holding up the requests behind it, such as the page leaving.
+function tell(value) {
+  put({ ...value, id: token(16), at: Date.now(), quiet: true }).catch(() => {});
 }
 function watch() {
   if (!canWatch || document.hidden) return;
   stopWatching?.();
+  // Every stream, and every reconnect of one, opens with the mailbox as it is now: any reply written meanwhile
+  // may already be replaced, so the request still waiting is asked again.
+  let opening = true;
   stopWatching = client.watch(`rooms/${room}/out`, async box => {
-    if (!box) return;
-    let message; try { message = await open(key, room, 'out', box); } catch { return; }
-    if (Math.abs(Date.now() - message.at) > 60000) return;
-    if (!active && message.state === 'pending') waitingForApproval(message.code || code.textContent);
-    if (awaiting && awaiting.id === message.id) awaiting.resolve(message);
-    if (message.state === 'active' && !active) activate();
-    if (message.event) event(message.event, {});
-    if (message.projectsChanged) event('projects');
-  }, error => { if (active) event('error'); else note.textContent = error.message; });
+    heard = Date.now();
+    const fresh = opening; opening = false;
+    let message = null;
+    if (box) { try { message = await open(key, room, 'out', box); } catch { /* Not for this connection. */ } }
+    if (message && Math.abs(Date.now() - message.at) > 60000) message = null;
+    if (message) {
+      if (!active && message.state === 'pending') waitingForApproval(message.code || code.textContent);
+      if (awaiting && awaiting.id === message.id) awaiting.resolve(message);
+      if (message.state === 'active' && !active) activate();
+      if (message.event) event(message.event, {});
+      if (message.projectsChanged) event('projects');
+    }
+    // A progress update names the last reply the computer wrote. If that's the one this page waits for, it was missed.
+    if (awaiting && (fresh || (message?.reply && message.reply === awaiting.id))) awaiting.resend();
+  }, error => { opening = true; if (active) event('error'); else note.textContent = error.message; });
 }
 function activate() {
   if (active) return; active = true;
   window.relayPhoneTransport = {
     remote: true, unpair,
     async fetch(path, options = {}) {
+      if (path === '/phone/session?active=0') { tell({ kind: 'session', active: false }); return new Response('{}', { status: 200 }); }
       if (path === '/phone/logout') {
         try { await client.request(`rooms/${room}/request`, 'PUT', { uid: (await client.identity()).uid, box: await seal(key, room, 'request', { id: token(16), at: Date.now(), kind: 'logout' }) }); }
         finally { unpair(); }
@@ -146,11 +195,19 @@ function activate() {
   const script = document.createElement('script'); script.src = '/phone.js'; document.head.append(script);
 }
 
-const NOT_PAIRED = 'This browser isn’t paired yet. Each browser on your phone (a QR scanner, Safari, Chrome or a Home Screen icon) has its own connection. In the browser where you approved it, choose Move to another browser and type its code here. Or on your computer choose Remote access → Away from home and scan a new QR code.';
+const NOT_PAIRED = 'This browser isn’t paired yet. Each browser on your phone (a QR scanner, Safari, Chrome or a Home Screen icon) has its own connection. In the browser where you approved it, choose Move to another browser, then come back and tap Paste. Or on your computer choose Remote access → Away from home and scan a new QR code.';
 const CODE_FAILED = 'That code didn’t work. A code works once, for 5 minutes. Choose Move to another browser again for a new one.';
+const NOTHING_TO_PASTE = 'Nothing to paste from Move to another browser. Choose it in the browser that’s connected, then come back and tap Paste. Or type the code below.';
+// What Move to another browser copied: its one-use link, or the code shown under it.
+function pastedConnection(text) {
+  const link = String(text || '').match(/#remote=([a-f0-9]{64})\.([a-f0-9]{64})(?![a-f0-9])/);
+  if (link) return { session: { room: link[1], secret: link[2] } };
+  const handover = normalizeHandoverCode(text);
+  return handover ? { code: handover } : null;
+}
 function askForCode(message = NOT_PAIRED) {
   title.textContent = 'Connect to Codeshi'; code.textContent = ''; note.textContent = message;
-  form.hidden = false; submit.disabled = false;
+  form.hidden = false; submit.disabled = false; paste.disabled = false;
 }
 function useClient() {
   const authKey = `codeshi:remote-auth:${config.projectId}`;
@@ -202,9 +259,21 @@ async function redeem(typed) {
   stopWatching?.(); stopWatching = null; canWatch = false;
   await connect({ room: target.room, secret: target.secret });
 }
+function take(text, pasted = false) {
+  const found = pastedConnection(text);
+  if (!found) { askForCode(pasted ? NOTHING_TO_PASTE : CODE_FAILED); return; }
+  form.hidden = true; paste.disabled = true; note.textContent = 'Connecting…';
+  (found.session ? connect(found.session) : redeem(found.code))
+    .catch(error => { if (!active) askForCode(error.message || CODE_FAILED); });
+}
 form.addEventListener('submit', event => {
   event.preventDefault(); submit.disabled = true;
-  redeem(field.value).catch(error => { if (!active) askForCode(error.message || CODE_FAILED); });
+  take(field.value.trim());
+});
+// The browser shows its own Paste prompt the first time. Without clipboard access, the box below takes a paste too.
+paste.addEventListener('click', () => {
+  if (!navigator.clipboard?.readText) { askForCode('Press and hold the box below, choose Paste, then Connect.'); field.focus(); return; }
+  navigator.clipboard.readText().then(text => take(text.trim(), true), () => { askForCode('Paste wasn’t allowed. Press and hold the box below, choose Paste, then Connect.'); field.focus(); });
 });
 
 async function start() {
@@ -219,13 +288,22 @@ async function start() {
   const saved = read(sessionKey), match = fragment?.match(/^([a-f0-9]{64})\.([a-f0-9]{64})$/);
   const session = match ? { room: match[1], secret: match[2] } : saved;
   if (!session) { askForCode(); return; }
+  // A browser that's already paired keeps a fresh transfer link in its address (public/phone.js), so a stale one
+  // there must never cost it its own connection.
+  if (match && saved && saved.room !== session.room) {
+    try { await connect(session); return; }
+    catch { write(sessionKey, saved); }
+    await connect(saved); return;
+  }
   await connect(session);
 }
 document.addEventListener('visibilitychange', () => {
   if (!client) return;
-  if (document.hidden) { stopWatching?.(); stopWatching = null; }
-  else { watch(); event('ready'); }
+  if (document.hidden) { awaiting?.pause(); stopWatching?.(); stopWatching = null; }
+  else { watch(); awaiting?.resume(); event('ready'); }
 });
+// A new network: reopen the stream at once rather than after its retry delay. It asks again as it opens.
+window.addEventListener('online', () => { if (client && !document.hidden) watch(); });
 window.addEventListener('pagehide', () => { stopWatching?.(); });
 window.addEventListener('pageshow', event => { if (event.persisted && client && !document.hidden) watch(); });
 start().catch(error => { if (!active) askForCode(error.message || 'Could not connect. Scan a new QR code on your computer.'); });

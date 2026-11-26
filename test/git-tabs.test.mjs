@@ -17,7 +17,11 @@ class Element {
   getAttribute(name) { return this.attributes.get(name); }
   matches() { return false; }
   closest() { return null; }
-  focus() {}
+  focus() { if (this.ownerDocument) this.ownerDocument.activeElement = this; }
+  contains(node) { return node === this || this.children.some(child => typeof child !== 'string' && child.contains(node)); }
+  querySelector(selector) { return this.children.filter(child => typeof child !== 'string').map(child => selector === '[aria-current="true"]' && child.getAttribute('aria-current') === 'true' ? child : child.querySelector(selector)).find(Boolean) || null; }
+  showModal() { this.open = true; }
+  close() { this.open = false; this.listeners.get('close')?.(); }
 }
 const flush = async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setImmediate(resolve)); };
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
@@ -25,7 +29,7 @@ const diff = (path, text) => ({ path, code: ' M', diff: `@@ -1 +1 @@\n-old\n+${t
 function fixture({ saved = [] } = {}) {
   const nodes = new Map(), events = new Map(), entries = new Map(), calls = [], sidebar = [];
   const state = { projectId: null, provider: 'codex', model: '', effort: '', accounts: {}, conversation: {}, projects: [{ id: 'one', folders: [{ id: 'frontend' }] }, { id: 'two', folders: [{ id: 'backend' }] }] };
-  const document = { getElementById(id) { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); }, createElement: tag => new Element(tag), addEventListener() {}, hidden: false };
+  const document = { getElementById(id) { if (!nodes.has(id)) nodes.set(id, document.createElement('div')); return nodes.get(id); }, createElement(tag) { const element = new Element(tag); element.ownerDocument = document; return element; }, addEventListener() {}, hidden: false };
   let respond = async () => ({ totalChanges: 0, repositories: [] });
   const window = {
     relayUI: { getState: () => state, isRunning: () => false, api(path, options, projectId) { calls.push({ path, projectId }); return respond(path, projectId); }, showNotice() {} },
@@ -96,4 +100,33 @@ test('remembered diffs restore metadata, read on selection and skip removed fold
 test('opening Git chooses its sidebar independently of right-hand panels', async () => {
   const ui = fixture(); ui.choose('one'); ui.window.relayGit.open(); await flush(); ui.window.relayGit.close();
   assert.deepEqual(ui.sidebar, ['git']); assert.equal(ui.calls[0].path, '/api/git');
+});
+
+test('Flow opens file changes directly, refreshes the selected diff and keeps navigation in one window', async () => {
+  const ui = fixture(); ui.window.relayFlow = { view: () => 'flow' }; ui.choose('one');
+  const repo = { folderId: 'frontend', name: 'Frontend', available: true, totalChanges: 2, commits: [], changes: [{ path: 'first.js', code: ' M', added: 1 }, { path: 'second.js', code: ' M', added: 1 }] };
+  let version = 'original';
+  ui.respond(async request => request === '/api/git' ? { repositories: [repo] } : diff(request.includes('first.js') ? 'first.js' : 'second.js', version));
+  await ui.window.relayGit.openDiff(repo, repo.changes[1]); await flush();
+  assert.equal(ui.nodes.get('diff-dialog').open, true); assert.equal(ui.entries.size, 0);
+  assert.equal(ui.nodes.get('diff-title').textContent, 'second.js'); assert.match(ui.nodes.get('diff-content').textContent, /original/);
+  const list = ui.nodes.get('diff-files'); assert.match(list.textContent, /first\.js.*second\.js/);
+  ui.nodes.get('diff-content').scrollTop = 80; version = 'updated'; await ui.window.relayGit.refresh(); await flush();
+  assert.match(ui.nodes.get('diff-content').textContent, /updated/); assert.equal(ui.nodes.get('diff-content').scrollTop, 80);
+  list.listeners.get('keydown')({ key: 'ArrowUp', preventDefault() {} }); await flush();
+  assert.equal(ui.nodes.get('diff-title').textContent, 'first.js'); assert.equal(ui.nodes.get('diff-dialog').open, true);
+  ui.choose('two'); assert.equal(ui.nodes.get('diff-dialog').open, false);
+});
+
+test('Flow ignores late diff reads after changing files or closing the changes window', async () => {
+  const ui = fixture(); ui.window.relayFlow = { view: () => 'flow' }; ui.choose('one');
+  const first = deferred(), second = deferred(), repo = { folderId: 'frontend', name: 'Frontend', available: true, totalChanges: 2, commits: [], changes: [{ path: 'first.js', code: ' M' }, { path: 'second.js', code: ' M' }] };
+  ui.respond(request => request === '/api/git' ? Promise.resolve({ repositories: [repo] }) : request.includes('first.js') ? first.promise : second.promise);
+  await ui.window.relayGit.review(); await flush();
+  ui.nodes.get('diff-files').listeners.get('keydown')({ key: 'ArrowDown', preventDefault() {} });
+  second.resolve(diff('second.js', 'second content')); await flush(); first.resolve(diff('first.js', 'late first content')); await flush();
+  assert.equal(ui.nodes.get('diff-title').textContent, 'second.js'); assert.match(ui.nodes.get('diff-content').textContent, /second content/); assert.doesNotMatch(ui.nodes.get('diff-content').textContent, /late first/);
+  const late = deferred(); ui.respond(request => request === '/api/git' ? Promise.resolve({ repositories: [repo] }) : late.promise);
+  await ui.window.relayGit.refresh(); ui.nodes.get('diff-dialog').close(); late.resolve(diff('second.js', 'after closing')); await flush();
+  assert.equal(ui.nodes.get('diff-dialog').open, false); assert.doesNotMatch(ui.nodes.get('diff-content').textContent, /after closing/);
 });

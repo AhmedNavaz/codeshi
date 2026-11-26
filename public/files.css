@@ -44,18 +44,40 @@ select, #setup-content select, #workbench select, .git-toolbar select, .import-d
 .explorer-footnote { margin: 0; padding: 10px 15px; font-size: 10px; line-height: 1.5; color: var(--faint); border-top: 1px solid var(--border); }
 .file-preview-open #messages-scroll { display: none; }
 .file-preview { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--bg); }
-.file-preview > header { display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--surface-raised); }
+.file-preview > header { display: flex; align-items: center; gap: 8px; padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--surface-raised); }
 .file-preview > header > div { flex: 1; min-width: 0; }
-.file-preview strong { font-size: 12px; font-weight: 500; color: var(--text-strong); }
+.file-preview-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.file-preview strong { font-size: 12px; font-weight: 500; color: var(--text-strong); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.file-preview-dirty { display: inline-flex; align-items: center; gap: 5px; flex: none; padding: 1px 7px; border-radius: 999px; background: var(--warning-bg); border: 1px solid var(--warning-border); color: var(--warning); font-size: 10px; font-weight: 500; line-height: 1.5; }
+.file-preview-dirty::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.file-preview-dirty[hidden] { display: none; }
 #file-preview-path { display: block; margin-top: 4px; font-size: 10px; color: var(--faint); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-#attach-preview { font-size: 11px; min-height: 28px; }
-.file-preview-content { overflow: auto; flex: 1; min-height: 0; }
+#edit-preview, #revert-preview, #save-preview, #attach-preview { font-size: 11px; min-height: 28px; height: 28px; padding: 0 10px; flex: none; }
+#undo-preview, #redo-preview { width: 28px; height: 28px; flex: none; }
+#undo-preview .icon, #redo-preview .icon { width: 14px; height: 14px; }
+.file-preview-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; flex: none; padding: 9px 20px; border-bottom: 1px solid var(--warning-border); background: var(--warning-bg); color: var(--text-strong); font-size: 12px; line-height: 1.45; }
+.file-preview-banner[hidden] { display: none; }
+.file-preview-banner[data-tone="danger"] { border-bottom-color: var(--danger-border); background: var(--danger-bg); }
+.file-preview-banner-text { flex: 1 1 240px; min-width: 0; }
+.file-preview-banner-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.file-preview-banner-actions :is(.primary-button, .secondary-button) { height: 26px; min-height: 26px; padding: 0 10px; font-size: 11px; }
+.file-preview-content { overflow: auto; flex: 1; min-height: 0; position: relative; }
 .file-preview-content:has(img) { overflow: hidden; display: grid; place-items: center; padding: 24px; background: var(--code-bg); }
 .file-preview-content img { display: block; max-width: 100%; max-height: 60vh; object-fit: contain; border-radius: 4px; }
 .file-source { margin: 0; padding: 14px 20px 24px 0; color: var(--syntax-text); font: 12.5px/1.6 var(--mono); tab-size: 2; }
 .source-line { display: flex; min-height: 1.8em; }.source-line code { font: inherit; white-space: pre; }
 .line-number { display: inline-block; flex: 0 0 56px; padding-right: 20px; color: var(--faint); text-align: right; user-select: none; }
 .source-line:hover { background: var(--hover); }
+.file-editor { display: flex; align-items: stretch; min-height: 100%; min-width: 100%; width: max-content; background: var(--bg); font: 12.5px/1.6 var(--mono); tab-size: 2; }
+.file-editor-gutter { position: sticky; left: 0; z-index: 2; flex: 0 0 56px; padding: 14px 16px 24px 0; text-align: right; color: var(--faint); background: var(--bg); border-right: 1px solid var(--border); user-select: none; box-sizing: border-box; }
+.file-editor-gutter span { display: block; height: 1.6em; }
+.file-editor-surface { position: relative; display: grid; flex: 1 0 auto; min-width: calc(100% - 56px); min-height: 100%; }
+.file-editor-highlight, .file-editor-input { grid-area: 1 / 1; margin: 0; padding: 14px 20px 24px 14px; border: 0; font: inherit; line-height: 1.6; letter-spacing: normal; word-spacing: normal; tab-size: 2; white-space: pre; box-sizing: border-box; }
+.file-editor-highlight { pointer-events: none; color: var(--syntax-text); min-height: 100%; }
+.file-editor-highlight code { font: inherit; display: block; }
+.file-editor-input { width: 100%; height: 100%; min-width: 0; min-height: 100%; resize: none; overflow: hidden; background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: var(--text-strong); outline: none; }
+.file-editor-input::selection { background: var(--selection); color: transparent; -webkit-text-fill-color: transparent; }
+.file-compare-head { padding: 8px 20px; border-bottom: 1px solid var(--border); background: var(--surface-raised); color: var(--muted); font-size: 11px; }
 .file-preview > footer { padding: 6px 20px; border-top: 1px solid var(--border); color: var(--faint); font-size: 10px; }
 .attach-files { display: inline-flex; flex: none !important; gap: 5px; align-items: center; justify-content: center; height: 28px; min-width: 30px; padding: 0 8px; margin-right: 6px; background: var(--chip-bg); border: 1px solid var(--border); border-radius: 9px; color: var(--text); font-size: 11px; }
 .attach-files:hover:enabled { color: var(--text-strong); background: var(--hover-strong, var(--hover)); border-color: var(--border-strong); }.attach-files .icon { width: 15px; height: 15px; }
@@ -76,7 +98,7 @@ select, #setup-content select, #workbench select, .git-toolbar select, .import-d
 
 @media (max-width: 700px) {
   .sidebar .workspace-list { max-height: 60dvh; min-height: 0; }
-  .file-preview > header { padding: 10px; }.file-preview .secondary-button { max-width: 115px; }.attach-files > span { display: none; }
+  .file-preview > header { padding: 10px; flex-wrap: wrap; }.file-preview .secondary-button { max-width: 115px; }.attach-files > span { display: none; }
 }
 
 .attachment-thumbnail { width: 28px; height: 28px; object-fit: cover; border-radius: 3px; }

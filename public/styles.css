@@ -85,6 +85,10 @@ summary::-webkit-details-marker { display: none; }
 .workspace-item-heading { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
 .workspace-project-icon { width: 16px; height: 16px; flex: none; background: currentColor; color: var(--faint); -webkit-mask: var(--icon-folder) center / 16px no-repeat; mask: var(--icon-folder) center / 16px no-repeat; }
 .workspace-item.active .workspace-project-icon { color: var(--link); }
+/* Open in another Codeshi window (#203): a small window glyph after the name; the row's options button covers it on hover. */
+.workspace-window-mark { width: 14px; height: 14px; flex: none; background: currentColor; color: var(--faint); -webkit-mask: var(--icon-window) center / 14px no-repeat; mask: var(--icon-window) center / 14px no-repeat; }
+.workspace-row:hover .workspace-window-mark, .workspace-row:focus-within .workspace-window-mark { visibility: hidden; }
+.workspace-switch-state.elsewhere { color: var(--faint); }
 .workspace-item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-ui-base); line-height: 20px; }
 .workspace-item-meta { display: block; min-width: 0; padding-left: 24px; overflow: hidden; color: var(--faint); font-size: var(--font-ui-sm); line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-item-meta.waiting .workspace-meta-state { color: var(--warning); }
@@ -1038,7 +1042,29 @@ button.commit-hash:hover { text-decoration: underline; }
 #diff-meta { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
 .diff-added { color: var(--success); font-family: var(--mono); }
 .diff-removed { color: var(--danger); font-family: var(--mono); }
-.diff-content { flex: 1; min-height: 0; overflow: auto; background: var(--code-bg); }
+.diff-content { flex: 1; min-width: 0; min-height: 0; overflow: auto; background: var(--code-bg); }
+/* The changes window lists every changed file beside the one being read (#194). */
+.diff-body { flex: 1; display: flex; min-height: 0; }
+.diff-files { flex: none; display: flex; flex-direction: column; gap: 1px; width: 288px; padding: 8px; overflow: hidden auto; border-right: 1px solid var(--border); }
+.diff-files[hidden] { display: none; }
+.diff-files-head { display: flex; align-items: baseline; gap: 8px; margin: 0; padding: 4px 8px 8px; color: var(--muted); font-size: var(--font-ui-sm); }
+.diff-files-count { margin-right: auto; }
+.diff-files-head :is(.diff-added, .diff-removed) { font-size: 11px; }
+.diff-files-folder { margin: 8px 0 2px; padding: 0 8px; color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+/* One changed file: a mark for what happened to it, its name, the folder it's in, and the lines it gained and lost. */
+.change-row { display: flex; align-items: center; gap: 8px; flex: none; width: 100%; min-width: 0; min-height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: var(--font-ui-md); text-align: left; cursor: pointer; }
+.change-row:hover { background: var(--hover); color: var(--text-strong); }
+.change-row[aria-current="true"] { background: var(--list-active); color: var(--text-strong); }
+.change-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.change-mark { flex: none; width: 14px; height: 14px; background: var(--warning); -webkit-mask: var(--icon-diff-modified) center / contain no-repeat; mask: var(--icon-diff-modified) center / contain no-repeat; }
+.change-row[data-status="added"] .change-mark { background: var(--success); -webkit-mask-image: var(--icon-diff-added); mask-image: var(--icon-diff-added); }
+.change-row[data-status="deleted"] .change-mark { background: var(--danger); -webkit-mask-image: var(--icon-diff-removed); mask-image: var(--icon-diff-removed); }
+.change-row:is([data-status="renamed"], [data-status="copied"]) .change-mark { background: var(--link); -webkit-mask-image: var(--icon-diff-renamed); mask-image: var(--icon-diff-renamed); }
+.change-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.change-row[data-status="deleted"] .change-name { color: var(--muted); text-decoration: line-through; }
+.change-where { flex: 1 1 0; min-width: 0; overflow: hidden; color: var(--faint); font-size: var(--font-ui-xs); text-overflow: ellipsis; white-space: nowrap; }
+.change-counts { display: inline-flex; align-items: baseline; gap: 6px; flex: none; margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; }
+.change-many { color: var(--faint); }
 .diff-lines { min-width: max-content; padding: 4px 0 12px; font: 12px/1.6 var(--mono); }
 .diff-line { display: grid; grid-template-columns: 48px 48px 20px minmax(0, 1fr); }
 .diff-number { padding-right: 8px; color: var(--faint); text-align: right; user-select: none; }
@@ -1103,6 +1129,8 @@ button.commit-hash:hover { text-decoration: underline; }
   .git-panel { top: 44px; width: min(360px, 100vw); }
   .status-bar .provider-state, .usage-label { display: none; }
   .diff-dialog { width: calc(100vw - 16px); height: calc(100dvh - 16px); }
+  .diff-body { flex-direction: column; }
+  .diff-files { width: auto; max-height: 32%; border-right: 0; border-bottom: 1px solid var(--border); }
   .diff-line { grid-template-columns: 36px 36px 16px minmax(0, 1fr); }
   .import-dialog { width: calc(100vw - 16px); height: calc(100dvh - 16px); }
   .import-toolbar { padding: 10px 14px; }

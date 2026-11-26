@@ -80,9 +80,7 @@
         // Standard Flow cards and their buttons, so weather lands on them outside the Lounge too
         "#flow-left .flow-card",
         "#flow-right .flow-card",
-        "#flow-left .flow-button",
-        "#flow-right .flow-button",
-        "#flow-right .flow-plan",
+        "#flow-right .flow-action-primary",
         // Lounge stage: the grid of activities, the open activity's board, controls and content blocks
         ".flow-lounge-tile",
         ".flow-lounge-canvas",

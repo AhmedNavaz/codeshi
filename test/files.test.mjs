@@ -6,7 +6,8 @@ import test from 'node:test';
 import { scriptCLIs, noSymlinks } from './platform.mjs';
 import { EventEmitter, once } from 'node:events';
 import { AttachmentStore, describeAttachment } from '../src/attachments.mjs';
-import { listFiles, readExplorerFile } from '../src/file-explorer.mjs';
+import { listFiles, readExplorerFile, saveExplorerFile } from '../src/file-explorer.mjs';
+import { MAX_FILE_BYTES } from '../src/collaboration-format.mjs';
 import { prepareContext } from '../src/context.mjs';
 import { runCodex, runClaude } from '../src/providers.mjs';
 import { Broker } from '../src/broker.mjs';
@@ -110,4 +111,125 @@ test('large supported images do not overflow validation and snapshots reject non
   const f=fixture(t), bytes=Buffer.alloc(5*1024*1024);bytes.set([137,80,78,71,13,10,26,10]);
   assert.equal(f.store.put({name:'large.png',data:bytes.toString('base64')}).bytes,bytes.length);
   assert.throws(()=>f.store.put({name:'invalid.txt',data:'a==='}),/base64/);
+});
+
+test('saveExplorerFile enforces hashes, path bounds, symlinks, binary and size limits', { skip: noSymlinks }, t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.workspace, 'notes.txt'), 'first line\n');
+  fs.writeFileSync(path.join(f.workspace, 'empty.txt'), '');
+  fs.writeFileSync(path.join(f.workspace, 'binary.bin'), Buffer.from([0, 1, 2, 255]));
+  fs.writeFileSync(path.join(f.workspace, 'huge.txt'), 'a'.repeat(MAX_FILE_BYTES + 10));
+  fs.writeFileSync(path.join(f.workspace, 'medium.txt'), 'b'.repeat(70 * 1024));
+  fs.writeFileSync(path.join(f.root, 'outside.txt'), 'secret');
+  fs.symlinkSync(path.join(f.root, 'outside.txt'), path.join(f.workspace, 'link.txt'));
+  fs.mkdirSync(path.join(f.root, 'elsewhere'));
+  fs.writeFileSync(path.join(f.root, 'elsewhere', 'target.txt'), 'secret');
+  fs.symlinkSync(path.join(f.root, 'elsewhere'), path.join(f.workspace, 'joined'), 'junction');
+
+  const opened = readExplorerFile(f.folder, 'notes.txt');
+  assert.equal(opened.editable, true);
+  assert.match(opened.sha256, /^[a-f0-9]{64}$/);
+  // Empty and medium (64 KB–256 KB) text files can be opened and edited.
+  const empty = readExplorerFile(f.folder, 'empty.txt');
+  assert.equal(empty.text, '');
+  assert.equal(empty.editable, true);
+  assert.equal(readExplorerFile(f.folder, 'medium.txt').editable, true);
+
+  // Matching expectedHash saves cleanly and returns the new hash.
+  const saved = saveExplorerFile(f.folder, 'notes.txt', 'second line\n', { expectedHash: opened.sha256 });
+  assert.equal(fs.readFileSync(path.join(f.workspace, 'notes.txt'), 'utf8'), 'second line\n');
+  assert.notEqual(saved.sha256, opened.sha256);
+
+  // Stale expectedHash is refused with 409 and returns the current disk contents.
+  assert.throws(
+    () => saveExplorerFile(f.folder, 'notes.txt', 'conflict\n', { expectedHash: opened.sha256 }),
+    error => error.status === 409 && error.details?.code === 'FILE_CHANGED' && error.details.current.text === 'second line\n' && error.details.current.sha256 === saved.sha256
+  );
+  assert.equal(fs.readFileSync(path.join(f.workspace, 'notes.txt'), 'utf8'), 'second line\n');
+
+  // Force saves over a stale file when explicitly chosen.
+  const forced = saveExplorerFile(f.folder, 'notes.txt', 'forced\n', { expectedHash: opened.sha256, force: true });
+  assert.equal(fs.readFileSync(path.join(f.workspace, 'notes.txt'), 'utf8'), 'forced\n');
+
+  // Deleted file triggers 409 FILE_CHANGED (deleted: true), and force recreates it.
+  fs.unlinkSync(path.join(f.workspace, 'notes.txt'));
+  assert.throws(
+    () => saveExplorerFile(f.folder, 'notes.txt', 'restored\n', { expectedHash: forced.sha256 }),
+    error => error.status === 409 && error.details?.code === 'FILE_CHANGED' && error.details.current.deleted === true
+  );
+  saveExplorerFile(f.folder, 'notes.txt', 'restored\n', { force: true });
+  assert.equal(fs.readFileSync(path.join(f.workspace, 'notes.txt'), 'utf8'), 'restored\n');
+
+  // Paths outside the folder, private paths, symlinks and junctions are refused.
+  for (const bad of ['../outside.txt', '/etc/passwd', '.env', '.git/config', 'node_modules/a.js', 'link.txt', 'joined/target.txt']) {
+    assert.throws(() => saveExplorerFile(f.folder, bad, 'nope', { force: true }));
+  }
+  assert.equal(fs.readFileSync(path.join(f.root, 'outside.txt'), 'utf8'), 'secret');
+
+  // Binary files, NUL bytes, non-text extensions and oversized files are refused.
+  assert.throws(() => saveExplorerFile(f.folder, 'binary.bin', 'text', { force: true }), /Binary|UTF-8/);
+  assert.throws(() => saveExplorerFile(f.folder, 'notes.txt', 'a\u0000b', { force: true }), /Binary/);
+  assert.throws(() => saveExplorerFile(f.folder, 'photo.png', 'text', { force: true }), /plain text/);
+  assert.throws(() => saveExplorerFile(f.folder, 'notes.txt', 'x'.repeat(MAX_FILE_BYTES + 1), { force: true }), error => error.status === 413);
+  assert.throws(() => saveExplorerFile(f.folder, 'huge.txt', 'small', { force: true }), error => error.status === 413);
+});
+
+test('POST /api/files/save enforces origin, token, stale hash, active-run warning and allows Read-only workspace edits', async t => {
+  const f = fixture(t);
+  const app = createRelayServer({ workspace: f.workspace, dataRoot: path.join(f.root, 'server'), accessToken: 'local-test', bins: { codex: process.execPath, claude: process.execPath } });
+  app.server.listen(0, '127.0.0.1');
+  await once(app.server, 'listening');
+  const base = 'http://127.0.0.1:' + app.server.address().port;
+  const project = app.registry.list()[0], folder = project.folders[0];
+  const auth = { 'X-AI-Relay-Token': 'local-test', 'X-AI-Relay': '1', 'Content-Type': 'application/json' };
+  fs.writeFileSync(path.join(f.workspace, 'app.js'), 'const a = 1;\n');
+
+  const preview = await (await fetch(`${base}/api/files/preview?projectId=${project.id}&folderId=${folder.id}&path=app.js`, { headers: { 'X-AI-Relay-Token': 'local-test' } })).json();
+  assert.equal(preview.editable, true);
+  assert.match(preview.sha256, /^[a-f0-9]{64}$/);
+
+  const saveUrl = `${base}/api/files/save?projectId=${project.id}`;
+  // Missing desktop token -> 403.
+  assert.equal((await fetch(saveUrl, { method: 'POST', headers: { 'X-AI-Relay': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ folderId: folder.id, path: 'app.js', content: 'x', expectedHash: preview.sha256 }) })).status, 403);
+  // Cross-origin request -> 403.
+  assert.equal((await fetch(saveUrl, { method: 'POST', headers: { ...auth, Origin: 'http://evil.example' }, body: JSON.stringify({ folderId: folder.id, path: 'app.js', content: 'x', expectedHash: preview.sha256 }) })).status, 403);
+  // Missing X-AI-Relay header -> 403.
+  assert.equal((await fetch(saveUrl, { method: 'POST', headers: { 'X-AI-Relay-Token': 'local-test', 'Content-Type': 'application/json' }, body: JSON.stringify({ folderId: folder.id, path: 'app.js', content: 'x', expectedHash: preview.sha256 }) })).status, 403);
+  // GET -> 405.
+  assert.equal((await fetch(saveUrl, { headers: { 'X-AI-Relay-Token': 'local-test' } })).status, 405);
+
+  // Set workspace conversation to Read only: user edits are still allowed (Read only limits agents, not the person).
+  const broker = app.registry.broker(project.id), chat = broker.get(app.registry.mainConversationId(project.id));
+  chat.mode = 'read';
+  const ok = await fetch(saveUrl, { method: 'POST', headers: auth, body: JSON.stringify({ folderId: folder.id, path: 'app.js', content: 'const a = 2;\n', expectedHash: preview.sha256 }) });
+  assert.equal(ok.status, 200);
+  const saved = await ok.json();
+  assert.equal(fs.readFileSync(path.join(f.workspace, 'app.js'), 'utf8'), 'const a = 2;\n');
+  assert.equal(chat.messages.length, 0, 'User edits are not recorded as an agent run.');
+
+  // Stale hash returns 409 FILE_CHANGED.
+  const stale = await fetch(saveUrl, { method: 'POST', headers: auth, body: JSON.stringify({ folderId: folder.id, path: 'app.js', content: 'const a = 3;\n', expectedHash: preview.sha256 }) });
+  assert.equal(stale.status, 409);
+  const staleBody = await stale.json();
+  assert.equal(staleBody.details.code, 'FILE_CHANGED');
+  assert.equal(staleBody.details.current.text, 'const a = 2;\n');
+
+  // Active edit-mode agent run in the same folder triggers a 409 ACTIVE_RUN warning (with touched detection), and confirmActiveRun allows saving.
+  chat.messages.push({ id: 'm1', runId: 'run-live', role: 'activity', text: 'Editing app.js' });
+  broker.running = { id: 'run-live', c: chat, mode: 'edit', review: false, approvals: new Map() };
+  try {
+    const warned = await fetch(saveUrl, { method: 'POST', headers: auth, body: JSON.stringify({ folderId: folder.id, path: 'app.js', content: 'const a = 4;\n', expectedHash: saved.sha256 }) });
+    assert.equal(warned.status, 409);
+    const warnedBody = await warned.json();
+    assert.equal(warnedBody.details.code, 'ACTIVE_RUN');
+    assert.equal(warnedBody.details.activeRun.touched, true);
+    assert.equal(fs.readFileSync(path.join(f.workspace, 'app.js'), 'utf8'), 'const a = 2;\n');
+
+    const confirmed = await fetch(saveUrl, { method: 'POST', headers: auth, body: JSON.stringify({ folderId: folder.id, path: 'app.js', content: 'const a = 4;\n', expectedHash: saved.sha256, confirmActiveRun: true }) });
+    assert.equal(confirmed.status, 200);
+    assert.equal(fs.readFileSync(path.join(f.workspace, 'app.js'), 'utf8'), 'const a = 4;\n');
+  } finally {
+    broker.running = null;
+    await app.close();
+  }
 });

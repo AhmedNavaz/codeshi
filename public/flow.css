@@ -1,6 +1,6 @@
-/* Flow mode (#107): just the chat in the middle, with plain-language cards in the space either side. It has its own
-   look: the seal and the word Flow in the header, cards without frames, a larger message box and type, and controls
-   at the foot of both rails. Details open in a focused Flow sheet; the workbench chrome steps aside. */
+/* Flow mode (#107, #194): the chat in the middle, with a few panels either side that each name themselves and show
+   what they hold. It has its own look: the seal and the word Flow in the header, soft panels, a larger message box and
+   type, and controls at the foot of both rails. Larger things open in a focused Flow sheet; the workbench chrome steps aside. */
 
 /* The view switch at the right of the header: Normal, Flow and the Plan (#162), drawn like the Plan's own switch
    between Columns, Canvas and Outline. The view in use is filled. */
@@ -15,8 +15,10 @@
 .flow-entry-mark { stroke: currentColor; }
 @media (prefers-reduced-motion: reduce) { .view-switch-option { transition: none; } }
 
-/* The shell: a header across the whole window, then three columns with no sidebar and no docked panels. */
-#app-shell.flow, #app-shell.flow:has(.side-panel:not([hidden])), #app-shell.flow:has(#review-panel:not([hidden])) { grid-template-columns: minmax(330px, 430px) minmax(0, 1fr) minmax(330px, 430px); --content-width: 780px; }
+/* The shell: a header across the whole window, then the chat between two rails of equal width, with no sidebar and no
+   docked panels. The rails grow with the window so the chat column stays filled rather than leaving empty margins. */
+#app-shell.flow, #app-shell.flow:has(.side-panel:not([hidden])), #app-shell.flow:has(#review-panel:not([hidden])) { --flow-rail: clamp(296px, 23vw, 432px); grid-template-columns: var(--flow-rail) minmax(0, 1fr) var(--flow-rail); --content-width: 780px; }
+@media (min-width: 1760px) { #app-shell.flow { --content-width: 860px; } }
 /* The Lounge: its stage takes the wide left of the window and the chat moves to the right, where the right rail sits.
    The middle column collapses to nothing so the rails can still slide out of their own columns as it opens.
    The chat column is just wide enough for the message box to keep its controls on one row. */
@@ -28,13 +30,17 @@
 #app-shell.flow.flow-lounge .composer-region, #app-shell.flow.flow-lounge .messages { width: calc(100% - 16px); }
 :is(#app-shell.flow, #app-shell.plan) > .sidebar { display: none; }
 #app-shell.flow > .main-panel { grid-column: 2; grid-row: 2; }
-#app-shell.flow { grid-template-rows: 56px minmax(0, 1fr); overflow-x: hidden; }
+/* Nothing scrolls the window itself: the rails rise into place as Flow opens and slide aside for the Lounge, and a
+   window that could scroll would show its scroll bar for as long as either took. */
+#app-shell.flow { grid-template-rows: 56px minmax(0, 1fr); overflow: hidden; }
 #app-shell.flow > .status-bar { display: none; }
 :is(#app-shell.flow, #app-shell.plan) .side-panel, :is(#app-shell.flow, #app-shell.plan) .review-panel { display: none; }
-/* The What's next card carries the plan, so the line above the message box steps aside. */
+/* Activity carries the plan, so the line above the message box steps aside. */
 #app-shell.flow #run-plan { display: none; }
 /* Flow split-into-parts UI shows only inside Flow. */
 #app-shell:not(.flow) :is(#split-progress, #split-offer) { display: none !important; }
+/* Between the rails the chat uses its whole column. */
+@media (min-width: 1181px) { #app-shell.flow:not(.flow-lounge) :is(.messages, .composer-region) { width: min(var(--content-width), calc(100% - 32px)); } }
 
 /* The header spans the window: the seal and the word Flow beside the window controls, search in the middle of the
    window, and the way out at its far right. The two outer columns match, so the search stays centred. */
@@ -69,7 +75,7 @@
 
 /* The chat: a little larger and calmer, with a message box that asks what to build. */
 #app-shell.flow .message-text { font-size: 15px; line-height: 1.7; }
-#app-shell.flow .composer { border-radius: 18px; border-color: var(--border-strong); box-shadow: var(--shadow-lg); }
+#app-shell.flow .composer { border-radius: 18px; border-color: var(--border-strong); box-shadow: var(--shadow-sm), 0 12px 24px -16px var(--backdrop); }
 #app-shell.flow .composer textarea { min-height: 46px; padding: 16px 44px 6px 18px; font-size: 15px; }
 #app-shell.flow .composer textarea::placeholder { color: var(--muted); }
 #app-shell.flow .composer-toolbar { padding: 4px 10px 10px; }
@@ -77,25 +83,46 @@
 #app-shell.flow .empty-state p { max-width: 440px; font-size: 14px; }
 #app-shell.flow .capabilities { display: none; }
 
-/* Live status and useful controls belong to the working card, with no footer or reserved footer row. */
-.flow-status { display: none; align-items: center; gap: 7px; min-width: 0; min-height: 20px; padding: 0; color: var(--muted); font-size: 11px; }
-#app-shell.flow .flow-status:not([hidden]) { display: inline-flex; }
-.flow-status > i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
-.flow-status[data-live="true"] { color: var(--text-strong); font-weight: 500; }
-.flow-status[data-live="true"] > i { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.4s ease-in-out infinite; }
-.flow-status[data-attention="true"] > i { background: var(--warning); animation: none; }
-.flow-status[data-attention="true"] { color: var(--text); }
-.flow-status > span { overflow-wrap: anywhere; }
-/* Preferences and connection controls live at the foot of opposite rails, away from the task cards. */
-.flow-utility { flex: none; display: grid; gap: 12px; margin-top: auto; padding: 24px 8px 0; border-top: 1px solid var(--border); color: var(--text); }
-.flow-utility h2 { margin: 0; color: var(--text-strong); font-size: 12px; font-weight: 600; }
-.flow-utility-hint { margin: -6px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+/* The status line says in one sentence what Activity shows, so in Flow it is kept for screen readers alone: it tells
+   them when the state changes, wherever the panels are. */
+.flow-status { display: none; }
+#app-shell.flow .flow-status:not([hidden]) { position: absolute; display: block; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* The rails. Only the panels scroll; the utility section and the rule above it stay at the foot of each rail. The
+   rails never act as drag regions. */
+.flow-side { position: relative; grid-row: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 0 0 16px; overflow: hidden; }
+.flow-side[hidden] { display: none; }
+.flow-side-cards { flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px; min-height: 0; padding: 4px 8px 14px 16px; overflow: hidden auto; scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.flow-side-cards:hover { scrollbar-color: var(--border-strong) transparent; }
+.flow-right > .flow-side-cards { padding: 4px 16px 14px 8px; }
+.flow-side-cards > .flow-card { flex: none; }
+.flow-side > .flow-utility { margin: 0 8px 0 16px; }
+.flow-right > .flow-utility { margin: 0 16px 0 8px; }
+/* A very short window has no room for both, so the whole rail scrolls as one. */
+@media (max-height: 620px) {
+  .flow-side { overflow: auto; }
+  .flow-side-cards { flex: none; overflow: visible; }
+}
+#app-shell.flow .flow-side { animation: flow-in .5s cubic-bezier(.2, .8, .2, 1) both; }
+.flow-left { grid-column: 1; }
+.flow-right { grid-column: 3; animation-delay: .06s; }
+/* Full-height drag regions intercept native window controls and dialog clicks in Electron. Only the header drags. */
+.mac-titlebar #app-shell.flow .flow-side, .mac-titlebar #app-shell.flow .composer-region, .flow-peek, .flow-detail { -webkit-app-region: no-drag; }
+.mac-titlebar :is(#app-shell.flow, #app-shell.plan) :is(button, a, input, textarea, select, summary) { -webkit-app-region: no-drag; }
+
+/* Preferences and connection controls sit at the foot of opposite rails, quieter than the panels above them. */
+.flow-utility { flex: none; display: grid; gap: 6px; margin-top: auto; padding: 12px 4px 0; border-top: 1px solid var(--border); color: var(--text); }
+.flow-utility h2 { align-self: center; margin: 0; color: var(--muted); font-size: 11.5px; font-weight: 600; }
+/* Your space: its name shares a row with Settings, and the two preferences follow. */
+.flow-space { grid-template-columns: minmax(0, 1fr) auto; }
+.flow-space > * { grid-column: 1 / -1; }
+.flow-space > h2 { grid-column: 1; grid-row: 1; }
 /* A preference row: the name on the left, a compact icon switch on the right. */
-.flow-pref { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 30px; }
+.flow-pref { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; }
 .flow-pref[hidden] { display: none; }
-.flow-utility-label { color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.flow-utility-label { color: var(--text); font-size: 12px; }
 .flow-utility .appearance-options, .flow-weather-options { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); }
-.flow-utility .appearance-options button, .flow-weather-option { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
+.flow-utility .appearance-options button, .flow-weather-option { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
 .flow-utility .appearance-options button .icon, .flow-weather-option .flow-lounge-glyph { width: 14px; height: 14px; }
 .flow-utility .appearance-options button:hover, .flow-weather-option:hover { color: var(--text-strong); }
 .flow-utility .appearance-options button[aria-pressed="true"], .flow-weather-option[aria-pressed="true"] { background: var(--bg); color: var(--text-strong); box-shadow: var(--shadow-sm); }
@@ -108,398 +135,238 @@
 .flow-weather-volume.muted .flow-lounge-weather-speaker { opacity: .45; }
 /* Remote access, Share live and Keep awake: one row of equal tiles, the icon over a short name. */
 .flow-connect-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; }
-.flow-utility .flow-connect-row .status-button { flex-direction: column; justify-content: center; gap: 5px; min-height: 52px; padding: 7px 4px; border: 1px solid var(--border-strong); background: var(--surface-raised); color: var(--text); text-align: center; font-size: 11px; line-height: 1.2; }
+.flow-utility .flow-connect-row .status-button { flex-direction: column; justify-content: center; gap: 4px; min-height: 48px; padding: 6px 4px; border: 1px solid var(--border); background: transparent; color: var(--text); text-align: center; font-size: 11px; line-height: 1.2; }
 .flow-utility .flow-connect-row .status-button > span:not(.phone-pending-count) { max-width: 100%; overflow-wrap: anywhere; text-wrap: balance; }
 .flow-utility .flow-connect-row .status-button { position: relative; }
 .flow-utility .flow-connect-row .phone-pending-count { position: absolute; top: 4px; right: 4px; }
 .flow-utility .flow-connect-row .keep-awake[aria-pressed="true"] { color: var(--success); }
-.flow-utility .status-button { justify-content: flex-start; gap: 9px; width: 100%; min-height: 36px; height: auto; padding: 8px 10px; border-radius: 10px; color: var(--muted); text-align: left; font-size: 12px; }
-.flow-utility .status-button .icon { width: 15px; height: 15px; flex: none; }
-.flow-utility .status-button:hover { background: var(--surface-raised); color: var(--text-strong); }
-.flow-utility #relay-settings::after { content: "↗"; margin-left: auto; color: var(--faint); }
+.flow-utility .status-button { justify-content: flex-start; gap: 9px; width: 100%; min-height: 30px; height: auto; padding: 5px 8px; border-radius: 8px; color: var(--text); text-align: left; font-size: 12px; }
+.flow-utility .status-button .icon { width: 14px; height: 14px; flex: none; color: var(--muted); }
+.flow-utility .status-button:hover { background: var(--hover); color: var(--text-strong); }
+.flow-space > #relay-settings { grid-column: 2; grid-row: 1; gap: 6px; width: auto; min-height: 26px; margin-right: -6px; padding: 3px 8px; color: var(--muted); }
 /* The update button and its chevron share one row: the action fills it and the chevron for release notes and Skip
    sits at its end. They keep the accent fill and its text colour here, also on hover. */
 .flow-connect { grid-template-columns: minmax(0, 1fr) auto; column-gap: 1px; }
 .flow-connect > * { grid-column: 1 / -1; }
-.flow-connect > .update-status:has(+ .update-more:not([hidden])) { grid-column: 1; border-radius: 10px 0 0 10px; }
-.flow-connect > .update-more { grid-column: 2; justify-content: center; width: 36px; margin-left: 0; padding: 0; border-radius: 0 10px 10px 0; }
+.flow-connect > .update-status:has(+ .update-more:not([hidden])) { grid-column: 1; border-radius: 8px 0 0 8px; }
+.flow-connect > .update-more { grid-column: 2; justify-content: center; width: 36px; margin-left: 0; padding: 0; border-radius: 0 8px 8px 0; }
 .flow-connect > .update-status:is([data-status="available"], [data-status="ready"]), .flow-connect > .update-more { color: var(--on-accent); }
 .flow-connect > .update-status:is([data-status="available"], [data-status="ready"]):hover, .flow-connect > .update-more:hover, .flow-connect > .update-more[aria-expanded="true"] { color: var(--on-accent); background: var(--accent-strong); }
-.flow-preferences { display: grid; gap: 28px; }
-.flow-preferences .flow-utility { margin-top: 0; padding-top: 16px; }
+.flow-preferences { display: grid; gap: 20px; }
+.flow-preferences .flow-utility { margin-top: 0; padding-top: 14px; }
 
-/* The sides: cards without frames, each with a seal-red tick, in the row under the header. The rails never act as drag regions. */
-.flow-side { grid-row: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 0 0 24px; overflow: hidden; }
-.flow-side[hidden] { display: none; }
-/* Only the cards scroll. The utility section and the divider above it stay fixed at the foot of the rail. */
-.flow-side-cards { flex: 1 1 auto; display: flex; flex-direction: column; gap: 12px; min-height: 0; padding: 0 16px 16px; overflow: auto; }
-.flow-side-cards > .flow-card { flex: none; }
-.flow-side > .flow-utility { margin: 0 16px; }
-/* A very short window has no room for both, so the whole rail scrolls as one. */
-@media (max-height: 620px) {
-  .flow-side { overflow: auto; }
-  .flow-side-cards { flex: none; overflow: visible; }
-}
-#app-shell.flow .flow-side { animation: flow-in .5s cubic-bezier(.2, .8, .2, 1) both; }
-.flow-left { grid-column: 1; }
-.flow-right { grid-column: 3; animation-delay: .06s; }
-/* Full-height drag regions intercept native window controls and dialog clicks in Electron. Only the header drags. */
-.mac-titlebar #app-shell.flow .flow-side, .mac-titlebar #app-shell.flow .composer-region, .flow-peek, .flow-detail { -webkit-app-region: no-drag; }
-.mac-titlebar :is(#app-shell.flow, #app-shell.plan) :is(button, a, input, textarea, select, summary) { -webkit-app-region: no-drag; }
-.flow-card { display: grid; gap: 9px; padding: 13px 16px 15px; border-radius: 14px; background: color-mix(in srgb, var(--surface-raised) 86%, transparent); box-shadow: var(--shadow-sm); color: var(--text); font-size: 12.5px; line-height: 1.55; }
-.flow-card-head { display: flex; align-items: center; gap: 9px; min-height: 22px; }
-.flow-card-head::before { content: ""; flex: none; width: 3px; height: 14px; border-radius: 2px; background: var(--accent); }
-.flow-card-head h2 { flex: 1; min-width: 0; margin: 0; color: var(--text-strong); font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; }
+/* A panel: a head that names it, with how many it holds and a word for where it stands; its rows; its actions. One
+   that's live takes the accent in its head, and one that needs you takes amber and an amber edge. */
+.flow-card { color: var(--text); font-size: 12.5px; line-height: 1.5; }
+.flow-panel { container: flow-panel / inline-size; min-width: 0; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--surface-raised) 78%, transparent); transition: border-color .2s; }
+.flow-panel[hidden] { display: none; }
+.flow-panel[data-state="attention"] { border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); }
+.flow-panel-head { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 5px 6px 5px 12px; }
+.flow-panel-icon { flex: none; width: 14px; height: 14px; background: var(--muted); -webkit-mask: var(--panel-icon) center / contain no-repeat; mask: var(--panel-icon) center / contain no-repeat; }
+.flow-panel[data-card="activity"] { --panel-icon: var(--icon-activity); }
+.flow-panel[data-card="tasks"] { --panel-icon: var(--icon-tasks); }
+.flow-panel[data-card="usage"] { --panel-icon: var(--icon-effort); }
+.flow-panel[data-card="changes"] { --panel-icon: var(--icon-changes); }
+.flow-panel[data-card="app"] { --panel-icon: var(--icon-window); }
+.flow-panel[data-state="live"] .flow-panel-icon { background: var(--link); }
+.flow-panel[data-state="attention"] .flow-panel-icon { background: var(--warning); }
+.flow-panel-title { display: inline-flex; align-items: center; gap: 7px; flex: none; margin: 0; color: var(--text-strong); font-size: 12.5px; font-weight: 600; letter-spacing: -.005em; white-space: nowrap; }
+.flow-panel-count { flex: none; min-width: 18px; height: 18px; padding: 0 6px; border-radius: 9px; background: var(--chip-bg); color: var(--muted); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.flow-panel-count[hidden] { display: none; }
+.flow-panel-state { display: inline-flex; justify-content: flex-end; gap: 6px; flex: 1 1 auto; min-width: 0; padding-right: 6px; overflow: hidden; color: var(--muted); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.flow-panel-state :is(.diff-added, .diff-removed) { font-size: 11px; }
+.flow-panel[data-state="live"] .flow-panel-state { color: var(--link); font-weight: 500; }
+.flow-panel[data-state="attention"] .flow-panel-state, .flow-panel[data-level="low"] .flow-panel-state { color: var(--warning); font-weight: 600; }
+.flow-panel[data-level="critical"] .flow-panel-state { color: var(--danger); font-weight: 600; }
+.flow-panel-tools { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.flow-panel-tools:empty { display: none; }
+.flow-panel-body { display: grid; gap: 8px; min-width: 0; padding: 0 6px 8px; }
+.flow-panel-body:empty, .flow-panel-body:not(:has(> :not([hidden]))) { display: none; }
+.flow-panel-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; padding: 8px; border-top: 1px solid color-mix(in srgb, var(--border) 75%, transparent); }
+.flow-panel-foot > .flow-fold { margin: -3px -2px; }
+.flow-panel-foot:empty { display: none; }
+.flow-empty { margin: 0; padding: 0 6px; color: var(--muted); font-size: 12px; }
+.flow-subhead { margin: 0; padding: 6px 8px 2px; color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+/* What the Lounge's own cards share with these. */
 .flow-card-body { display: grid; gap: 8px; min-width: 0; }
 .flow-card-body:empty { display: none; }
-.flow-lead { margin: 0; color: var(--text); }
-.flow-empty { margin: 0; color: var(--muted); }
-.results-facts { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.flow-card .results-verdict { margin: 0; color: var(--text); font-size: 12.5px; line-height: 1.45; }
-.flow-card .results-verdict.good { color: var(--success); }
-.flow-card .results-verdict.warn { color: var(--warning); }
-.flow-card-foot { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.flow-card-foot { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
 .flow-card-foot:empty { display: none; }
 
-/* The mode leads the working card: the one choice Flow makes on your behalf, with what it does in a sentence. */
-.flow-mode { position: relative; display: grid; gap: 8px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-raised); box-shadow: var(--shadow-sm); transition: border-color .18s, background .18s; }
-.flow-mode-header { display: flex; align-items: center; gap: 10px; }
-.flow-mode-badge { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; border-radius: 9px; background: var(--chip-bg); color: var(--muted); border: 1px solid var(--border-strong); transition: all .18s ease; }
-.flow-mode-icon { width: 16px; height: 16px; background: currentColor; -webkit-mask: var(--mode-icon, var(--icon-auto)) center / contain no-repeat; mask: var(--mode-icon, var(--icon-auto)) center / contain no-repeat; }
-.flow-mode-titles { display: grid; gap: 1px; min-width: 0; }
-.flow-mode-eyebrow { color: var(--mode-eyebrow, var(--muted)); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; transition: color .18s; }
-.flow-mode-name { color: var(--text-strong); font-size: 16px; font-weight: 600; letter-spacing: -.01em; line-height: 1.25; }
-.flow-mode-tag { margin-left: auto; align-self: flex-start; font-size: 11px; font-weight: 600; letter-spacing: .02em; padding: 2px 8px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap; }
-.flow-mode-tag:empty { display: none; }
-.flow-mode-text { margin: 0; color: var(--text); font-size: 12px; line-height: 1.5; }
+/* What a panel offers: soft buttons at its foot, one filled with the accent when it's the thing to do; a labelled button or an
+   icon in its head; a small button at the end of a row. */
+.flow-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: var(--chip-bg); color: var(--text-strong); font: inherit; font-size: 12px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color .12s; }
+.flow-action:hover:enabled { background: var(--surface-strong); }
+.flow-action:disabled { opacity: .45; cursor: default; }
+.flow-action-primary { padding: 0 12px; background: var(--accent); color: var(--on-accent); }
+.flow-action-primary:hover:enabled { background: var(--accent-strong); color: var(--on-accent); }
+:is(.flow-action, .flow-row-action, .flow-now-action, .flow-fold, .flow-usage-row):focus-visible { outline: 2px solid var(--focus); outline-offset: -1px; }
+.flow-action-primary:focus-visible { outline-offset: 2px; }
+.flow-action-icon { flex: none; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--action-icon) center / contain no-repeat; mask: var(--action-icon) center / contain no-repeat; }
+/* The experimental badge can sit below its title on a narrow rail. */
+@container flow-panel (max-width: 300px) {
+  .flow-panel-title:has(.experimental-badge) { display: grid; gap: 0; line-height: 1.3; }
+  .flow-panel-title .experimental-badge { margin-left: 0; font-size: 9px; }
+}
+.flow-tool { width: 26px; height: 26px; border-radius: 7px; }
+.flow-tool::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--tool-icon) center / contain no-repeat; mask: var(--tool-icon) center / contain no-repeat; }
+.flow-tool[data-icon="history"] { --tool-icon: var(--icon-history); }
+.flow-tool[data-icon="sliders"] { --tool-icon: var(--icon-sliders); }
+.flow-tool[data-icon="close"] { --tool-icon: var(--icon-close); }
+.flow-tool[data-icon="close"]::before { width: 11px; height: 11px; }
+.flow-tool:focus-visible { outline: 2px solid var(--focus); outline-offset: -1px; }
+.flow-row-action { flex: none; height: 24px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg); color: var(--text-strong); font: inherit; font-size: 11.5px; font-weight: 500; white-space: nowrap; cursor: pointer; }
+.flow-row-action:hover:enabled { border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong)); }
+.flow-row-action:disabled { opacity: .45; cursor: default; }
+/* A fold: a quiet line that opens more of the same below or beside it. */
+.flow-fold { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px 0 6px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; }
+.flow-fold::before { content: ""; flex: none; width: 10px; height: 10px; background: currentColor; -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; mask: var(--icon-chevron-right) center / contain no-repeat; transition: transform .12s; }
+.flow-fold[aria-expanded="true"]::before { transform: rotate(90deg); }
+.flow-fold:hover { background: var(--hover); color: var(--text-strong); }
 
-/* Distinct visual identity for each routing mode */
-.flow-mode[data-mode="saver"] {
-  --mode-icon: var(--icon-saver);
-  --mode-eyebrow: var(--success);
-  border-color: color-mix(in srgb, var(--success) 32%, var(--border));
-  background: color-mix(in srgb, var(--success) 5%, var(--surface-raised));
-}
-.flow-mode[data-mode="saver"] .flow-mode-badge {
-  background: color-mix(in srgb, var(--success) 14%, var(--surface-raised));
-  border-color: color-mix(in srgb, var(--success) 28%, transparent);
-  color: var(--success);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--success) 15%, transparent);
-}
-.flow-mode[data-mode="saver"] .flow-mode-tag {
-  display: inline-block;
-  background: color-mix(in srgb, var(--success) 12%, transparent);
-  border-color: color-mix(in srgb, var(--success) 24%, transparent);
-  color: var(--success);
-}
-.flow-mode[data-mode="saver"] .flow-mode-tag::after { content: "80% limit"; }
+/* Activity. The lead says who is working, on what and for how long; the plan's steps follow it. */
+.flow-now { display: grid; gap: 3px; min-width: 0; padding: 9px 10px 10px; border-radius: 9px; background: var(--chip-bg); }
+.flow-now[data-tone="attention"] { background: color-mix(in srgb, var(--warning) 14%, transparent); }
+.flow-now[data-tone="idle"] { padding: 0 6px 2px; background: transparent; }
+.flow-now-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.flow-now-line > .agent-icon { flex: none; width: 13px; height: 13px; color: var(--text-strong); }
+.flow-now-line > .agent-icon.claude { color: var(--claude); }
+.flow-now-line > .agent-icon.codex { color: var(--codex); }
+.flow-now-line > .agent-icon.gemini { color: var(--gemini); }
+.flow-now-mark { flex: none; width: 13px; height: 13px; background: var(--muted); -webkit-mask: var(--icon-tasks) center / contain no-repeat; mask: var(--icon-tasks) center / contain no-repeat; }
+.flow-now[data-tone="live"] .flow-now-mark { background: var(--link); -webkit-mask-image: var(--icon-working); mask-image: var(--icon-working); animation: task-spin .9s linear infinite; }
+.flow-now-who { display: inline-flex; align-items: baseline; gap: 6px; flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
+.flow-now-who strong { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--text-strong); font-size: 13px; font-weight: 600; text-overflow: ellipsis; }
+.flow-now-model { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--muted); font-size: 11.5px; text-overflow: ellipsis; }
+.flow-now-time { flex: none; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.flow-now-sub { display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 20px; color: var(--text); font-size: 12px; }
+.flow-now-detail { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-now[data-tone="live"] .flow-now-detail { color: var(--link); font-weight: 500; }
+.flow-now[data-tone="attention"] .flow-now-detail { color: var(--text-strong); font-weight: 500; }
+.flow-now[data-tone="idle"] .flow-now-detail { color: var(--muted); }
+.flow-now-count { flex: none; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.flow-now-action { flex: none; height: 24px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg); color: var(--text-strong); font: inherit; font-size: 11.5px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.flow-now-action:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong)); }
+:is(.flow-now[data-tone="attention"], .flow-notice) .flow-now-action { border-color: transparent; background: var(--accent); color: var(--on-accent); }
+:is(.flow-now[data-tone="attention"], .flow-notice) .flow-now-action:hover { background: var(--accent-strong); }
+.flow-progress { position: relative; height: 3px; margin: 5px 0 0 20px; overflow: hidden; border-radius: 2px; background: color-mix(in srgb, var(--text) 14%, transparent); }
+.flow-progress::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--done, 0%); border-radius: 2px; background: var(--accent); transition: width .4s ease; }
+.flow-notice { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 10px; border-radius: 9px; background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--text); font-size: 12px; line-height: 1.45; }
+.flow-notice-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.flow-steps { display: grid; gap: 0; margin: 0; padding: 0 2px; list-style: none; }
+.flow-step { display: flex; align-items: flex-start; gap: 8px; padding: 3px 4px; color: var(--text); font-size: 12px; line-height: 1.45; }
+.flow-step-text { min-width: 0; overflow-wrap: anywhere; }
+.flow-step-mark { flex: none; box-sizing: border-box; width: 12px; height: 12px; margin: 3px 1px 0; border: 1.5px solid var(--border-strong); border-radius: 50%; }
+.flow-step.done { color: var(--muted); }
+.flow-step.done .flow-step-mark { width: 14px; height: 14px; margin: 2px 0 0; border: 0; border-radius: 0; background: var(--success); -webkit-mask: var(--icon-check) center / contain no-repeat; mask: var(--icon-check) center / contain no-repeat; }
+/* The step being worked on stays an ordinary row in the list: its mark turns and its text gets stronger. */
+.flow-step.active { color: var(--text-strong); font-weight: 600; }
+.flow-step.active .flow-step-mark { width: 14px; height: 14px; margin: 2px 0 0; border: 0; border-radius: 0; background: var(--link); -webkit-mask: var(--icon-working) center / contain no-repeat; mask: var(--icon-working) center / contain no-repeat; animation: task-spin .9s linear infinite; }
+.flow-step.active[data-held="true"] { color: var(--text); font-weight: 500; }
+.flow-step-more { color: var(--faint); font-size: 11.5px; }
+.flow-step-more.pending .flow-step-mark { border-style: dashed; }
+.flow-step.active[data-held="true"] .flow-step-mark { width: 12px; height: 12px; margin: 3px 1px 0; border: 1.5px solid var(--warning); border-radius: 50%; background: transparent; -webkit-mask: none; mask: none; animation: none; }
+.flow-queued { margin: 0; padding: 0 6px; color: var(--faint); font-size: 11.5px; }
+/* Why this agent, as recorded when it was chosen. */
+.flow-why { display: grid; gap: 2px; min-width: 0; padding: 8px 6px 0; border-top: 1px solid color-mix(in srgb, var(--border) 75%, transparent); }
+.flow-why-title { display: flex; align-items: center; gap: 7px; color: var(--text); font-size: 12px; font-weight: 500; }
+.flow-why-icon { flex: none; width: 12px; height: 12px; background: var(--link); -webkit-mask: var(--icon-auto) center / contain no-repeat; mask: var(--icon-auto) center / contain no-repeat; }
+.flow-why[data-kind="handoff"] .flow-why-icon { -webkit-mask-image: var(--icon-steer); mask-image: var(--icon-steer); }
+.flow-why:is([data-kind="retry"], [data-kind="refresh"]) .flow-why-icon { -webkit-mask-image: var(--icon-refresh); mask-image: var(--icon-refresh); }
+.flow-why:is([data-kind="review"]) .flow-why-icon { -webkit-mask-image: var(--icon-approval); mask-image: var(--icon-approval); }
+.flow-why-reason { display: -webkit-box; overflow: hidden; padding-left: 19px; color: var(--muted); font-size: 11.5px; line-height: 1.45; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 
-.flow-mode[data-mode="smart"] {
-  --mode-icon: var(--icon-auto);
-  --mode-eyebrow: var(--gemini);
-  border-color: color-mix(in srgb, var(--gemini) 32%, var(--border));
-  background: color-mix(in srgb, var(--gemini) 5%, var(--surface-raised));
-}
-.flow-mode[data-mode="smart"] .flow-mode-badge {
-  background: color-mix(in srgb, var(--gemini) 14%, var(--surface-raised));
-  border-color: color-mix(in srgb, var(--gemini) 28%, transparent);
-  color: var(--gemini);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--gemini) 15%, transparent);
-}
-.flow-mode[data-mode="smart"] .flow-mode-tag {
-  display: inline-block;
-  background: color-mix(in srgb, var(--gemini) 12%, transparent);
-  border-color: color-mix(in srgb, var(--gemini) 24%, transparent);
-  color: var(--gemini);
-}
-.flow-mode[data-mode="smart"] .flow-mode-tag::after { content: "90% limit"; }
-
-.flow-mode[data-mode="ultra"] {
-  --mode-icon: var(--icon-ultra);
-  --mode-eyebrow: var(--link);
-  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
-  background: color-mix(in srgb, var(--accent) 6%, var(--surface-raised));
-}
-.flow-mode[data-mode="ultra"] .flow-mode-badge {
-  background: color-mix(in srgb, var(--accent) 15%, var(--surface-raised));
-  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
-  color: var(--link);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 20%, transparent);
-}
-.flow-mode[data-mode="ultra"] .flow-mode-tag {
-  display: inline-block;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
-  color: var(--link);
-}
-.flow-mode[data-mode="ultra"] .flow-mode-tag::after { content: "95% limit"; }
-
-.flow-mode[data-mode="pending"] {
-  --mode-icon: var(--icon-refresh);
-  --mode-eyebrow: var(--muted);
-}
-.flow-mode[data-mode="pending"] .flow-mode-icon { animation: spin .8s linear infinite; }
-
-.flow-mode[data-mode="off"] {
-  --mode-icon: var(--icon-minus-circle);
-  --mode-eyebrow: var(--faint);
-  opacity: .85;
-}
-
-.flow-working-lead {
-  display: grid;
-  gap: 5px;
-  padding: 9px 12px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
-}
-.flow-working-role {
-  display: inline-flex;
-  align-self: flex-start;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: .03em;
-  text-transform: uppercase;
-  color: var(--link);
-}
-.flow-working-desc {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: 12.5px;
-  line-height: 1.45;
-}
-.flow-working-lanes {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 2px;
-  font-size: 11.5px;
-  color: var(--link);
-}
-.flow-tasks { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
-/* Each conversation is one row. Where you are has the accent bar and "You’re here"; one that needs you has the amber
-   bar and badge; one that's working only has the dot in its status line. No row glows. */
-.flow-task { position: relative; display: grid; gap: 4px; min-width: 0; border-radius: 8px; }
-.flow-task::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 3px; border-radius: 2px; background: transparent; }
-.flow-task.flow-task-needs::before { background: var(--warning); }
-.flow-task.flow-task-selected::before { background: var(--accent); }
-.flow-task.flow-task-selected { background: var(--surface-raised); }
-.flow-task-row { display: flex; align-items: center; gap: 9px; width: 100%; min-width: 0; padding: 7px 10px 7px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; text-align: left; }
+/* Tasks: the sidebar's own rows (parallel-tasks.css), with what a row offers at its end. */
+.flow-tasks { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
+.flow-task { display: flex; flex-wrap: wrap; align-items: center; gap: 0 4px; min-width: 0; }
+.flow-task > .flow-task-row { flex: 1 1 0; min-width: 0; border-radius: 7px; font-size: 13px; }
+div.flow-task-row { cursor: default; }
 button.flow-task-row { cursor: pointer; }
-button.flow-task-row:hover { background: var(--hover); }
 button.flow-task-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-.flow-task-mark { flex: none; width: 14px; height: 14px; color: var(--muted); }
-.flow-task-mark.main { background: currentColor; -webkit-mask: var(--icon-agent) center / contain no-repeat; mask: var(--icon-agent) center / contain no-repeat; }
-.flow-task-selected .flow-task-mark.main { color: var(--text-strong); }
-/* The Plan's cards, as one row: three stacked cards. */
-.flow-task-mark.plan { background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='4' width='16' height='5' rx='1'/%3E%3Crect x='4' y='10' width='16' height='5' rx='1'/%3E%3Crect x='4' y='16' width='16' height='4' rx='1'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='4' width='16' height='5' rx='1'/%3E%3Crect x='4' y='10' width='16' height='5' rx='1'/%3E%3Crect x='4' y='16' width='16' height='4' rx='1'/%3E%3C/svg%3E") center / contain no-repeat; }
-.flow-task-text { display: grid; gap: 1px; flex: 1 1 auto; min-width: 0; }
-.flow-task-side { display: flex; align-items: center; gap: 6px; flex: none; }
-.flow-task-here { color: var(--accent); font-size: var(--font-ui-xs); font-weight: 600; white-space: nowrap; }
-.flow-task-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
-.flow-task-title { min-width: 0; overflow: hidden; color: var(--text-strong); font-size: 12.5px; font-weight: 600; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
-.flow-task:not(.flow-task-selected) .flow-task-title { font-weight: 500; color: var(--text); }
-.flow-task-action { align-self: flex-start; padding: 4px 10px; font-size: 12px; }
-.flow-task-badge { flex: none; padding: 1px 7px; border-radius: 9px; background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); font-size: var(--font-ui-xs); font-weight: 600; line-height: 16px; white-space: nowrap; }
-.flow-task-pill { flex: none; padding: 1px 7px; border-radius: 9px; background: var(--chip-bg); color: var(--link); font-size: var(--font-ui-xs); font-weight: 600; line-height: 16px; }
-.flow-task-meta { display: flex; align-items: center; gap: 0; min-width: 0; overflow: hidden; color: var(--faint); font-size: 11.5px; white-space: nowrap; }
-.flow-task-meta > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
-.flow-task-meta > .flow-task-folder { flex: 0 1 auto; }
-.flow-task-meta > .flow-task-status { flex: 0 1 auto; }
-.flow-task-note { margin: 0; padding: 0 10px 0 35px; color: var(--muted); font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
-.flow-task-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 0 10px 7px 35px; }
-/* A task being drafted keeps the older stacked layout. */
-.flow-task > .flow-task-head, .flow-task > .flow-task-meta { padding: 0 12px; }
-.flow-task > .flow-task-head { padding-top: 8px; }
-.flow-task > .flow-task-actions:first-child { padding-top: 7px; }
-.flow-task-folders { display: grid; gap: 6px; padding-top: 4px; }
-.flow-card-foot .flow-task-new::after { content: none; }
-.flow-task-status-running { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
-.flow-pulse-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 6px var(--accent);
-  animation: pulse 1.4s ease-in-out infinite;
-  flex: none;
-}
-.flow-facts { display: grid; gap: 8px; margin: 0; }
-.flow-facts > div { display: grid; gap: 1px; min-width: 0; }
-.flow-facts dt { color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
-.flow-facts dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.flow-task-note { flex-basis: 100%; margin: 0; padding: 0 8px 5px 30px; color: var(--muted); font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.flow-task-actions { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; padding: 0 8px 6px 30px; }
+.flow-row-remove { color: var(--faint); }
+.flow-pulse-dot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
 
-/* Soft, tactile actions echo the rounded cards and the seal accent. */
+/* Usage: one row for each connected agent, which opens all of its limits. */
+.flow-plans { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
+.flow-usage-row { display: grid; gap: 5px; width: 100%; min-width: 0; padding: 6px 8px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.flow-usage-row:hover { background: var(--hover); }
+.flow-plan-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.flow-plan-head strong { color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
+.flow-plan-head .agent-icon { flex: none; width: 13px; height: 13px; color: var(--muted); }
+.flow-plan-value { margin-left: auto; color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.flow-usage-row[data-level="low"] .flow-plan-value { color: var(--warning); font-weight: 600; }
+.flow-usage-row[data-level="critical"] .flow-plan-value { color: var(--danger); font-weight: 600; }
+.flow-plan-working-badge { display: inline-flex; align-items: center; }
+.flow-meter { position: relative; display: block; height: 4px; overflow: hidden; border-radius: 2px; background: color-mix(in srgb, var(--text) 12%, transparent); }
+.flow-meter::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--left, 0%); border-radius: 2px; background: var(--success); }
+.flow-usage-row[data-level="low"] .flow-meter::after { background: var(--warning); }
+.flow-usage-row[data-level="critical"] .flow-meter::after { background: var(--danger); }
+.flow-plan-foot { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; color: var(--faint); font-size: 11px; }
+.flow-plan-foot > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-plan-secondary { flex: none; }
+.flow-plan-secondary[data-level="low"] { color: var(--warning); }
+.flow-plan-secondary[data-level="critical"] { color: var(--danger); }
+.flow-usage-note { margin: 0; padding: 0 8px 2px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+
+/* Changes: the changed files (their rows are styles.css's .change-row), or each run's changes where there's no Git. */
+.flow-files { display: grid; gap: 1px; min-width: 0; }
+.flow-files > .flow-fold { justify-self: start; margin-top: 2px; }
+.flow-runs { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
+.flow-run { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 4px 4px 8px; }
+.flow-run-text { display: grid; gap: 0; flex: 1 1 auto; min-width: 0; }
+.flow-run-title { color: var(--text); }
+.flow-run-meta { color: var(--faint); font-size: 11px; }
+
+/* Your app: the launch map's services, drawn by project-review.js. */
+.flow-panel .project-review-services { gap: 1px; margin: 0; }
+.flow-panel .project-review-service { padding: 5px 8px; border-radius: 7px; background: transparent; font-size: 12.5px; }
+.flow-panel .project-review-service-tag { background: transparent; padding: 0; font-size: 11.5px; }
+.flow-panel .project-review-service[data-status="ready"] .project-review-service-tag, .flow-panel .project-review-service[data-status="adopted"] .project-review-service-tag { color: var(--success); }
+.flow-panel .project-review-service[data-status="failed"] .project-review-service-tag, .flow-panel .project-review-service[data-status="blocked"] .project-review-service-tag { color: var(--danger); }
+.flow-panel .project-review-service[data-status="starting"] .project-review-service-tag { color: var(--link); }
+.flow-panel .project-review-profile { margin: 0; padding: 0 8px; }
+.flow-panel :is(.project-review-error, .project-review-hint, .project-review-preparing) { margin: 0; padding: 0 8px; }
+.flow-panel .project-review-conflict { margin: 0 2px; }
+
+/* Soft buttons, for the launch map's dialog and other larger surfaces opened from Flow. */
 .flow-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; justify-self: start; min-height: 32px; max-width: 100%; padding: 6px 12px; border: 1px solid var(--border-strong); border-radius: 11px; background: var(--bg); box-shadow: var(--shadow-sm); color: var(--text); font: inherit; font-size: 12px; font-weight: 500; line-height: 1.4; text-align: center; overflow-wrap: anywhere; cursor: pointer; transition: background .15s, border-color .15s, box-shadow .15s; }
 .flow-button:hover:enabled { border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); background: color-mix(in srgb, var(--accent) 6%, var(--bg)); color: var(--text-strong); }
 .flow-button:active:enabled { background: var(--hover); box-shadow: none; }
 .flow-button:disabled { opacity: .45; cursor: default; box-shadow: none; }
-.flow-button:focus-visible, .flow-switch:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
-.flow-card-foot { gap: 8px; padding-top: 4px; }
-.flow-card-foot .flow-button::after { content: "↗"; color: var(--muted); }
-.flow-testing { display: grid; gap: 5px; }
-.flow-testing-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; color: var(--text-strong); font-weight: 500; }
-.flow-testing-description { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
-.flow-switch { display: inline-flex; align-items: center; flex: none; width: 38px; height: 24px; padding: 3px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--chip-bg); cursor: pointer; transition: background .18s, border-color .18s; }
-.flow-switch > span { width: 16px; height: 16px; border-radius: 50%; background: var(--muted); box-shadow: var(--shadow-sm); transition: transform .18s, background .18s; }
-.flow-switch[aria-checked="true"] { border-color: var(--accent); background: var(--accent); }
-.flow-switch[aria-checked="true"] > span { transform: translateX(12px); background: var(--on-accent); }
-.flow-switch:disabled { opacity: .5; cursor: default; }
+.flow-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .flow-button, .flow-switch, .flow-switch > span { transition: none; }
-  .flow-pulse-dot { animation: none; }
-  .flow-step.active .flow-step-mark { animation: none; }
-  .flow-mode[data-mode="pending"] .flow-mode-icon { animation: none; }
+  .flow-button, .flow-panel, .flow-fold::before, .flow-progress::after { transition: none; }
+  .flow-pulse-dot, .flow-step.active .flow-step-mark, .flow-now[data-tone="live"] .flow-now-mark, .flow-chip::before { animation: none !important; }
 }
 
-.flow-plans { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.flow-plan {
-  display: grid;
-  gap: 5px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface-raised);
-  cursor: pointer;
-  transition: border-color .15s, background .15s, box-shadow .15s;
-}
-.flow-plan:hover, .flow-plan:focus-visible {
-  border-color: var(--border-strong);
-  outline: none;
-}
-/* The agent in use only gets its "Working" badge: the card itself stays plain, so it doesn't look like a task or an alert. */
-.flow-plan.flow-plan-active { padding: 10px 12px; }
-.flow-plan-head { display: flex; align-items: center; gap: 7px; }
-.flow-plan-head strong { flex: 1; min-width: 0; color: var(--text-strong); font-weight: 600; }
-.flow-plan-head .agent-icon { width: 13px; height: 13px; }
-.flow-plan-value { color: var(--text-strong); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.flow-plan[data-level="low"] .flow-plan-value { color: var(--warning); }
-.flow-plan[data-level="critical"] .flow-plan-value { color: var(--danger); }
-.flow-plan-working-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 1px 0;
-  color: var(--muted);
-  font-size: var(--font-ui-xs);
-  font-weight: 600;
-  letter-spacing: .02em;
-}
-.flow-plan-working-badge::after {
-  content: "Working";
-}
-.flow-plan-windows { display: grid; gap: 8px; margin-top: 4px; padding-left: 2px; }
-.flow-plan-window { display: grid; gap: 2px; }
-.flow-plan-window-head { display: flex; align-items: center; justify-content: space-between; font-size: 11.5px; }
-.flow-plan-window-label { color: var(--text); font-weight: 500; }
-.flow-meter { position: relative; height: 5px; border-radius: 3px; background: var(--chip-bg); overflow: hidden; }
-.flow-meter::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--left, 0%); border-radius: 3px; background: var(--success); }
-.flow-plan[data-level="low"] .flow-meter::after, .flow-plan-window[data-level="low"] .flow-meter::after { background: var(--warning); }
-.flow-plan[data-level="critical"] .flow-meter::after, .flow-plan-window[data-level="critical"] .flow-meter::after { background: var(--danger); }
-.flow-plan-when { color: var(--faint); font-size: 11.5px; }
-.flow-plan-secondary { color: var(--faint); font-size: 11.5px; }
-.flow-plan-secondary[data-level="low"] { color: var(--warning); }
-.flow-plan-secondary[data-level="critical"] { color: var(--danger); }
-
-.flow-steps, .flow-queue, .flow-runs { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
-.flow-step { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); }
-.flow-step-mark { flex: none; width: 12px; height: 12px; margin-top: 3px; border: 1.5px solid var(--faint); border-radius: 50%; }
-.flow-step.done { color: var(--faint); }
-.flow-step.done .flow-step-text { text-decoration: line-through; }
-.flow-step.done .flow-step-mark { border-color: var(--success); background: var(--success); }
-.flow-current-work {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-raised);
-  margin-bottom: 8px;
-  min-width: 0;
-  max-width: 100%;
-  box-sizing: border-box;
-  overflow: hidden;
-  transition: border-color .15s, background .15s, box-shadow .15s;
-}
-.flow-current-work .flow-task-head { min-width: 0; }
-.flow-current-work-title-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
-.flow-current-work-title-wrap .agent-icon {
-  flex: none;
-  width: 14px;
-  height: 14px;
-}
-.flow-current-work-title-wrap strong {
-  flex: 1;
-  min-width: 0;
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--text-strong);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.flow-current-work-hint {
-  margin: 0;
-  font-size: 11.5px;
-  color: var(--faint);
-  line-height: 1.4;
-}
-
-/* The step being worked on stays an ordinary row in the list: only its mark fills and its text gets stronger, so it
-   lines up with the other steps and does not read as a second "agent working" box. */
-.flow-step.active { color: var(--text-strong); }
-.flow-step.active .flow-step-mark {
-  border-color: var(--accent);
-  background: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
-  animation: pulse 1.4s ease-in-out infinite;
-}
-.flow-step.active .flow-step-text { font-weight: 600; }
-.flow-step.active[aria-label*="Stopped at"] { color: var(--text); }
-.flow-step.active[aria-label*="Stopped at"] .flow-step-mark {
-  background: transparent;
-  box-shadow: none;
-  animation: none;
-}
-.flow-subhead { margin: 4px 0 0; color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
-.flow-queue { counter-reset: queued; }
-.flow-queue-item { display: flex; gap: 8px; color: var(--text); }
-.flow-queue-item::before { counter-increment: queued; content: counter(queued); flex: none; min-width: 14px; color: var(--faint); font-variant-numeric: tabular-nums; }
-.flow-queue-more { color: var(--faint); }
-.flow-run { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 10px; align-items: center; }
-.flow-run-title { color: var(--text); }
-.flow-run-meta { grid-column: 1; color: var(--faint); font-size: 11px; }
-.flow-run-action { grid-column: 2; grid-row: 1 / span 2; }
-/* What happened: one decision per finished run, newest first, with the recorded reason under it. */
-.flow-happened { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.flow-happened-item { display: grid; gap: 1px; min-width: 0; padding-left: 9px; border-left: 2px solid var(--border); }
-.flow-happened-item[data-kind="handoff"], .flow-happened-item[data-kind="retry"] { border-left-color: var(--accent); }
-.flow-happened-title { color: var(--text); overflow-wrap: anywhere; }
-.flow-happened-meta { color: var(--faint); font-size: 11px; }
-.flow-happened-outcome[data-tone="good"] { color: var(--success); }
-.flow-happened-outcome[data-tone="bad"] { color: var(--danger); }
-.flow-happened-why { color: var(--muted); font-size: 11px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-
-/* A narrow window: one chip per card under the header; a chip opens its card over the right edge of the chat. */
+/* A narrow window: the rails step aside and each panel becomes a chip under the header, after the status line. A chip
+   opens its panel over the right edge of the chat. */
 .flow-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: none; padding: 2px 18px 8px; }
 .flow-strip[hidden] { display: none; }
-.flow-chip { height: 26px; padding: 0 11px; border: 0; border-radius: 13px; background: color-mix(in srgb, var(--surface-raised) 86%, transparent); box-shadow: var(--shadow-sm); color: var(--text); font: inherit; font-size: 12px; white-space: nowrap; }
-.flow-chip:hover, .flow-chip[aria-pressed="true"] { color: var(--text-strong); background: var(--surface-strong); }
-.flow-peek { position: fixed; z-index: 31; top: 56px; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; width: min(400px, 90vw); padding: 10px 14px 18px; overflow: auto; border: 1px solid var(--border); border-radius: 18px; background: var(--bg); box-shadow: var(--shadow-lg); }
+.flow-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 280px; height: 26px; padding: 0 11px; overflow: hidden; border: 1px solid var(--border); border-radius: 13px; background: color-mix(in srgb, var(--surface-raised) 78%, transparent); color: var(--text); font: inherit; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.flow-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.flow-chip:hover, .flow-chip[aria-pressed="true"] { border-color: var(--border-strong); color: var(--text-strong); background: var(--surface-strong); }
+.flow-chip:is([data-live="true"], [data-attention="true"])::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.flow-chip[data-live="true"] { color: var(--text-strong); }
+.flow-chip[data-live="true"]:not([data-attention="true"])::before { animation: pulse 1.4s ease-in-out infinite; }
+.flow-chip[data-attention="true"]::before { background: var(--warning); }
+.flow-chip[data-attention="true"] { border-color: color-mix(in srgb, var(--warning) 60%, var(--border)); color: var(--text-strong); }
+.flow-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.flow-peek { position: fixed; z-index: 31; top: 56px; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; width: min(400px, 90vw); padding: 10px 12px 16px; overflow: auto; border: 1px solid var(--border); border-radius: 16px; background: var(--bg); box-shadow: var(--shadow-lg); }
 .flow-peek[hidden] { display: none; }
-.flow-peek-head { display: flex; justify-content: flex-end; flex: none; }
+.flow-peek-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: none; }
+.flow-peek-title { min-width: 0; margin: 0 0 0 6px; color: var(--text-strong); font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; }
+.flow-peek-body { display: grid; align-content: start; gap: 12px; color: var(--text); font-size: 12.5px; line-height: 1.5; }
+/* The peek names the panel, so the panel inside it keeps only its count, its word and its tools. */
+.flow-peek-body > .flow-panel { border: 0; background: transparent; }
+.flow-peek-body > .flow-panel :is(.flow-panel-icon, .flow-panel-title) { display: none; }
+.flow-peek-body > .flow-panel .flow-panel-head { min-height: 0; padding: 0 0 4px 6px; }
+.flow-peek-body > .flow-panel .flow-panel-state { justify-content: flex-start; }
+/* Your space in the peek keeps its own utility sections. */
+.flow-peek-body > .flow-preferences { gap: 20px; padding: 0 4px; }
 .flow-peek-close { width: 32px; height: 32px; -webkit-app-region: no-drag; }
 .flow-peek-close::before { content: ""; width: 12px; height: 12px; background: currentColor; mask: var(--icon-close) center / contain no-repeat; -webkit-mask: var(--icon-close) center / contain no-repeat; }
 @media (max-width: 1180px) {

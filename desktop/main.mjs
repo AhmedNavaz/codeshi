@@ -27,6 +27,7 @@ import {commandState,connectionFile,installCommand,removeConnection,uninstallCom
 import {createPreview} from './preview.mjs';
 import {createTraceRecorder} from './trace.mjs';
 import {APP_ID,ensureStartMenuShortcut} from './windows.mjs';
+import {createWorkspaceWindows,cascade} from './workspace-windows.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const smoke=process.argv.includes('--smoke-test');
 // Started by the codeshi command (#90) with no window: the engine and the menu bar status only. A window opens when asked
@@ -53,12 +54,18 @@ else app.setPath('userData',preferredUserData(app.getPath('appData'),app.getPath
 if(process.platform==='win32'&&!development)app.setAppUserModelId(APP_ID);
 const primary=app.requestSingleInstanceLock();
 let relay,win,origin,keepAwake,updater,tray=null,overlay=null,preview=null,quitting=false,confirmQuit=()=>true;
+// The main window and any workspace opened in a window of its own (#203), all pages of the same local engine.
+const pages=createWorkspaceWindows();
+const livePages=()=>pages.windows();
+const sendAll=(...message)=>{for(const page of livePages())safeSend(page,...message);};
+// The window last in front, or else the main window: where commands, dialogs and plain "open Codeshi" go.
+const frontPage=()=>pages.front()||win;
 // The words of the menus and the status item, in the interface language (#27).
 let text=english;
 if(!primary) app.quit();
 else {
   app.on('second-instance',(_event,argv=[])=>{if(argv.includes('--background'))return;if(openMain)return openMain();windowWanted=true;app.dock?.show();if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
-  app.on('before-quit',event=>{if(relay&&!quitting){if(!confirmQuit()){event.preventDefault();return;}event.preventDefault();quitting=true;safeSend(win,'relay:quitting');keepAwake?.dispose();updater?.finishOnQuit();updater?.dispose();closeWithin(options=>relay.close(options),{log:line=>writeShutdownLog(path.join(app.getPath('userData'),'shutdown.log'),line)}).then(()=>{relay.killAll?.();app.quit();setTimeout(()=>app.exit(0),2000);});}});
+  app.on('before-quit',event=>{if(relay&&!quitting){if(!confirmQuit()){event.preventDefault();return;}event.preventDefault();quitting=true;sendAll('relay:quitting');keepAwake?.dispose();updater?.finishOnQuit();updater?.dispose();closeWithin(options=>relay.close(options),{log:line=>writeShutdownLog(path.join(app.getPath('userData'),'shutdown.log'),line)}).then(()=>{relay.killAll?.();app.quit();setTimeout(()=>app.exit(0),2000);});}});
   app.on('will-quit',()=>{relay?.killAll?.();removeConnection(connectionFile(app.getPath('userData')));keepAwake?.dispose();overlay?.dispose();preview?.dispose();tray?.destroy();tray=null;});
   app.on('window-all-closed',()=>app.quit());
   app.whenReady().then(async()=>{
@@ -69,16 +76,20 @@ else {
     migrateLegacyData(process.env.AI_RELAY_LEGACY_DATA_DIR || path.join(root,'.data'),data);
     const releases=createReleaseState({filename:path.join(app.getPath('userData'),'install.json'),version:app.getVersion(),changelog:fs.readFileSync(path.join(root,'CHANGELOG.md'),'utf8'),existing:['projects.json','settings.json'].some(name=>fs.existsSync(path.join(data,name)))});
     const token=randomBytes(32).toString('hex');
-    const appearance=createAppearance({nativeTheme,onBackground:color=>{if(win&&!win.isDestroyed())win.setBackgroundColor(color);}});
+    const appearance=createAppearance({nativeTheme,onBackground:color=>{for(const page of livePages())page.setBackgroundColor(color);}});
     // The menu bar shows what the page last reported, the saved appearance and Keep Awake.
     let page=null,awake=false;
+    // What each window's page last reported; the menu bar follows the window in front (#203).
+    const menuStates=new Map();
+    const showPageMenu=from=>{const next=menuStates.get(from);if(next&&next!==page){page=next;updateMenu();}};
     // Help › Record Performance Trace: ten seconds of tracing for every Codeshi process, kept on this computer (trace.mjs).
     const tracer=createTraceRecorder({tracing:contentTracing,metrics:()=>app.getAppMetrics(),directory:path.join(app.getPath('userData'),'performance-traces'),onChange:()=>updateMenu()});
+    const owner=()=>{const page=frontPage();return page&&!page.isDestroyed()?page:undefined;};
     const recordTrace=async()=>{
-      const {t}=text,owner=win&&!win.isDestroyed()?win:undefined;
+      const {t}=text;
       try{
         const {file,summary}=await tracer.record(),{cpu}=summary;
-        const answer=await dialog.showMessageBox(owner,{type:'info',message:t('Performance trace saved'),
+        const answer=await dialog.showMessageBox(owner(),{type:'info',message:t('Performance trace saved'),
           detail:t('Over {seconds} seconds, Codeshi used this much of one CPU core: pages {pages}%, graphics {graphics}%, the app itself {app}%, other helpers {other}%. The trace stays on this computer. It holds timings, script names and request addresses, not chat text.',{seconds:summary.seconds,pages:cpu.pages,graphics:cpu.graphics,app:cpu.app,other:cpu.other}),
           buttons:[process.platform==='darwin'?t('Show in Finder'):t('Show in Folder'),t('OK')],defaultId:1,cancelId:1});
         if(answer.response===0)shell.showItemInFolder(file);
@@ -88,18 +99,18 @@ else {
     // app, or on Windows a launcher for bin\\codeshi.cmd. Either runs the CLI with the app's own Node.
     const commandTarget=path.join(root,'bin',process.platform==='win32'?'codeshi.cmd':'codeshi');
     const command=async install=>{
-      const {t}=text,owner=win&&!win.isDestroyed()?win:undefined;
+      const {t}=text;
       try{
         const result=install?await installCommand({target:commandTarget}):await uninstallCommand({target:commandTarget});
         if(result.cancelled)return;
-        await dialog.showMessageBox(owner,{type:'info',message:install?t('The codeshi command is installed'):t('The codeshi command is removed'),
+        await dialog.showMessageBox(owner(),{type:'info',message:install?t('The codeshi command is installed'):t('The codeshi command is removed'),
           detail:install?t('In a terminal, run codeshi in a project folder to work with your agents there. codeshi --help lists the commands for scripts. If Codeshi isn’t open, it starts in the background.'):process.platform==='darwin'?t('Install it again from the Codeshi menu at any time.'):t('Install it again from the File menu at any time.'),buttons:[t('OK')]});
       }catch(error){dialog.showErrorBox(install?t('The codeshi command was not installed'):t('The codeshi command was not removed'),error?.message||String(error));}
       updateMenu();
     };
     const updateMenu=()=>Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({platform:process.platform,packaged:app.isPackaged,updates:Boolean(updater?.state().supported),version:app.getVersion(),osVersion:process.getSystemVersion(),arch:process.arch,text,state:page,appearance:relay.getAppearancePreference(),keepAwake:awake,notifications:relay.getNotificationPreferences(),setNotifications:patch=>{relay.setNotificationPreferences(patch);updateMenu();syncStatus();},handoff:relay.getHandoffPreferences(),setHandoff:patch=>{relay.setHandoffPreferences(patch);updateMenu();},open:url=>shell.openExternal(url),tracing:tracer.isRecording(),recordTrace,command:process.platform==="darwin"||process.platform==="win32"?{state:commandState({target:commandTarget}),install:()=>command(true),uninstall:()=>command(false)}:null,
       // A clicked checkbox or radio item ticks itself, so the menu is rebuilt to show the page's answer instead.
-      send:(...command)=>{safeSend(win,'relay:menu-command',...command);updateMenu();}})));
+      send:(...command)=>{safeSend(frontPage(),'relay:menu-command',...command);updateMenu();}})));
     app.setAboutPanelOptions({applicationName:'Codeshi',applicationVersion:app.getVersion(),version:''});
     // Work that finishes or needs an answer while the person is elsewhere is reported outside the window, in the ways
     // chosen under Alerts (src/alerts.mjs). While the window is in front the page already shows it. The Dock badge
@@ -107,21 +118,26 @@ else {
     // bounces the Dock until the app is opened. A system notification is shown where macOS allows one: an app without
     // a Developer ID signature is refused. On Windows and Linux the taskbar button flashes instead of the Dock bouncing.
     let attention=0,notificationsRefused=false;
+    const bring=page=>{if(page.isMinimized())page.restore();page.show();page.focus();app.focus?.({steal:true});};
+    const pageFocused=()=>livePages().some(page=>page.isFocused());
     // Brings the window forward, opening a workspace or an approval's request card. Nothing is answered on the way.
+    // A workspace already open in a window opens there (#203); otherwise the main window shows it, and plain "open
+    // Codeshi" brings back the window last in front.
     function openTarget(target){
       if(!win||win.isDestroyed())return;
       windowWanted=true;app.dock?.show();
+      const into=target?.projectId?pages.showing(target.projectId)||pages.pinned(target.projectId)||win:frontPage();
       // A background start loads the page only now, so nothing renders while no one looks.
-      if(!pageLoaded){loadPage().then(()=>openTarget(target),()=>{});return;}
-      if(win.isMinimized())win.restore();win.show();win.focus();app.focus?.({steal:true});
-      if(target?.projectId)win.webContents.send('relay:menu-command',target.approvalId?'open-approval':'open-workspace',target.approvalId?{projectId:target.projectId,approvalId:target.approvalId,...(target.taskId?{taskId:target.taskId}:{})}:target.projectId);
+      if(into===win&&!pageLoaded){loadPage().then(()=>openTarget(target),()=>{});return;}
+      bring(into);
+      if(target?.projectId)into.webContents.send('relay:menu-command',target.approvalId?'open-approval':'open-workspace',target.approvalId?{projectId:target.projectId,approvalId:target.approvalId,...(target.taskId?{taskId:target.taskId}:{})}:target.projectId);
     }
     // A banner is the panel near the top of the screen when that is chosen (#13), or else a system notification, so
     // nothing is announced twice. Each way is skipped when it is turned off for this moment.
     function notify({kind,title,body,projectId,projectName,approvalId,taskId}){
-      const plan=alertPlan({kind},relay.getNotificationPreferences(),{focused:Boolean(win&&!win.isDestroyed()&&win.isFocused()),panelAvailable:Boolean(overlay)});
+      const plan=alertPlan({kind},relay.getNotificationPreferences(),{focused:pageFocused(),panelAvailable:Boolean(overlay)});
       if(plan.badge&&app.dock){attention++;app.dock.setBadge(String(attention));}
-      if(plan.bounce){app.dock?.bounce(plan.moment==='attention'?'critical':'informational');if(process.platform!=='darwin'&&win&&!win.isDestroyed())win.flashFrame(true);}
+      if(plan.bounce){app.dock?.bounce(plan.moment==='attention'?'critical':'informational');const page=pages.showing(projectId)||frontPage();if(process.platform!=='darwin'&&page&&!page.isDestroyed())page.flashFrame(true);}
       if(plan.panel){overlay.show({kind,title,body,projectId,projectName,approvalId,taskId});return;}
       if(!plan.notification||notificationsRefused||!Notification.isSupported())return;
       // Banners are silent: the page plays alert sounds itself, as chosen in Settings, so a sound is never heard twice.
@@ -166,7 +182,7 @@ else {
         tray.setImage(snapshot.attention&&!focused?statusIcons.attention:statusIcons.idle);
         tray.setTitle(statusTitle(snapshot,text,{focused}),{fontType:'monospacedDigit'});
       }
-      tray.setContextMenu(Menu.buildFromTemplate(statusMenu(snapshot,{platform:process.platform,text,keepAwake:keepAwake?.getState()||{enabled:false,active:false},alerts:preferences,setAlerts:setStatusPreferences,alertSettings:()=>{openTarget(null);safeSend(win,'relay:menu-command','alert-settings');},open:openTarget,show:()=>openTarget(null),setKeepAwake:value=>keepAwake?.setEnabled(value),hide:()=>setStatusPreferences({statusItem:false}),quit:()=>app.quit()})));
+      tray.setContextMenu(Menu.buildFromTemplate(statusMenu(snapshot,{platform:process.platform,text,keepAwake:keepAwake?.getState()||{enabled:false,active:false},alerts:preferences,setAlerts:setStatusPreferences,alertSettings:()=>{openTarget(null);safeSend(frontPage(),'relay:menu-command','alert-settings');},open:openTarget,show:()=>openTarget(null),setKeepAwake:value=>keepAwake?.setEnabled(value),hide:()=>setStatusPreferences({statusItem:false}),quit:()=>app.quit()})));
     }
     async function start(){
       relay=createRelayServer({dataRoot:data,accessToken:token,onAppearance:preference=>{appearance.set(preference);updateMenu();},onHandoff:()=>updateMenu(),onNotify:notify,onNotifications:()=>{updateMenu();scheduleStatus();},
@@ -179,7 +195,7 @@ else {
         githubVault:encryptedVault({file:path.join(data,'github-sign-in.bin'),safeStorage}), });
       text=relay.getText();
       appearance.set(relay.getAppearancePreference());
-      keepAwake=createKeepAwake({registry:relay.registry,blocker:powerSaveBlocker,enabled:relay.getKeepAwakePreference(),save:relay.setKeepAwakePreference,onChange:state=>{awake=state.enabled;safeSend(win,'relay:keep-awake-changed',state);updateMenu();scheduleStatus();}});
+      keepAwake=createKeepAwake({registry:relay.registry,blocker:powerSaveBlocker,enabled:relay.getKeepAwakePreference(),save:relay.setKeepAwakePreference,onChange:state=>{awake=state.enabled;sendAll('relay:keep-awake-changed',state);updateMenu();scheduleStatus();}});
       // The same port as last time when it is free: the page keeps its saved state (the last workspace, drafts), which the
       // browser stores per address. A taken port falls back to any free one.
       const portFile=path.join(app.getPath('userData'),'last-port.json');
@@ -197,7 +213,7 @@ else {
     // A schedule with a time still to come (#132) keeps Codeshi in the menu bar after its window closes.
     const scheduled=()=>[...relay.registry.brokers.values()].some(({broker})=>broker.schedules?.waiting>0);
     const build=updateBuild({arch:process.arch,translated:app.runningUnderARM64Translation,platform:process.platform}),demo=updateDemo?(await import('./update-demo.mjs')).updateDemo({version:app.getVersion(),build,relaunch:()=>{app.relaunch();app.quit();}}):null;
-    updater=createUpdater({version:app.getVersion(),build,location:demo?.location||(process.platform==='win32'?windowsLocation(process.execPath):bundleLocation(process.execPath)),directory:path.join(app.getPath('userData'),demo?'updates-demo':'updates'),supported:Boolean(demo)||app.isPackaged&&!smoke,...(demo?{fetchImpl:demo.fetchImpl,exec:demo.exec,launch:demo.launch}:{}),busy,quit:demo?.quit||(()=>app.quit()),onState:state=>{safeSend(win,'relay:update-state',state);}});
+    updater=createUpdater({version:app.getVersion(),build,location:demo?.location||(process.platform==='win32'?windowsLocation(process.execPath):bundleLocation(process.execPath)),directory:path.join(app.getPath('userData'),demo?'updates-demo':'updates'),supported:Boolean(demo)||app.isPackaged&&!smoke,...(demo?{fetchImpl:demo.fetchImpl,exec:demo.exec,launch:demo.launch}:{}),busy,quit:demo?.quit||(()=>app.quit()),onState:state=>{sendAll('relay:update-state',state);}});
     if(demo)updater.check();
     relay.registry.on('update',()=>setTimeout(()=>updater.idle(),0));
     // Live status on the Mac (#13): the menu bar item follows every workspace's runs, approvals and waits.
@@ -212,13 +228,47 @@ else {
     if(windows){readTaskbar();nativeTheme.on('updated',readTaskbar);}
     updateMenu();syncStatus();
     function loadPage(){pageLoaded=true;return win.loadURL(origin);}
-    win=new BrowserWindow({width:1440,height:1000,minWidth:900,minHeight:680,show:false,title:'Codeshi',icon:path.join(root,'assets','icon.png'),backgroundColor:appearance.background(),...(process.platform==='darwin'?{titleBarStyle:'hiddenInset',trafficLightPosition:{x:14,y:13}}:{}),webPreferences:{preload:path.join(root,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,additionalArguments:[...(development?['--relay-channel=development']:[]),`--relay-token=${token}`]}});
-    // Back in the window, the page shows what happened, including the recap after a while away, so the badge clears
-    // and the panel near the top of the screen goes; it would otherwise cover the recap.
-    win.on('focus',()=>{attention=0;app.dock?.setBadge('');overlay?.hide();if(process.platform!=='darwin')win.flashFrame(false);readTaskbar();});
-    // The window list and the app switcher tell the two copies apart.
-    if(development)win.on('page-title-updated',(event,title)=>{event.preventDefault();win.setTitle(`${title} (Development)`);});
+    const webPreferences={preload:path.join(root,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,additionalArguments:[...(development?['--relay-channel=development']:[]),`--relay-token=${token}`]};
+    // Every Codeshi window is the same page of the same engine; a workspace window (#203) names its workspace in its address.
+    function pageWindow(bounds={width:1440,height:1000}){
+      const page=new BrowserWindow({...bounds,minWidth:900,minHeight:680,show:false,title:'Codeshi',icon:path.join(root,'assets','icon.png'),backgroundColor:appearance.background(),...(process.platform==='darwin'?{titleBarStyle:'hiddenInset',trafficLightPosition:{x:14,y:13}}:{}),webPreferences});
+      // Back in a window, the page shows what happened, including the recap after a while away, so the badge clears
+      // and the panel near the top of the screen goes; it would otherwise cover the recap.
+      page.on('focus',()=>{pages.touch(page);attention=0;app.dock?.setBadge('');overlay?.hide();if(process.platform!=='darwin')page.flashFrame(false);readTaskbar();showPageMenu(page);});
+      // The window list and the app switcher tell the two copies apart.
+      if(development)page.on('page-title-updated',(event,title)=>{event.preventDefault();page.setTitle(`${title} (Development)`);});
+      page.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+      page.webContents.on('will-navigate',(event,url)=>{if(!url.startsWith(origin+'/'))event.preventDefault();});
+      return page;
+    }
+    win=pages.track(pageWindow(),{primary:true});
     if(!smoke) win.once('ready-to-show',()=>{if(windowWanted)win.show();});
+    // Each window's sidebar marks the workspaces open in the others.
+    let windowsTimer=null;
+    function windowsChanged(){if(windowsTimer)return;windowsTimer=setTimeout(()=>{windowsTimer=null;for(const page of livePages())safeSend(page,'relay:windows-changed',{elsewhere:pages.elsewhere(page)});},50);}
+    // A workspace in a window of its own (#203). One that is already open in a window is brought forward instead.
+    function openWorkspaceWindow(projectId){
+      const shown=pages.showing(projectId);
+      if(shown){if(shown.isVisible())bring(shown);return {focused:true,page:shown};}
+      const from=frontPage(),area=screen.getDisplayMatching(from&&!from.isDestroyed()&&from.isVisible()?from.getBounds():screen.getPrimaryDisplay().bounds).workArea;
+      const page=pages.track(pageWindow(cascade(from&&!from.isDestroyed()&&from.isVisible()?from.getBounds():null,area)),{projectId,opening:true});
+      page.once('ready-to-show',()=>{page.show();page.focus();});page.once('show',()=>pages.opened(page));
+      page.on('show',windowsChanged);page.on('hide',windowsChanged);
+      // Closing the last window open ends Codeshi as closing the main one does: it asks while an agent works, and stays
+      // in the menu bar while a schedule waits.
+      page.on('close',event=>{
+        if(quitting||smoke||pages.othersVisible(page))return;
+        if(!scheduled()){if(!confirmQuit()){event.preventDefault();return;}page.once('closed',()=>app.quit());return;}
+        windowWanted=false;app.dock?.hide();quitWhenQuiet();
+      });
+      page.on('closed',()=>{pages.forget(page);menuStates.delete(page);windowsChanged();});
+      windowWanted=true;app.dock?.show();
+      // A page that fails to load still shows, with Electron's error, rather than staying an invisible window.
+      page.loadURL(`${origin}/?workspace=${encodeURIComponent(projectId)}`).catch(()=>{if(!page.isDestroyed()){pages.opened(page);page.show();}});
+      windowsChanged();
+      return {opened:true,page};
+    }
+    win.on('show',windowsChanged);win.on('hide',windowsChanged);
     // With no window, Codeshi quits by itself after two quiet minutes in a row: no window wanted, no terminal following,
     // nothing working or queued, and no schedule still to come.
     let idleQuit=null;
@@ -241,19 +291,23 @@ else {
     let quitConfirmed=false;
     confirmQuit=()=>{
       if(quitting||quitConfirmed||smoke||!busy()||!win||win.isDestroyed())return true;
-      const {t}=text,choice=dialog.showMessageBoxSync(win,{type:'warning',buttons:[t('Keep working'),t('Quit Codeshi')],defaultId:0,cancelId:0,message:t('An agent is still working.'),detail:t('Quitting stops it. Anything it has not finished is left as it is.')});
+      const {t}=text,choice=dialog.showMessageBoxSync(owner(),{type:'warning',buttons:[t('Keep working'),t('Quit Codeshi')],defaultId:0,cancelId:0,message:t('An agent is still working.'),detail:t('Quitting stops it. Anything it has not finished is left as it is.')});
       quitConfirmed=choice===1;
       return quitConfirmed;
     };
+    // The main window unloads its page while hidden, so it shows no workspace until it opens again.
+    const hideMain=()=>{win.hide();pages.claim(win,null,{initial:true});if(pageLoaded){pageLoaded=false;win.loadURL('about:blank').catch(()=>{});}};
     win.on('close',event=>{
       if(quitting||smoke)return;
+      // Other windows stay open (#203): the main window hides, nothing stops, and opening Codeshi brings it back.
+      if(pages.othersVisible(win)){event.preventDefault();hideMain();return;}
       if(!scheduled()){if(!confirmQuit())event.preventDefault();return;}
       event.preventDefault();
-      windowWanted=false;win.hide();app.dock?.hide();
-      if(pageLoaded){pageLoaded=false;win.loadURL('about:blank').catch(()=>{});}
+      windowWanted=false;hideMain();app.dock?.hide();
       quitWhenQuiet();
     });
-    const trusted=event=>event.sender===win.webContents && event.senderFrame===win.webContents.mainFrame && event.senderFrame.url.startsWith(origin+'/');
+    // Any Codeshi window's own page may use the bridge; preview pages, the alert panel and other sites never can.
+    const trusted=event=>{const page=BrowserWindow.fromWebContents(event.sender);return Boolean(page&&pages.has(page)&&event.sender===page.webContents&&event.senderFrame===page.webContents.mainFrame&&event.senderFrame.url.startsWith(origin+'/'));};
     // Open at login (#132), for the installed app on macOS and Windows: a copy run from source would register Electron itself.
     const loginSupported=app.isPackaged&&!smoke&&['darwin','win32'].includes(process.platform);
     const loginState=()=>{if(!loginSupported)return {supported:false,enabled:false};const settings=app.getLoginItemSettings(process.platform==='win32'?{args:loginArgs}:undefined);return {supported:true,enabled:settings.openAtLogin===true,approval:settings.status==='requires-approval'};};
@@ -266,7 +320,7 @@ else {
     // A break reminder while Codeshi is behind other windows: a quiet banner that brings it forward. In front, the page shows its own.
     ipcMain.handle('relay:break-banner',(event,input)=>{
       if(!trusted(event))throw Error('Untrusted renderer');
-      if(win.isFocused()||notificationsRefused||!Notification.isSupported())return {shown:false};
+      if(pageFocused()||notificationsRefused||!Notification.isSupported())return {shown:false};
       const notice=new Notification({title:String(input?.title||'').slice(0,120),body:String(input?.body||'').slice(0,240),silent:true});
       notice.on('click',()=>openTarget(null));
       notice.on('failed',(_event,error)=>{notificationsRefused=true;console.warn('macOS did not show a Codeshi notification:',error);});
@@ -297,23 +351,68 @@ else {
         else result.banner=await new Promise(resolve=>{const notice=new Notification({title,body,silent:true});const timer=setTimeout(()=>resolve(notificationsRefused?'refused':'sent'),1500);notice.on('show',()=>{clearTimeout(timer);resolve('shown');});notice.on('failed',()=>{clearTimeout(timer);notificationsRefused=true;resolve('refused');});notice.on('click',()=>openTarget(null));notice.show();});
       }
       if(plan.badge&&app.dock){clearTimeout(tryBadge);app.dock.setBadge(String(attention+1));result.badge=true;tryBadge=setTimeout(()=>app.dock?.setBadge(attention?String(attention):''),6000);}
-      if(plan.bounce&&win&&!win.isDestroyed()){
-        const bounce=()=>{if(process.platform==='darwin')app.dock?.bounce('informational');else if(!win.isDestroyed())win.flashFrame(true);};
+      // The window the Try button is in.
+      const from=BrowserWindow.fromWebContents(event.sender);
+      if(plan.bounce&&from&&!from.isDestroyed()){
+        const bounce=()=>{if(process.platform==='darwin')app.dock?.bounce('informational');else if(!from.isDestroyed())from.flashFrame(true);};
         tryBounce?.();
-        if(!win.isFocused()){bounce();result.bounce='now';}
-        else{const timer=setTimeout(()=>tryBounce?.(),8000),onBlur=()=>{tryBounce?.();bounce();};win.once('blur',onBlur);tryBounce=()=>{clearTimeout(timer);win.off('blur',onBlur);tryBounce=null;};result.bounce='when-away';}
+        if(!from.isFocused()){bounce();result.bounce='now';}
+        else{const timer=setTimeout(()=>tryBounce?.(),8000),onBlur=()=>{tryBounce?.();bounce();};from.once('blur',onBlur);tryBounce=()=>{clearTimeout(timer);if(!from.isDestroyed())from.off('blur',onBlur);tryBounce=null;};result.bounce='when-away';}
       }
       return result;
     });
     // Show the pill: the pill under the menu bar with an example line, for a few seconds, even with Codeshi in front.
     ipcMain.handle('relay:pill:try',event=>{if(!trusted(event))throw Error('Untrusted renderer');if(!overlay)return false;overlay.show(pillSample(text.t));return true;});
-    ipcMain.on('relay:menu-state',(event,input)=>{if(!trusted(event))return;const next=menuState(input);if(next){page=next;updateMenu();}});
+    // Each window reports what its page offers; the menu bar shows the window in front's.
+    ipcMain.on('relay:menu-state',(event,input)=>{if(!trusted(event))return;const next=menuState(input),from=BrowserWindow.fromWebContents(event.sender);if(!next)return;menuStates.set(from,next);if(from===frontPage()){page=next;updateMenu();}});
+    // A window shows a workspace (#203). Asked before a page switches: when another window shows it, that window comes
+    // forward and this one stays as it is. A window's first choice is taken anyway, so it always shows something.
+    ipcMain.handle('relay:window:claim',(event,input)=>{
+      if(!trusted(event))throw Error('Untrusted renderer');
+      const from=BrowserWindow.fromWebContents(event.sender),projectId=input?.projectId==null?null:String(input.projectId).slice(0,200);
+      if(projectId){try{relay.registry.get(projectId);}catch{return {refused:true};}}
+      const answer=pages.claim(from,projectId,{initial:input?.initial===true});
+      if(answer.elsewhere){bring(answer.elsewhere);return {elsewhere:true};}
+      windowsChanged();
+      return {here:Boolean(answer.here),elsewhere:false};
+    });
+    ipcMain.handle('relay:window:elsewhere',event=>{if(!trusted(event))throw Error('Untrusted renderer');return pages.elsewhere(BrowserWindow.fromWebContents(event.sender));});
+    ipcMain.handle('relay:window:open',(event,input)=>{
+      if(!trusted(event))throw Error('Untrusted renderer');
+      const projectId=String(input?.projectId||'').slice(0,200);
+      try{relay.registry.get(projectId);}catch{throw Error('That workspace no longer exists.');}
+      const {opened=false,focused=false}=openWorkspaceWindow(projectId);
+      return {opened,focused};
+    });
+    // A workspace's menu in the sidebar, the system's own: open it in a new window, or bring forward the window that
+    // shows it, and its settings. Answers with what was chosen; the page does it.
+    ipcMain.on('relay:window:lanes',(event,input)=>{
+      if(!trusted(event))return;
+      const from=BrowserWindow.fromWebContents(event.sender);
+      if(from)pages.lanes(from,Array.isArray(input?.projectIds)?input.projectIds.filter(id=>typeof id==='string').slice(0,4):[]);
+    });
+    ipcMain.handle('relay:window:menu',(event,input)=>new Promise((resolve,reject)=>{
+      if(!trusted(event))return reject(Error('Untrusted renderer'));
+      const from=BrowserWindow.fromWebContents(event.sender),projectId=String(input?.projectId||'').slice(0,200),{t}=text;
+      const here=pages.projectOf(from)===projectId,other=pages.showing(projectId,{except:from});
+      let chosen=null;const choose=value=>()=>{chosen=value;};
+      // A companion lane (#203): pinned beside this window's workspace, or not.
+      const pin=input?.pin==='pinned'?{label:t('Unpin'),click:choose('unpin')}:input?.pin==='can'&&!other?{label:t('Pin Beside This Workspace'),click:choose('pin')}:null;
+      const items=[
+        other?{label:t('Show Its Window'),click:choose('window')}:{label:t('Open in New Window'),enabled:!here,click:choose('window')},
+        ...(pin?[pin]:[]),
+        {type:'separator'},
+        {label:t('Workspace Settings…'),click:choose('settings')},
+      ];
+      Menu.buildFromTemplate(items).popup({window:from,callback:()=>setTimeout(()=>resolve(chosen),0)});
+    }));
     // Point and tell (#19): the workspace's app in a preview window, one for each interface opened (#142); an element
     // picked in any of them goes to the message box of that window's workspace.
     const previewPicks=[];
     preview=createPreview({BaseWindow,WebContentsView,session,ipcMain,shell,screen,root,background:()=>appearance.background(),
       folders:id=>{try{return id?relay.registry.get(id).folders.map(folder=>({name:folder.displayName||folder.name,path:folder.path})):[];}catch{return [];}},
-      onPick:pick=>{for(const resolve of previewPicks.splice(0))resolve(pick);if(!win||win.isDestroyed())return;if(pick.focus){if(win.isMinimized())win.restore();win.show();win.focus();if(pick.sketch)win.webContents.send('relay:preview-pick',{projectId:pick.projectId,sketch:true});else win.webContents.send('relay:menu-command','focus-message');return;}win.webContents.send('relay:preview-pick',{projectId:pick.projectId,text:pick.text,image:pick.image,...(pick.design?{design:true,images:pick.images,...(pick.card?{card:pick.card}:{})}:{})});}});
+      // The pick goes to the window showing its workspace (#203), else to the main window, which switches to it.
+      onPick:pick=>{for(const resolve of previewPicks.splice(0))resolve(pick);const to=pages.showing(pick.projectId)||win;if(!to||to.isDestroyed())return;if(pick.focus){bring(to);if(pick.sketch)to.webContents.send('relay:preview-pick',{projectId:pick.projectId,sketch:true});else to.webContents.send('relay:menu-command','focus-message');return;}to.webContents.send('relay:preview-pick',{projectId:pick.projectId,text:pick.text,image:pick.image,...(pick.design?{design:true,images:pick.images,...(pick.card?{card:pick.card}:{})}:{})});}});
     const previewStack=id=>{
       try{
         const review=relay.projectReview?.state(id);
@@ -340,13 +439,11 @@ else {
     // Stop review closes the workspace's windows showing the review's services; the person's other windows stay.
     ipcMain.handle('relay:preview:close',(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const urls=Array.isArray(input?.urls)?input.urls.slice(0,24).map(String):[];return preview.close({projectId:String(input?.projectId||''),urls});});
     // Several folders can be chosen at once; the page adds every one of them.
-    ipcMain.handle('relay:pick-folder',async event=>{if(!trusted(event))throw Error('Untrusted renderer');const choice=await dialog.showOpenDialog(win,{properties:['openDirectory','multiSelections'],message:'Choose one or more project folders. Hold ⌘ to select several.'});return choice.canceled||!choice.filePaths.length?null:choice.filePaths;});
+    ipcMain.handle('relay:pick-folder',async event=>{if(!trusted(event))throw Error('Untrusted renderer');const choice=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender),{properties:['openDirectory','multiSelections'],message:'Choose one or more project folders. Hold ⌘ to select several.'});return choice.canceled||!choice.filePaths.length?null:choice.filePaths;});
     // A Codeshi backup (#160): where to save one, or which one to import. The page gets the path; the server reads and
     // writes the file.
-    ipcMain.handle('relay:pick-backup',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const filters=[{name:'Codeshi Backup',extensions:['codeshibackup']}];if(input?.mode==='save'){const name=String(input?.name||'Codeshi Backup.codeshibackup').replace(/[\\\\/:]/g,'-').slice(0,120);const choice=await dialog.showSaveDialog(win,{defaultPath:path.join(app.getPath('documents'),name),filters,properties:['createDirectory','showOverwriteConfirmation']});return choice.canceled||!choice.filePath?null:choice.filePath;}const choice=await dialog.showOpenDialog(win,{properties:['openFile'],filters});return choice.canceled||!choice.filePaths.length?null:choice.filePaths[0];});
+    ipcMain.handle('relay:pick-backup',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const filters=[{name:'Codeshi Backup',extensions:['codeshibackup']}];if(input?.mode==='save'){const name=String(input?.name||'Codeshi Backup.codeshibackup').replace(/[\\\\/:]/g,'-').slice(0,120);const choice=await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender),{defaultPath:path.join(app.getPath('documents'),name),filters,properties:['createDirectory','showOverwriteConfirmation']});return choice.canceled||!choice.filePath?null:choice.filePath;}const choice=await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender),{properties:['openFile'],filters});return choice.canceled||!choice.filePaths.length?null:choice.filePaths[0];});
     ipcMain.handle('relay:open-external',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const url=new URL(input);if(url.username||url.password||(url.protocol!=='https:' && !(url.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(url.hostname))))throw Error('Only HTTPS or local test links without credentials may open');await shell.openExternal(url.href);return true;});
-    win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
-    win.webContents.on('will-navigate',(event,url)=>{if(!url.startsWith(origin+'/'))event.preventDefault();});
     // Only clipboard writes (Copy buttons) are granted; every other permission stays denied.
     win.webContents.session.setPermissionRequestHandler((_contents,permission,callback)=>callback(permission==='clipboard-sanitized-write'));
     openMain=()=>openTarget(null);
@@ -468,14 +565,14 @@ else {
           // If the sheet didn't load, say what it showed.
           const remoteDebug=remote?null:{open:document.getElementById('flow-detail').open,title:document.getElementById('flow-detail-title').textContent,settings:document.getElementById('settings').open,shown:document.querySelector('.flow-phone')?.textContent?.slice(0,160)??null,hidden:document.hidden};
           close.click();await new Promise(resolve=>setTimeout(resolve,20));
-          return {remoteDebug,entered:window.relayFlow.isOn(),footerHidden:getComputedStyle(document.querySelector('.status-bar')).display==='none',cards:window.relayFlow.cards().length===7&&document.querySelectorAll('.flow-card:not(.flow-lounge-card)').length===7,windowControlsClear:left.getBoundingClientRect().top>=56&&getComputedStyle(left).webkitAppRegion!=='drag',details:details&&!document.getElementById('flow-detail').open,headerPlaced,remote:remote&&!document.getElementById('flow-detail').open,noPreview:!document.querySelector('.flow-preview-badge')&&!document.getElementById('flow-about'),routingOn:['smart','balanced'].includes(window.relayUI.getState().conversation.routing?.mode)&&!document.querySelector('.routing-option[data-mode="manual"]')&&!document.getElementById('agents-routing').hidden};
+          return {remoteDebug,entered:window.relayFlow.isOn(),footerHidden:getComputedStyle(document.querySelector('.status-bar')).display==='none',cards:window.relayFlow.cards().length===5&&document.querySelectorAll('.flow-panel').length===5&&['activity','tasks','usage'].every(id=>document.getElementById('flow-card-'+id).parentElement.id==='flow-left-cards')&&['changes','app'].every(id=>document.getElementById('flow-card-'+id).parentElement.id==='flow-right-cards')&&(()=>{const rail=document.getElementById('flow-right').getBoundingClientRect(),chat=document.querySelector('.main-panel').getBoundingClientRect(),l=left.getBoundingClientRect();return Math.abs(l.width-rail.width)<2&&l.width>=290&&chat.left>=l.right-1&&chat.right<=rail.left+1&&Math.abs((chat.left+chat.right)/2-innerWidth/2)<8;})()&&document.getElementById('flow-status').parentElement.id==='flow-left',windowControlsClear:left.getBoundingClientRect().top>=56&&getComputedStyle(left).webkitAppRegion!=='drag',details:details&&!document.getElementById('flow-detail').open,headerPlaced,remote:remote&&!document.getElementById('flow-detail').open,noPreview:!document.querySelector('.flow-preview-badge')&&!document.getElementById('flow-about'),routingOn:['smart','balanced'].includes(window.relayUI.getState().conversation.routing?.mode)&&!document.querySelector('.routing-option[data-mode="manual"]')&&!document.getElementById('agents-routing').hidden};
         })()`);
         const screenshot=path.join(os.tmpdir(),`codeshi-flow-${process.pid}.png`);
         const captured=await Promise.race([win.webContents.capturePage(),new Promise(resolve=>setTimeout(()=>resolve(null),3000))]);
         if(captured&&!captured.isEmpty()){fs.writeFileSync(screenshot,captured.toPNG());result.flow.screenshot=screenshot;}else result.flow.screenshotUnavailable=true;
         win.setContentSize(900,800);
         await new Promise(resolve=>setTimeout(resolve,100));
-        result.flow.narrow=await win.webContents.executeJavaScript(`document.getElementById('flow-left').hidden&&!document.getElementById('flow-strip').hidden&&document.querySelectorAll('.flow-chip').length===8`);
+        result.flow.narrow=await win.webContents.executeJavaScript(`document.getElementById('flow-left').hidden&&!document.getElementById('flow-strip').hidden&&document.querySelectorAll('.flow-chip').length===1+window.relayFlow.cards().filter(card=>card.shown&&!card.quiet).length&&document.getElementById('flow-strip').firstElementChild?.id==='flow-status'`);
         const broker=relay.registry.broker(project.id),conversation=[...broker.conversations.values()][0];
         conversation.status='running';conversation.activeRun={id:'flow-smoke-run',provider:'codex',mode:'read',startedAt:new Date().toISOString(),phase:'working'};
         await win.webContents.executeJavaScript(`window.relayUI.refresh()`);
@@ -489,6 +586,28 @@ else {
         result.flow.passed=['entered','footerHidden','cards','windowControlsClear','details','headerPlaced','remote','noPreview','routingOn','narrow','locked','left','routingOff'].every(key=>result.flow[key]===true);
         console.log('AI_RELAY_FLOW_SMOKE '+JSON.stringify(result.flow));
         if(!result.flow.passed)throw Error('Flow smoke check failed: '+JSON.stringify({...result.flow,entry}));
+      }
+      smokeStep('windows');
+      // A workspace in a window of its own (#203): it opens there, the main window can't switch to it but brings that
+      // window forward, a notification's target goes to it, and the main window's sidebar marks it.
+      {
+        const folders=['one','two'].map(name=>{const folder=path.join(app.getPath('userData'),'windows-smoke-'+name);fs.mkdirSync(folder,{recursive:true});return folder;});
+        const [first,second]=folders.map((folder,index)=>relay.registry.add({path:folder,name:`Windows ${index+1}`}));
+        await win.webContents.executeJavaScript(`(async()=>{await window.relayUI.refreshProjects({choose:false});await window.relayUI.selectProject(${JSON.stringify(first.id)});})()`);
+        const opened=openWorkspaceWindow(second.id),other=pages.showing(second.id);
+        const settled=async check=>{for(let tries=0;tries<500;tries++){if(await check())return true;await new Promise(resolve=>setTimeout(resolve,20));}return false;};
+        const shown=await settled(async()=>Boolean(other&&!other.isDestroyed()&&!other.webContents.isLoading()&&await other.webContents.executeJavaScript(`window.relayUI?.getState?.().projectId===${JSON.stringify(second.id)}&&window.relayUI.getState().ready`).catch(()=>false)));
+        const stayed=await win.webContents.executeJavaScript(`window.relayUI.selectProject(${JSON.stringify(second.id)}).then(()=>window.relayUI.getState().projectId)`)===first.id;
+        const marked=await settled(()=>win.webContents.executeJavaScript(`!!document.querySelector('.workspace-item[data-project-id=${JSON.stringify(second.id)}] .workspace-window-mark')`));
+        const address=other?await other.webContents.executeJavaScript('location.search'):'';
+        result.windows={opened:Boolean(opened?.opened),shown,stayed,marked,routed:pages.showing(second.id)===other&&pages.showing(first.id)===win,address:address===`?workspace=${encodeURIComponent(second.id)}`};
+        const pictures=path.join(os.tmpdir(),`codeshi-windows-${process.pid}`);fs.mkdirSync(pictures,{recursive:true});
+        for(const [name,page] of [['main',win],['second',other]]){const picture=await Promise.race([page.webContents.capturePage(),new Promise(resolve=>setTimeout(()=>resolve(null),3000))]);if(picture&&!picture.isEmpty())fs.writeFileSync(path.join(pictures,name+'.png'),picture.toPNG());}
+        result.windows.pictures=pictures;
+        other?.destroy();
+        result.windows.passed=['opened','shown','stayed','marked','routed','address'].every(key=>result.windows[key]===true);
+        console.log('AI_RELAY_WINDOWS_SMOKE '+JSON.stringify(result.windows));
+        if(!result.windows.passed)throw Error('Workspace windows smoke check failed: '+JSON.stringify(result.windows));
       }
       if(!result.isolated||!result.bridge||!result.launchBridge||!result.updateBridge||!result.terminal||!result.terminalUI||!result.voiceUI||result.speech===false||result.statusItem===false||result.overlay===false||!result.preview||!result.keepAwakeBridge||!result.usagePopover||!result.ui||!result.configuration||!result.models||!result.modelPicker||!result.permissions||!result.geminiImports||!result.git||!result.imports||!result.setupHeader||!result.review||!result.local||!result.updates.open||!result.updates.notes||!result.updates.dismissed||!['File','Edit','View','Agent','Workspace','Window','Help'].every(label=>result.menu.labels.includes(label))||!result.menu.reported||!result.menu.ticked||result.menu.theme!=='light')throw Error('Desktop smoke check failed: '+JSON.stringify(result));
       console.log('AI_RELAY_DESKTOP_SMOKE '+JSON.stringify(result));app.quit();

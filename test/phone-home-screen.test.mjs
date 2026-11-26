@@ -22,7 +22,7 @@ function page({ agent = IPHONE, remote = true, installed = false, stored = {} } 
     node: element, button: (text, handler, cls) => Object.assign(element('button', cls, text), { click: handler }),
     attempt: work => Promise.resolve().then(work), toast() {}, drawSheet() {}, closeSheet() { context.sheetView = null; },
     openSheet(title, build) { const body = element('body'); build(body); context.sheetView = { title }; context.sheet.open = true; sheets.push({ title, body }); },
-    moveToAnotherBrowser: async () => { moves.push(true); }, setTimeout: fn => fn(),
+    copyConnection: async () => { moves.push(true); }, setTimeout: fn => fn(),
   };
   const controls = vm.runInNewContext(`${section}\n({ offerHomeScreen, homeScreenAvailable, homeScreenSheet })`, context);
   const text = body => JSON.stringify(body, (key, value) => key === 'click' ? undefined : value);
@@ -36,10 +36,10 @@ test('after pairing, an iPhone gets Add to Home Screen once, with a way to bring
   assert.equal(p.sheets.length, 1);
   assert.equal(p.sheets[0].title, 'Add to Home Screen');
   assert.match(p.text(p.sheets[0].body), /Share menu.*Add to Home Screen/);
-  assert.match(p.text(p.sheets[0].body), /If it asks for a code/);
+  assert.match(p.text(p.sheets[0].body), /If it isn’t connected yet.*tap Paste there/);
   const [code] = p.buttons(p.sheets[0].body);
-  assert.equal(code.text, 'Get a code');
-  await code.click(); assert.equal(p.moves.length, 1, 'Get a code makes a one-use transfer for the new icon.');
+  assert.equal(code.text, 'Copy connection');
+  await code.click(); assert.equal(p.moves.length, 1, 'Copy connection makes a one-use transfer for the new icon.');
   p.context.sheet.open = false;
   p.controls.offerHomeScreen(); assert.equal(p.sheets.length, 1, 'It is offered once per page load.');
   const again = page({ stored: Object.fromEntries(p.storage) });

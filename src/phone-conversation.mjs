@@ -21,6 +21,8 @@ export function phoneConversation(view, limit = PHONE_MESSAGES) {
   const step = messages.findLast(message => message.role === 'activity');
   return {
     ...pick(view, FIELDS),
+    // A message or queued message is sent with the execution settings' revision it was written against (#203).
+    executionRevision: view.execution?.defaults?.revision ?? 0,
     activeRun: view.activeRun ? pick(view.activeRun, RUN_FIELDS) : null,
     lastRun: view.lastRun ? pick(view.lastRun, RUN_FIELDS) : null,
     delta,

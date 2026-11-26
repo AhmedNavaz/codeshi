@@ -47,7 +47,23 @@
       form.hidden = false; $('phone-pair-intro').hidden = false;
     } finally { button.disabled = false; }
   }
-  form.addEventListener('submit', event => { event.preventDefault(); pair($('phone-code').value.replace(/\s/g, '')); });
+  // Move to another browser copies a one-use link from the paired browser. Its secret, or the 8-digit code under it,
+  // is what this page sends (#201). A code from the computer's QR dialog works the same way.
+  const connection = text => String(text || '').match(/#pair=([a-f0-9]{64})(?![a-f0-9])/)?.[1] || (/^[0-9]{8}$/.test(String(text || '').replace(/[\s-]/g, '')) ? String(text).replace(/[\s-]/g, '') : null);
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const typed = $('phone-code').value.trim();
+    pair(connection(typed) || typed.replace(/\s/g, ''));
+  });
+  $('phone-pair-paste').addEventListener('click', () => {
+    const fallback = message => { note.textContent = message; $('phone-code').focus(); };
+    if (!navigator.clipboard?.readText) return fallback('Press and hold the code box, choose Paste, then Connect.');
+    navigator.clipboard.readText().then(text => {
+      const found = connection(text.trim());
+      if (found) pair(found);
+      else fallback('Nothing to paste. In the browser that’s connected, choose Move to another browser, then come back and tap Paste. Or type the code.');
+    }, () => fallback('Paste wasn’t allowed. Press and hold the code box, choose Paste, then Connect.'));
+  });
   // A scanned code goes straight on to the computer's approval: there's nothing to type, and the computer still has to allow it.
   if (secret) { form.hidden = true; $('phone-pair-intro').hidden = true; pair(secret); }
   setInterval(check, 2000); document.addEventListener('visibilitychange', check);

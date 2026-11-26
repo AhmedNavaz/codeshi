@@ -28,6 +28,7 @@ test('checkpoint routes list history, enforce the workspace lease and restore on
   const history = await call('/api/checkpoints');
   assert.equal(history.status, 200);
   assert.equal(history.value.entries[0].provider, 'codex');
+  assert.equal(history.value.entries[0].canUndo, true);
   const target = history.value.entries[0].checkpoints[0].target;
   const preview = await call('/api/checkpoints/preview', 'POST', { target });
   assert.equal(fs.readFileSync(path.join(workspace, 'file.txt'), 'utf8'), 'after\n');

@@ -55,6 +55,21 @@ contextBridge.exposeInMainWorld('relayDesktop', Object.freeze({
   // is picked there comes back here. closePreviews closes a workspace's windows showing the given addresses.
   openPreview: input => ipcRenderer.invoke('relay:preview:open', input),
   closePreviews: input => ipcRenderer.invoke('relay:preview:close', input),
+  // Workspaces in windows of their own (#203). claimWorkspace({ projectId, initial }) asks before this window shows a
+  // workspace and answers { elsewhere: true } when another window shows it, which then comes forward instead.
+  claimWorkspace: input => ipcRenderer.invoke('relay:window:claim', input),
+  workspacesElsewhere: () => ipcRenderer.invoke('relay:window:elsewhere'),
+  openWorkspaceWindow: projectId => ipcRenderer.invoke('relay:window:open', { projectId }),
+  // The system menu for a workspace in the sidebar; answers 'window', 'settings', 'pin', 'unpin' or null. pin says whether
+  // it is pinned beside this window's workspace as a companion lane ('pinned'), can be ('can'), or neither (null).
+  workspaceMenu: (projectId, { pin = null } = {}) => ipcRenderer.invoke('relay:window:menu', { projectId, pin }),
+  // The workspaces pinned in this window's companion lanes, so a notification for one opens there (#203).
+  setLanes: projectIds => ipcRenderer.send('relay:window:lanes', { projectIds }),
+  onWindowsChanged: callback => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('relay:windows-changed', listener);
+    return () => ipcRenderer.removeListener('relay:windows-changed', listener);
+  },
   onPreviewPick: callback => {
     const listener = (_event, pick) => callback(pick);
     ipcRenderer.on('relay:preview-pick', listener);

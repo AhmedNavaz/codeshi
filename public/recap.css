@@ -1,23 +1,116 @@
-/* "While you were away": a panel under the search bar when you come back. */
-.recap { position: fixed; z-index: 60; top: 52px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100vw - 32px)); max-height: min(70vh, 560px); overflow: auto; padding: 0 0 8px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
+/* "While you were away": a panel under the search bar when you come back (#22, #202).
+   Two quiet lists: what is waiting on you, one row each with its action, then what each workspace's agents came to,
+   marked with the agent's own icon. Colour is kept for what it means: amber waits, red failed, green ready. */
+.recap { position: fixed; z-index: 60; top: 52px; left: 50%; transform: translateX(-50%); width: min(540px, calc(100vw - 32px)); max-height: min(78vh, 660px); overflow: auto; padding: 0 0 12px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
 .recap[hidden] { display: none; }
-.recap-heading { position: sticky; top: 0; display: flex; align-items: center; gap: 10px; padding: 12px 8px 8px 16px; background: var(--overlay-bg); }
+.recap-heading { position: sticky; z-index: 1; top: 0; display: flex; align-items: center; gap: 8px; padding: 12px 8px 10px 16px; border-bottom: 1px solid var(--border); background: var(--overlay-bg); }
 .recap-heading h2 { margin: 0; color: var(--text-strong); font-size: 13px; font-weight: 600; }
-.recap-span { color: var(--faint); font-size: 11.5px; }
-.recap-heading .text-link { margin-left: auto; font-size: 12px; }
+.recap-span { color: var(--faint); font-size: 12px; }
+.recap-read { margin-left: auto; height: 24px; padding: 0 8px; border: 0; border-radius: 5px; background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+.recap-read:hover { background: var(--hover); color: var(--text-strong); }
+.recap-read:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+.recap-span + .recap-close { margin-left: auto; }
 .recap-close::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon-close) center / contain no-repeat; mask: var(--icon-close) center / contain no-repeat; }
-.recap-body { display: grid; gap: 10px; padding: 0 16px 6px; }
+.recap-body { display: grid; gap: 18px; padding: 14px 16px 0; }
 .recap-empty { margin: 0; color: var(--muted); font-size: 12.5px; }
-.recap-name { padding: 0; border: 0; background: none; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
-.recap-name:hover { color: var(--link); }
-.recap-workspace ul { display: grid; gap: 5px; margin: 6px 0 0; padding: 0; list-style: none; }
-.recap-workspace li { position: relative; display: grid; gap: 1px; padding-left: 18px; font-size: 12.5px; line-height: 1.45; }
-.recap-workspace li::before { content: ""; position: absolute; left: 2px; top: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
-.recap-workspace li[data-kind="done"]::before { background: var(--success); }
-.recap-workspace li[data-kind="stopped"]::before, .recap-workspace li[data-kind="approval"]::before { background: var(--warning); }
-.recap-workspace li[data-kind="working"]::before { background: var(--link); }
-.recap-workspace li { border-radius: 4px; transition: background .15s; }
+
+.recap-section ul { display: grid; margin: 0; padding: 0; list-style: none; }
+.recap-section h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; color: var(--muted); font-size: 11.5px; font-weight: 600; }
+.recap-count { min-width: 16px; padding: 0 5px; border-radius: 8px; background: var(--warning-bg); color: var(--warning); font-size: 10.5px; font-weight: 600; line-height: 16px; text-align: center; }
+
+/* Waiting on you: one list, a row per item, the action at the end. */
+.recap-needlist, .recap-more-needs > ul { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; }
+.recap-more-needs > ul { margin-top: 6px !important; }
+.recap-need { display: flex; align-items: stretch; }
+.recap-need + .recap-need { border-top: 1px solid var(--border); }
+.recap-need-open { display: flex; flex: 1; align-items: center; gap: 10px; min-width: 0; padding: 8px 10px 8px 12px; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.recap-need-open:hover { background: var(--hover); }
+.recap-need-open:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+.recap-icon { flex: none; width: 16px; height: 16px; color: var(--warning); background: currentColor; -webkit-mask: var(--icon-access) center / contain no-repeat; mask: var(--icon-access) center / contain no-repeat; }
+.recap-need[data-kind="question"] .recap-icon { -webkit-mask-image: var(--icon-question); mask-image: var(--icon-question); }
+.recap-need[data-kind="handoff"] .recap-icon { -webkit-mask-image: var(--icon-swap); mask-image: var(--icon-swap); }
+.recap-need[data-kind="plan"] .recap-icon { -webkit-mask-image: var(--icon-tasks); mask-image: var(--icon-tasks); }
+.recap-need[data-kind="check"] .recap-icon, .recap-need[data-kind="retry"] .recap-icon { -webkit-mask-image: var(--icon-alert); mask-image: var(--icon-alert); }
+.recap-need[data-kind="review"] .recap-icon { -webkit-mask-image: var(--icon-branch); mask-image: var(--icon-branch); }
+.recap-need[data-kind="card"] .recap-icon { -webkit-mask-image: var(--icon-check); mask-image: var(--icon-check); }
+.recap-need[data-kind="held"] .recap-icon { -webkit-mask-image: var(--icon-play); mask-image: var(--icon-play); }
+.recap-need[data-kind="limit"] .recap-icon, .recap-need[data-kind="schedule"] .recap-icon { -webkit-mask-image: var(--icon-clock); mask-image: var(--icon-clock); }
+.recap-need[data-tone="bad"] .recap-icon, .recap-need[data-tone="bad"] .recap-status { color: var(--danger); }
+.recap-need[data-tone="good"] .recap-icon, .recap-need[data-tone="good"] .recap-status { color: var(--success); }
+.recap-need[data-tone="warn"] .recap-status { color: var(--warning); }
+.recap-need[data-tone="quiet"] .recap-icon { color: var(--faint); }
+.recap-need-words { display: grid; flex: 1; min-width: 0; gap: 2px; }
+.recap-need .recap-text { overflow: hidden; color: var(--text-strong); font-size: 13px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.recap-need code { padding: 0 4px; border-radius: 4px; background: var(--chip-bg); font-family: var(--mono); font-size: 12px; }
+.recap-sub { display: flex; gap: 6px; min-width: 0; font-size: 11.5px; line-height: 1.35; white-space: nowrap; }
+.recap-status { flex: none; color: var(--muted); font-weight: 500; }
+.recap-where { overflow: hidden; color: var(--faint); text-overflow: ellipsis; }
+.recap-where::before { content: "·"; margin-right: 6px; }
+.recap-act { flex: none; height: 24px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text-strong); font-size: 12px; line-height: 22px; }
+.recap-need-open:hover .recap-act { border-color: transparent; background: var(--accent); color: #fff; }
+.recap-need-pin { flex: none; width: 30px; padding: 0; border: 0; border-left: 1px solid var(--border); background: transparent; color: var(--faint); cursor: pointer; }
+.recap-need-pin::before { content: ""; display: block; width: 13px; height: 13px; margin: auto; background: currentColor; -webkit-mask: var(--icon-pin) center / contain no-repeat; mask: var(--icon-pin) center / contain no-repeat; }
+.recap-need-pin:hover:enabled { background: var(--hover); color: var(--text); }
+.recap-need-pin:disabled { color: var(--accent); cursor: default; }
+.recap-need-pin:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+
+/* What happened: each workspace, then what its agents said, behind their own mark. */
+.recap-done { display: grid; gap: 14px; }
+.recap-done > h3 { margin-bottom: -6px; }
+.recap-ws-head { display: flex; align-items: center; gap: 7px; height: 26px; }
+.recap-folder { flex: none; width: 14px; height: 14px; background: var(--faint); -webkit-mask: var(--icon-folder) center / contain no-repeat; mask: var(--icon-folder) center / contain no-repeat; }
+.recap-name { color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
+.recap-meta { overflow: hidden; min-width: 0; color: var(--faint); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.recap-open { flex: none; margin-left: auto; height: 22px; padding: 0 8px; border: 0; border-radius: 5px; background: none; color: var(--muted); font: inherit; font-size: 11.5px; cursor: pointer; }
+.recap-open:hover { background: var(--hover); color: var(--text-strong); }
+.recap-open:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+.recap-ws > ul, .recap-ws > .recap-more > ul { margin-left: 6px; padding-left: 10px; border-left: 1px solid var(--border); }
+
+.recap-line { display: flex; gap: 9px; align-items: flex-start; padding: 5px 6px; border-radius: 6px; font-size: 12.5px; line-height: 1.5; list-style: none; }
+.recap-line::-webkit-details-marker { display: none; }
+.recap-mark { flex: none; width: 14px; height: 14px; margin-top: 2px; color: var(--faint); background: currentColor; -webkit-mask: var(--icon-agent) center / contain no-repeat; mask: var(--icon-agent) center / contain no-repeat; }
+.recap-mark[data-mark="codex"] { color: var(--codex); -webkit-mask-image: var(--icon-codex); mask-image: var(--icon-codex); }
+.recap-mark[data-mark="claude"] { color: var(--claude); -webkit-mask-image: var(--icon-claude); mask-image: var(--icon-claude); }
+.recap-mark[data-mark="gemini"] { color: var(--gemini); -webkit-mask-image: var(--icon-gemini); mask-image: var(--icon-gemini); }
+.recap-mark[data-mark="plan"] { color: var(--link); -webkit-mask-image: var(--icon-tasks); mask-image: var(--icon-tasks); }
+.recap-mark[data-mark="working"] { color: var(--link); -webkit-mask-image: var(--icon-working); mask-image: var(--icon-working); animation: recap-spin 1.2s linear infinite; }
+@keyframes recap-spin { to { transform: rotate(360deg); } }
+.recap-words { min-width: 0; }
+.recap-outcome .recap-text { display: -webkit-box; overflow: hidden; color: var(--text); overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.recap-fold[open] .recap-text { display: block; }
+.recap-state { color: var(--warning); font-weight: 500; }
+.recap-outcome[data-kind="working"] .recap-state { color: var(--link); }
+.recap-outcome[data-kind="stopped"] .recap-text, .recap-outcome[data-kind="waiting"] .recap-text { color: var(--muted); }
+.recap-fold > summary { cursor: pointer; }
+.recap-fold > summary:hover { background: var(--hover); }
+.recap-fold > summary:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+.recap-detail { margin: 0; padding: 0 6px 6px 29px; color: var(--faint); font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
+
+/* A plan: its goal and how far it got, a segment per step. */
+.recap-plan { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
+.recap-plan .recap-text { color: var(--text-strong); font-weight: 500; }
+.recap-progress { display: inline-flex; gap: 2px; }
+.recap-progress i { width: 14px; height: 4px; border-radius: 2px; background: var(--border-strong); }
+.recap-progress i.done { background: var(--link); }
+.recap-step { color: var(--faint); font-size: 11.5px; }
+
+.recap-more > summary { width: fit-content; margin: 2px 0 0 6px; padding: 2px 6px; border-radius: 5px; color: var(--muted); font-size: 11.5px; cursor: pointer; list-style: none; }
+.recap-more > summary::-webkit-details-marker { display: none; }
+.recap-more > summary:hover { background: var(--hover); color: var(--text-strong); }
+.recap-more[open] > summary { display: none; }
+.recap-more-needs > summary { margin: 6px 0 0; }
+.recap-ws > .recap-more > summary { margin-left: 16px; }
+.recap-done > .recap-more > ul { gap: 14px; }
+
 /* The row being read aloud. */
-.recap-workspace li.reading { background: var(--hover); box-shadow: -3px 0 0 var(--bg), 3px 0 0 var(--bg), inset 2px 0 0 var(--link); }
-.recap-text { color: var(--text); overflow-wrap: anywhere; }
-.recap-detail { color: var(--faint); font-size: 11.5px; }
+.recap .recap-row.reading > .recap-need-open, .recap .recap-row.reading .recap-line { background: var(--hover); box-shadow: inset 2px 0 0 var(--link); }
+
+/* The pill in the search bar after a short break. */
+.recap-pill { position: absolute; right: 4px; display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 6px 0 7px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); color: var(--muted); font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.recap-pill[hidden] { display: none; }
+.recap-pill:hover { border-color: var(--border-strong); color: var(--text); }
+.recap-pill:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+.recap-pill-icon { width: 11px; height: 11px; background: currentColor; -webkit-mask: var(--icon-clock) center / contain no-repeat; mask: var(--icon-clock) center / contain no-repeat; }
+.recap-pill-count { min-width: 14px; padding: 0 4px; border-radius: 7px; background: var(--warning-bg); color: var(--warning); font-size: 10px; line-height: 14px; text-align: center; }
+.command-bar.has-recap-pill input { padding-right: 96px; }
+@media (prefers-reduced-motion: reduce) { .recap-mark[data-mark="working"] { animation: none; } }

@@ -16,6 +16,8 @@ test('remote phone progress refreshes chat without repeatedly loading projects, 
     setTimeout: (fn, ms) => { const id = ++nextTimer; timers.set(id, { fn, ms }); return id; }, clearTimeout: id => timers.delete(id), setInterval: fn => intervals.push(fn),
     api: async path => { requests.push(path); return path === '/api/projects' ? [{ id: 'p' }] : { id: 'c', status, delta: true, messages: [], pendingApprovals: approvals }; },
     phoneFetch: async () => ({ status: 200, ok: true }), $: () => ({}), render() {}, offerHomeScreen() {}, recall: () => null,
+    // Needs you (#201) is tested in phone-needs-you.test.mjs; here it only has to be there.
+    loadNeeds() {}, scheduleNeeds() {},
     L: { mergeMessages: (current, update) => update.messages },
   };
   const controls = vm.runInNewContext(`${refresh}\n({connect, refreshProjects, scheduleConversation, scheduleProjects})`, context);

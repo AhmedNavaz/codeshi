@@ -90,7 +90,7 @@ function realXterm(){
 }
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,cliUI=false,terminalUI=false,tabsUI=commandsUI||terminalUI||cliUI,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,experimentalUI=false,splitUI=false,questionsUI=false,alertsUI=false,githubUI=false,boardUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true,locale=null}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,cliUI=false,terminalUI=false,tabsUI=commandsUI||terminalUI||cliUI,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,experimentalUI=false,splitUI=false,questionsUI=false,alertsUI=false,githubUI=false,boardUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true,locale=null,address=null,windows=null,lanesUI=false,lanesWidth=1400}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[],copiedTexts=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences),handoffPreferences={threshold:90,automatic:false};
   window.innerWidth=1280;window.innerHeight=800;
@@ -271,13 +271,16 @@ async function browser({existing=true,available=true,providers={},authenticated=
   class Range{setStart(node,offset){this.startContainer=node;this.startOffset=offset;}setEnd(node,offset){this.endContainer=node;this.endOffset=offset;}getBoundingClientRect(){return this.startContainer.parentNode.getBoundingClientRect();}}
   class Highlight extends Set{constructor(...ranges){super(ranges);this.priority=0;}}
   const highlights=new Map();document.createRange=()=>new Range();
-  const context=vm.createContext({document,window,fetch,console,CSS:{highlights},Highlight,crypto:{randomUUID},CustomEvent:UIEvent,Event:UIEvent,EventSource:class extends Events{constructor(url){super();this.url=url;eventSources.push(this);}close(){this.closed=true;}},requestAnimationFrame:fn=>fn(),setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),setInterval:()=>++timerId,clearInterval:id=>timers.delete(id),cancelAnimationFrame:()=>{},localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value))},URL,Blob,FileReader,navigator:{clipboard:{writeText:async text=>{copiedTexts.push(String(text));}}}});
+  const windowClaims=[],windowOpens=[],windowListeners=[],addressChanges=[],windowMenus=[],laneReports=[];
+  const context=vm.createContext({...(address!==null?{location:{search:address},history:{state:null,replaceState:(_state,_title,url)=>addressChanges.push(url)}}:{}),URLSearchParams,document,window,fetch,console,CSS:{highlights},Highlight,crypto:{randomUUID},CustomEvent:UIEvent,Event:UIEvent,EventSource:class extends Events{constructor(url){super();this.url=url;eventSources.push(this);}close(){this.closed=true;}},requestAnimationFrame:fn=>fn(),setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),setInterval:()=>++timerId,clearInterval:id=>timers.delete(id),cancelAnimationFrame:()=>{},localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value))},URL,Blob,FileReader,navigator:{clipboard:{writeText:async text=>{copiedTexts.push(String(text));}}}});
   // The page's words (#27): English unless a test loads a catalog, as /locale.js does.
   vm.runInContext(fs.readFileSync(new URL('../public/i18n.js',import.meta.url),'utf8'),context,{filename:'public/i18n.js'});if(locale)window.codeshiText.load(locale);
   if(theme)vm.runInContext(fs.readFileSync(new URL('../public/theme.js',import.meta.url),'utf8'),context,{filename:'public/theme.js'});
   vm.runInContext(fs.readFileSync(new URL('../public/routing.js',import.meta.url),'utf8'),context,{filename:'public/routing.js'});
   if(experimentalUI)vm.runInContext(fs.readFileSync(new URL('../public/experimental.js',import.meta.url),'utf8'),context,{filename:'public/experimental.js'});
   const previewOpens=[],previewListeners=[],previewCloses=[];
+  // Workspaces in windows of their own (#203): windows.elsewhere lists those another window shows.
+  if(windows)window.relayDesktop=Object.assign(window.relayDesktop||{},{claimWorkspace:async input=>{windowClaims.push(clone(input));return !input.initial&&windows.elsewhere?.includes(input.projectId)?{elsewhere:true}:{here:true};},workspacesElsewhere:async()=>[...(windows.elsewhere||[])],openWorkspaceWindow:async id=>{windowOpens.push(id);return {opened:true};},workspaceMenu:async(id,extra)=>{windowMenus.push([id,clone(extra||{})]);return windows.menu??null;},setLanes:ids=>{laneReports.push([...ids]);},onWindowsChanged:callback=>{windowListeners.push(callback);return ()=>{};}});
   if(previewUI)window.relayDesktop=Object.assign(window.relayDesktop||{},{openPreview:async input=>{previewOpens.push(clone(input));return true;},closePreviews:async input=>{previewCloses.push(clone(input));return input.urls.length;},onPreviewPick:callback=>{previewListeners.push(callback);return ()=>{};}});
   vm.runInContext(fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),context,{filename:'public/app.js'});if(questionsUI)vm.runInContext(fs.readFileSync(new URL('../public/questions.js',import.meta.url),'utf8'),context,{filename:'public/questions.js'});if(workbench){vm.runInContext(fs.readFileSync(new URL('../public/settings.js',import.meta.url),'utf8'),context,{filename:'public/settings.js'});vm.runInContext(fs.readFileSync(new URL('../public/workbench.js',import.meta.url),'utf8'),context,{filename:'public/workbench.js'});}
   if(tabsUI||commandsUI)for(const name of ['main-tabs','sidebar-tools'])vm.runInContext(fs.readFileSync(new URL(`../public/${name}.js`,import.meta.url),'utf8'),context,{filename:`public/${name}.js`});
@@ -331,6 +334,8 @@ async function browser({existing=true,available=true,providers={},authenticated=
   // A test can move the page's clock, for behaviour that depends on how long you were away.
   if(clock){context.clock=clock;vm.runInContext('Date.now=()=>clock()',context);}
   if(recapUI)vm.runInContext(fs.readFileSync(new URL('../public/recap.js',import.meta.url),'utf8'),context,{filename:'public/recap.js'});
+  // Companion lanes (#203) sit in the chat's column, which the fake DOM gives a width.
+  if(lanesUI){const main=document.createElement('main');main.className='main-panel';main.getBoundingClientRect=()=>({width:lanesWidth,height:900});document.body.append(main);for(const name of ['phone-logic','companion-lanes'])vm.runInContext(fs.readFileSync(new URL(`../public/${name}.js`,import.meta.url),'utf8'),context,{filename:`public/${name}.js`});}
   if(theme)document.dispatchEvent(new UIEvent('DOMContentLoaded'));
   await flush();assert.equal(window.relayUI.getState().ready,!empty);assert.equal(window.relayUI.getState().loading,false);
   const $=id=>document.getElementById(id);const fire=(id,type)=>$(id).dispatchEvent(new UIEvent(type));const findButton=text=>document.querySelectorAll('button').find(button=>button.textContent===text);
@@ -338,7 +343,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   const switchProject=async id=>{$('project-select').value=id;fire('project-select','change');await flush();};
   const textNodes=node=>node.nodeType===3?[node]:node.childNodes.flatMap(textNodes);
   const rangeText=range=>{const nodes=textNodes($('messages')),first=nodes.indexOf(range.startContainer),last=nodes.indexOf(range.endContainer);return nodes.slice(first,last+1).map((node,index)=>node.data.slice(index===0?range.startOffset:0,first+index===last?range.endOffset:undefined)).join('');};
-  return {quitting:()=>quitListeners.forEach(listener=>listener()),previewOpens,previewCloses,pickInPreview:pick=>Promise.all(previewListeners.map(listener=>listener(pick))),runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,copiedTexts,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,spoken,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
+  return {windowClaims,windowOpens,addressChanges,windowMenus,laneReports,windowsChanged:state=>windowListeners.forEach(listener=>listener(state)),quitting:()=>quitListeners.forEach(listener=>listener()),previewOpens,previewCloses,pickInPreview:pick=>Promise.all(previewListeners.map(listener=>listener(pick))),runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,copiedTexts,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,spoken,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
 }
 
 test('late same-project refresh cannot restore superseded provider/access settings',async()=>{
@@ -4600,65 +4605,82 @@ test('dictation keeps what was said before a pause when the recognizer starts ag
   assert.equal(ui.$('voice-status').dataset.state, '');
 });
 
-test('the recap says what tasks and plans did while you were away (#88)', async () => {
+test('the recap leads with what needs you, then what tasks and plans came to (#88, #202)', async () => {
   const ui = await browser({ voiceUI: true, recapUI: true });
   const step = (number, status, extra = {}) => ({ id: `s${number}`, number, status, approvals: 0, files: [], fileCount: 0, unmerged: false, check: null, ...extra });
   const recap = { since: '2026-11-02T10:00:00.000Z', until: '2026-11-02T10:24:00.000Z', workspaces: [{ projectId: 'project-one', name: 'Shop', runs: [], approvals: 0, waiting: null, queue: null, handoff: null, uncommitted: null,
     plans: [{ id: 'p1', goal: 'Checkout rewrite', done: 2, total: 4, steps: [step(1, 'complete', { check: 'failed', unmerged: true }), step(3, 'running')] }],
-    tasks: [{ id: 't1', title: 'Fix the header', folder: 'web', provider: 'claude', status: 'complete', approvals: 1, files: ['src/header.css'], fileCount: 1, unmerged: true, check: null }] }] };
+    tasks: [{ id: 't1', title: 'Fix the header', folder: 'web', provider: 'claude', status: 'complete', approvals: 1, files: ['src/header.css'], fileCount: 1, unmerged: true, check: null, outcome: 'Moved the header into a sticky bar' }] }],
+    needsYou: [{ id: 'a', kind: 'approval', projectId: 'project-one', workspace: 'Shop', taskId: 't1', title: 'Fix the header', detail: 'Run npm test' }, { id: 'l', kind: 'limit', projectId: 'project-one', workspace: 'Shop', taskId: null, title: 'Workspace chat', detail: 'Waiting for Codex’s usage limit to reset?' }] };
   assert.deepEqual([...ui.window.relayRecap.spoken(recap).map(part => part.text)], [
     'While you were away.',
-    'In Shop: The plan “Checkout rewrite” has 2 of 4 steps done, step 3 working, tests failed on step 1, so the steps after it wait, 1 step ready for you to merge.',
-    'Claude finished the task “Fix the header” in web, changed header.css, ready for you to merge, 1 approval waiting.',
-  ]);
+    '2 things need you.',
+    'Shop · Fix the header: Run npm test.',
+    'Shop: Waiting for Codex’s usage limit to reset?',
+    'In Shop: The plan “Checkout rewrite” has 2 of 4 steps done.',
+    'Claude: Moved the header into a sticky bar.',
+  ], 'Needs you comes first; a task says what it came to in the agent’s words, and approvals aren’t repeated under it.');
 });
 
-test('coming back after two minutes or more shows what ran, changed and is waiting, and can read it aloud', async () => {
+test('coming back: a pill after a short break, the recap after a long one when something needs you or happened elsewhere (#202)', async () => {
   let now = Date.parse('2026-11-02T10:00:00.000Z');
   const ui = await browser({ voiceUI: true, recapUI: true, moreProjects: true, clock: () => now });
   const asked = [];
-  let recap = { since: '2026-11-02T10:00:00.000Z', until: '2026-11-02T10:24:00.000Z', workspaces: [
+  const elsewhere = { since: '2026-11-02T10:00:00.000Z', until: '2026-11-02T10:24:00.000Z', needsYou: [
+    { id: 'n1', kind: 'approval', projectId: 'project-two', workspace: 'Other workspace', taskId: null, title: 'Workspace chat', detail: 'Run npm test' }], workspaces: [
     { projectId: 'project-two', name: 'Other workspace', runs: [
-      { id: 'r1', provider: 'claude', prompt: 'Add promo codes to checkout', status: 'complete', startedAt: '2026-11-02T10:02:00.000Z', endedAt: '2026-11-02T10:05:00.000Z', files: ['src/checkout.js', 'src/promo.js'], fileCount: 2, commands: 1, tests: true },
-      { id: 'r2', provider: 'codex', prompt: 'Refactor the payment module', status: 'incomplete', errorCategory: 'quota', startedAt: '2026-11-02T10:06:00.000Z', endedAt: '2026-11-02T10:20:00.000Z', files: [], fileCount: 0, commands: 0, tests: false }],
-      approvals: 1, waiting: { providers: ['claude', 'codex'], resetsAt: null }, queue: null, handoff: null, uncommitted: 3 }] };
+      { id: 'r1', provider: 'claude', prompt: 'Add promo codes to checkout', status: 'complete', startedAt: '2026-11-02T10:02:00.000Z', endedAt: '2026-11-02T10:05:00.000Z', files: ['src/checkout.js', 'src/promo.js'], fileCount: 2, commands: 1, tests: true, outcome: 'Added promo codes to checkout; the tests pass.' },
+      { id: 'r2', provider: 'codex', prompt: 'Refactor the payment module', status: 'incomplete', errorCategory: 'quota', startedAt: '2026-11-02T10:06:00.000Z', endedAt: '2026-11-02T10:20:00.000Z', files: [], fileCount: 0, commands: 0, tests: false, outcome: '' }],
+      approvals: 1, waiting: null, queue: null, handoff: null, uncommitted: 3 }] };
+  let recap = elsewhere;
   ui.setIntercept((request, next) => { if (request.path === '/api/recap') { asked.push(request.params.since); return response(recap); } return next(); });
   const leave = () => ui.window.dispatchEvent(new UIEvent('blur')), come = async () => { ui.window.dispatchEvent(new UIEvent('focus')); await flush(); };
+  const panel = ui.$('recap'), pill = ui.$('recap-pill');
+  assert.equal(ui.state().projectId, 'project-one');
 
   leave(); now += 90 * 1000; await come();
-  assert.deepEqual(asked, [], 'A short break shows nothing.');
+  assert.deepEqual(asked, [], 'A break of a minute or so shows nothing.');
+  leave(); now += 5 * 60 * 1000; await come();
+  assert.equal(asked.length, 1);
+  assert.deepEqual([panel.hidden, pill.hidden], [true, false], 'A short break offers the recap as a pill instead of opening it.');
+  assert.match(pill.getAttribute('aria-label'), /1 thing needs you/);
+  pill.click(); await flush();
+  assert.deepEqual([panel.hidden, pill.hidden], [false, true], 'The pill opens the recap.');
+  ui.document.dispatchEvent(new UIEvent('keydown', { key: 'Escape' }));
+
   leave(); const left = now; now += 24 * 60 * 1000; await come();
-  assert.deepEqual(asked, [new Date(left).toISOString()]);
-  const panel = ui.$('recap');
-  assert.equal(panel.hidden, false);
-  assert.equal(panel.querySelector('.recap-name').textContent, 'Other workspace');
-  assert.deepEqual(panel.querySelectorAll('li').map(item => [item.dataset.kind, item.textContent]), [
-    ['done', 'Claude finished “Add promo codes to checkout”3 min · changed checkout.js and promo.js · ran the tests'],
-    ['stopped', 'Codex stopped at a usage limit on “Refactor the payment module”14 min'],
-    ['approval', '1 approval waiting for you'],
-    ['waiting', 'Waiting for a usage limit to reset; it continues with Claude and Codex'],
-    ['git', '3 uncommitted changes in Git'],
-  ]);
+  assert.equal(asked.at(-1), new Date(left).toISOString());
+  assert.deepEqual([panel.hidden, pill.hidden], [false, true], 'After 15 minutes it opens by itself.');
+  assert.deepEqual(panel.querySelectorAll('.recap-row').map(item => [item.dataset.kind, item.querySelector('.recap-text').textContent]), [
+    ['approval', 'Run npm test'],
+    ['stopped', 'Stopped at a usage limit on “Refactor the payment module”'],
+    ['done', 'Added promo codes to checkout; the tests pass.'],
+  ], 'Needs you first, then outcomes in the agent’s words, newest first.');
+  assert.equal(panel.querySelectorAll('.recap-detail').at(-1).textContent, 'Asked “Add promo codes to checkout” · 3 min · changed checkout.js and promo.js · ran the tests', 'How it got there folds beneath.');
+  assert.equal(panel.querySelector('.recap-meta').textContent, '1 finished · 1 stopped · 3 uncommitted changes');
   const spokenBefore = ui.spoken.length;
   ui.findButton('Read aloud').click();
-  const utterances = ui.window.speechSynthesis.utterances.slice(spokenBefore), rows = panel.querySelectorAll('li'), reading = () => rows.map((row, index) => row.classList.contains('reading') ? index : -1).filter(index => index >= 0);
-  utterances[1].onstart(); assert.deepEqual(reading(), [0], 'The row being read is highlighted.');
-  utterances[0].onend(); assert.equal(ui.$('voice-status').dataset.state, 'speaking');
-  utterances[2].onstart(); assert.deepEqual(reading(), [1], 'The highlight moves as reading continues.');
-  utterances.at(-1).onstart(); utterances.at(-1).onend(); assert.deepEqual(reading(), [], 'It clears when reading ends.'); assert.equal(ui.$('voice-status').dataset.state, '');
-  ui.findButton('Read aloud').click(); const again = ui.window.speechSynthesis.utterances.slice(-utterances.length);
-  again[1].onstart(); assert.deepEqual(reading(), [0]);
-  ui.$('voice-status-actions').children[0].click(); assert.deepEqual(reading(), [], 'It clears when reading is stopped.');
-  again[2].onstart(); assert.deepEqual(reading(), [], 'What was cancelled can not bring it back.');
-  assert.equal(ui.spoken.slice(spokenBefore, spokenBefore + utterances.length).join(' '), 'While you were away. In Other workspace: Claude finished “Add promo codes to checkout”, 3 min, changed checkout.js and promo.js, ran the tests. Codex stopped at a usage limit on “Refactor the payment module”, 14 min. 1 approval waiting for you. Waiting for a usage limit to reset; it continues with Claude and Codex.');
-  panel.querySelector('.recap-name').click(); await flush();
+  const utterances = ui.window.speechSynthesis.utterances.slice(spokenBefore), rows = panel.querySelectorAll('.recap-row'), reading = () => rows.map((row, index) => row.classList.contains('reading') ? index : -1).filter(index => index >= 0);
+  utterances[2].onstart(); assert.deepEqual(reading(), [0], 'The row being read is highlighted.');
+  utterances[3].onstart(); assert.deepEqual(reading(), [1], 'The highlight moves as reading continues.');
+  utterances.at(-1).onstart(); utterances.at(-1).onend(); assert.deepEqual(reading(), [], 'It clears when reading ends.');
+  assert.equal(ui.spoken.slice(spokenBefore, spokenBefore + utterances.length).join(' '), 'While you were away. 1 thing needs you. Other workspace: Run npm test. In Other workspace: Codex: Stopped at a usage limit on “Refactor the payment module”. Claude: Added promo codes to checkout; the tests pass.');
+  panel.querySelector('.recap-open').click(); await flush();
   assert.equal(panel.hidden, true);
   assert.equal(ui.state().projectId, 'project-two', 'A workspace in the recap opens with one click.');
 
+  // Only the conversation on screen moved on: a short break shows nothing, a long one only the pill.
+  recap = { ...elsewhere, needsYou: [] };
+  leave(); now += 5 * 60 * 1000; await come();
+  assert.deepEqual([panel.hidden, pill.hidden], [true, true], 'What is on screen already shows there.');
+  leave(); now += 30 * 60 * 1000; await come();
+  assert.deepEqual([panel.hidden, pill.hidden], [true, false]);
+  pill.click(); await flush(); ui.document.dispatchEvent(new UIEvent('keydown', { key: 'Escape' }));
+
   // Nothing happened: nothing shows; asked for, it says so.
-  recap = { ...recap, workspaces: [] };
-  leave(); now += 10 * 60 * 1000; await come();
-  assert.equal(panel.hidden, true);
+  recap = { ...elsewhere, needsYou: [], workspaces: [] };
+  leave(); now += 30 * 60 * 1000; await come();
+  assert.deepEqual([panel.hidden, pill.hidden], [true, true]);
   await ui.window.relayRecap.open(); await flush();
   assert.equal(panel.hidden, false);
   assert.match(panel.textContent, /Nothing ran while you were away/);
@@ -4667,7 +4689,7 @@ test('coming back after two minutes or more shows what ran, changed and is waiti
 });
 
 
-test('a run that changed files offers Undo, previews every file before anything changes, then offers Redo', async () => {
+test('a message whose run changed files offers Undo beside Copy with Undo changes, Redo, and Undo and remove from chat (#196)', async () => {
   const ui = await browser({ rewindUI: true }), runId = '11111111-1111-4111-8111-111111111111', undoId = '22222222-2222-4222-8222-222222222222';
   const reply = (data, status = 200) => ({ ok: status < 300, status, text: async () => JSON.stringify(data), json: async () => clone(data) });
   const conversation = ui.canonical.get('project-one');
@@ -4677,11 +4699,18 @@ test('a run that changed files offers Undo, previews every file before anything 
     { folderId: 'f', folder: 'web', path: 'src/checkout.js', action: 'restore', diff: '@@ -1,2 +1,2 @@\n line one\n-PROMO\n+line two' },
     { folderId: 'f', folder: 'web', path: 'src/promo.js', action: 'remove', diff: '@@ -1 +0,0 @@\n-export const promo = 1;' },
     { folderId: 'f', folder: 'web', path: 'notes.md', action: 'conflict', reason: 'Changed since the run in the same places.' }] };
+  const beforePreview = { target: { kind: 'checkpoint', id: runId, phase: 'before' }, runId, provider: 'codex', prompt: 'Add promo codes', checkpointAt: new Date().toISOString(), checkpointKind: 'run', digest: 'digest-before', unchanged: 0,
+    conversation: { available: true, count: 2, returnsPrompt: true },
+    files: [{ folderId: 'f', folder: 'web', path: 'src/checkout.js', action: 'restore', diff: '@@ -1 +1 @@\n-PROMO\n+before' }] };
   let applies = 0, stale = true;
   ui.setIntercept((request, next) => {
-    if (request.path === '/api/checkpoints/preview') return reply(request.body.target.kind === 'rewind' ? { ...preview, target: request.body.target, digest: 'digest-redo', files: preview.files.slice(0, 2).map(file => ({ ...file, action: 'restore' })) } : preview);
+    if (request.path === '/api/checkpoints/preview') {
+      if (request.body.target.kind === 'checkpoint') return reply(beforePreview);
+      return reply(request.body.target.kind === 'rewind' ? { ...preview, target: request.body.target, digest: 'digest-redo', files: preview.files.slice(0, 2).map(file => ({ ...file, action: 'restore' })) } : preview);
+    }
     if (request.path === '/api/checkpoints/apply') {
       applies++;
+      if (request.body.target.kind === 'checkpoint') return reply({ id: 'restore-1', conversation: { id: 'fold-1', count: 2, prompt: 'Add promo codes' } });
       if (stale) { stale = false; return reply({ error: 'Files changed since you reviewed this. Review the changes again.' }, 409); }
       conversation.checkpoints = { [runId]: { files: 3, undone: undoId } };
       conversation.messages.push({ id: 'n1', role: 'system', text: 'Undid Codex’s changes from “Add promo codes”.' });
@@ -4690,13 +4719,23 @@ test('a run that changed files offers Undo, previews every file before anything 
     return next();
   });
   await ui.window.relayUI.refresh(); await flush();
-  const line = () => ui.document.querySelectorAll('.run-checkpoint')[0];
-  assert.equal(line().dataset.runId, runId);
-  assert.match(line().textContent, /3 files changed/);
-  line().querySelectorAll('button')[0].click(); await flush();
+  assert.equal(ui.document.querySelectorAll('.run-checkpoint').length, 0, 'Run activity no longer repeats the Undo line.');
+  const undoButton = () => ui.$('message-u1').querySelector('.message-undo');
+  assert.equal(undoButton().dataset.runId, runId);
+  assert.equal(undoButton().textContent, 'Undo');
+  assert.ok(ui.$('message-u1').querySelector('.message-copy'), 'Undo sits beside Copy on the user message.');
+
+  undoButton().click(); await flush();
+  assert.equal(ui.$('message-undo-menu').matches(':popover-open'), true);
+  assert.equal(undoButton().getAttribute('aria-expanded'), 'true');
+  assert.match(ui.$('message-undo-changes').textContent, /Undo changes/);
+  assert.match(ui.$('message-undo-remove').textContent, /Undo and remove from chat/);
+
+  ui.$('message-undo-changes').click(); await flush();
+  assert.equal(ui.$('message-undo-menu').matches(':popover-open'), false);
   assert.equal(ui.$('rewind-dialog').open, true);
   assert.equal(ui.$('rewind-title').textContent, 'Undo Codex’s changes?');
-  assert.equal(ui.$('rewind-summary').textContent, 'This restores 1 file and removes 1 file it added. 1 file stays as it is.');
+  assert.equal(ui.$('rewind-summary').textContent, 'This restores 1 file and removes 1 file it added. Only this run’s changes are undone; later edits and the conversation stay. 1 file stays as it is.');
   assert.equal(ui.document.querySelectorAll('.rewind-file').length, 2);
   assert.match(ui.$('rewind-files').textContent, /notes\.md.*Changed since the run in the same places/);
   assert.equal(applies, 0, 'Opening the preview changes nothing.');
@@ -4710,19 +4749,34 @@ test('a run that changed files offers Undo, previews every file before anything 
   const apply = ui.requests.filter(request => request.path === '/api/checkpoints/apply').at(-1);
   assert.deepEqual(apply.body, { target: { kind: 'run', id: runId }, digest: 'digest-1' }); assert.equal(apply.projectId, 'project-one');
   assert.equal(ui.$('rewind-dialog').open, false);
-  assert.match(line().textContent, /Changes undone/);
-  assert.equal(line().querySelectorAll('button')[0].textContent, 'Redo');
+  assert.equal(undoButton().textContent, 'Redo');
 
-  line().querySelectorAll('button')[0].click(); await flush();
+  // Clicking Redo offers Redo changes and Undo and remove from chat.
+  undoButton().click(); await flush();
+  assert.match(ui.$('message-undo-changes').textContent, /Redo changes/);
+  ui.$('message-undo-changes').click(); await flush();
   assert.deepEqual(ui.requests.filter(request => request.path === '/api/checkpoints/preview').at(-1).body, { target: { kind: 'rewind', id: undoId } });
   assert.equal(ui.$('rewind-title').textContent, 'Redo Codex’s changes?');
   assert.equal(ui.$('rewind-summary').textContent, 'This puts back 2 files as the run left them.');
   ui.$('cancel-rewind').click(); assert.equal(ui.$('rewind-dialog').open, false);
 
+  // Undo and remove from chat pre-selects conversation rewind, clarifies the full-restore scope, and returns the prompt.
+  undoButton().click(); await flush();
+  ui.$('message-undo-remove').click(); await flush();
+  assert.deepEqual(ui.requests.filter(request => request.path === '/api/checkpoints/preview').at(-1).body, { target: { kind: 'checkpoint', id: runId, phase: 'before' } });
+  assert.equal(ui.$('rewind-title').textContent, 'Undo and remove from chat?');
+  assert.equal(ui.$('rewind-conversation-check').checked, true);
+  assert.match(ui.$('rewind-summary').textContent, /returns 1 file to how they were before this message, replacing later edits.*folded away.*prompt goes back in the message box/);
+  assert.equal(ui.$('confirm-rewind').textContent, 'Undo and remove');
+  ui.$('message-input').value = '';
+  ui.$('confirm-rewind').click(); await flush();
+  assert.deepEqual(ui.requests.filter(request => request.path === '/api/checkpoints/apply').at(-1).body, { target: { kind: 'checkpoint', id: runId, phase: 'before' }, digest: 'digest-before', conversation: { count: 2 } });
+  assert.equal(ui.$('message-input').value, 'Add promo codes');
+
   // While a run works, nothing can be undone.
   Object.assign(conversation, { status: 'running', activeRun: { id: 'other-run', provider: 'codex' } });
   await ui.window.relayUI.refresh(); await flush();
-  assert.equal(line().querySelectorAll('button')[0].disabled, true);
+  assert.equal(undoButton().disabled, true);
 });
 
 test('Timeline lists saved points, previews a restore, and closes it when switching to a parallel task', async () => {
@@ -4739,8 +4793,8 @@ test('Timeline lists saved points, previews a restore, and closes it when switch
     return next();
   });
   ui.window.relayUI.showSidePanel('timeline'); await flush();
-  assert.match(ui.$('timeline-content').textContent, /Claude.*Add the promo field.*1 file changed/);
-  const points = () => ui.$('timeline-content').querySelectorAll('button');
+  assert.match(ui.$('timeline-content').textContent, /Add the promo field.*Claude · 1 file changed/);
+  const points = () => ui.$('timeline-content').querySelector('.timeline-details').querySelector('.checkpoint-actions').querySelectorAll('button');
   assert.equal(points()[0].disabled, true);
   assert.equal(points()[0].title, entry.checkpoints[0].reason);
   points()[1].click(); await flush();
@@ -4763,9 +4817,11 @@ test('Timeline lists saved points, previews a restore, and closes it when switch
   assert.equal(points()[1].disabled, true, 'Restores wait for active work.');
 });
 
-test('Timeline shows commits among checkpoints, says who made them, and opens one read only', async () => {
+test('Timeline groups one row per message, nests checkpoints, restores and commits in details, and opens commits read only (#196)', async () => {
   const ui = await browser({ insights: true, agentsUI: true, rewindUI: true, moreProjects: true });
-  const run = { id: 'run-one', kind: 'run', provider: 'claude', prompt: 'Add the promo field', at: '2026-11-06T08:00:00Z', status: 'complete', files: 1, checkpoints: [] };
+  const run = { id: 'run-one', kind: 'run', messageId: 'm1', provider: 'claude', prompt: 'Add the promo field', at: '2026-11-06T08:00:00Z', status: 'complete', files: 1, canUndo: true,
+    checkpoints: [{ target: { kind: 'checkpoint', id: 'run-one', phase: 'before' }, available: true }, { target: { kind: 'checkpoint', id: 'run-one', phase: 'after' }, available: true }] };
+  const handoff = { id: 'run-two', kind: 'run', messageId: 'm1', provider: 'codex', prompt: 'Add the promo field', at: '2026-11-06T08:02:00Z', status: 'complete', files: 2, canUndo: true, beforeRunId: 'run-one', checkpoints: [] };
   const hash = 'a'.repeat(40);
   const commits = [
     { id: 'commit:frontend:' + hash, kind: 'commit', folderId: 'frontend', folder: 'Frontend', hash, shortHash: 'aaaaaaa', author: 'Ahmed', at: '2026-11-06T08:05:00Z', subject: 'Add the promo field', by: 'panel', url: 'https://github.com/o/r/commit/' + hash },
@@ -4774,19 +4830,32 @@ test('Timeline shows commits among checkpoints, says who made them, and opens on
   ];
   const opened = [];
   ui.setIntercept((request, next) => {
-    if (request.path === '/api/checkpoints') return response({ entries: [commits[0], commits[1], run, commits[2]] });
+    if (request.path === '/api/checkpoints') return response({ entries: [commits[0], handoff, commits[1], run, commits[2]] });
     if (request.path === '/api/checkpoints/commit') { opened.push(request.params); return response({ folderId: 'frontend', folder: 'Frontend', hash, shortHash: 'aaaaaaa', subject: 'Add the promo field', body: 'Shown at checkout.', totalFiles: 2, merge: false, files: [{ path: 'promo.js', status: 'added', diff: '@@ -0,0 +1 @@\n+export const promo = true;' }, { path: 'logo.png', status: 'modified', binary: true, diff: null }] }); }
     if (request.path.startsWith('/api/checkpoints/')) throw new Error(`Opening a commit must not touch checkpoints: ${request.path}`);
     return next();
   });
   ui.window.relayUI.showSidePanel('timeline'); await flush();
   const cards = [...ui.$('timeline-content').querySelectorAll('article')];
-  assert.deepEqual(cards.map(card => card.classList.contains('commit-entry')), [true, true, false, true], 'Commits sit among checkpoints in time order.');
-  assert.match(cards[0].textContent, /Commit.*Add the promo field.*aaaaaaa.*From the Git panel/);
-  assert.match(cards[1].textContent, /During Claude’s run/);
-  assert.match(cards[3].textContent, /By Sam/);
-  assert.equal(cards[0].querySelectorAll('.checkpoint-actions button').length, 0, 'A commit offers no restore.');
-  cards[0].querySelector('.commit-subject').click(); await flush();
+  assert.equal(cards.length, 1, 'One message row groups both runs of the same prompt.');
+  assert.match(cards[0].textContent, /Add the promo field.*Claude → Codex · 3 files changed/);
+  assert.ok(cards[0].querySelector('.timeline-undo'), 'Each changed message row offers Undo directly.');
+  const details = cards[0].querySelector('.timeline-details');
+  assert.match(details.querySelector('summary').textContent, /2 checkpoints · 2 commits/);
+  const nestedCommits = [...details.querySelectorAll('.timeline-commit-row')];
+  assert.equal(nestedCommits.length, 2);
+  assert.match(nestedCommits[0].textContent, /Commit.*Add the promo field.*aaaaaaa.*From the Git panel/);
+  assert.match(nestedCommits[1].textContent, /During Claude’s run/);
+  const earlier = ui.$('timeline-content').querySelector('.timeline-earlier-commits');
+  assert.match(earlier.querySelector('summary').textContent, /Earlier commits \(1\)/);
+  assert.match(earlier.textContent, /Earlier work.*By Sam/);
+
+  // Timeline Undo button opens the same two-choice menu as message Undo.
+  cards[0].querySelector('.timeline-undo').click(); await flush();
+  assert.equal(ui.$('message-undo-menu').matches(':popover-open'), true);
+  ui.$('message-undo-menu').hidePopover();
+
+  nestedCommits[0].querySelector('.commit-subject').click(); await flush();
   assert.deepEqual([opened[0].folderId, opened[0].hash], ['frontend', hash]);
   assert.equal(ui.$('commit-dialog').open, true);
   assert.equal(ui.$('commit-title').textContent, 'Add the promo field');
@@ -5505,7 +5574,9 @@ test('Accounts connects through the provider flow, preserves a draft and shows f
 
 // Flow mode (#107): just the chat, with plain-language cards either side that read what Codeshi already recorded.
 const flowBrowser = options => browser({ insights: true, agentsUI: true, layoutUI: true, rewindUI: true, flowUI: true, modelPickerUI: true, ...options });
-const flowText = (ui, id) => ui.$(`flow-card-${id}`).textContent.replace(/\s+/g, ' ');
+// A card's details are drawn in sections (#194); a name that isn't a section is a whole card.
+const flowText = (ui, id) => ui.$(`flow-card-${({ plans: 'usage', next: 'activity', happened: 'activity', files: 'changes' })[id] || id}`).textContent.replace(/\s+/g, ' ');
+const flowButton = (ui, id, text) => ui.$(`flow-card-${id}`).querySelectorAll('button').find(button => button.textContent === text);
 
 const reviewFixture = () => {
   const service = { id: 'web', name: 'Web app', description: 'Review the frontend', folderId: 'frontend', folderName: 'Frontend', directory: '', command: 'npm run dev', kind: 'service', dependsOn: [], timeoutMs: 60000, ready: { url: 'http://localhost:3000/' } };
@@ -5520,11 +5591,16 @@ test('Flow project review prepares in the background without changing or sending
     return next();
   });
   ui.window.relayFlow.enter(); await flush();
+  assert.equal(ui.$('flow-card-app').hidden, false); assert.ok(flowButton(ui, 'app', 'Set up with an agent'));
+  Object.assign(ui.canonical.get('project-one'), { runs: [{ id: 'run-1', provider: 'codex', startedAt: '2026-11-06T09:00:00.000Z', status: 'complete' }], checkpoints: { 'run-1': { files: 2 } } });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('flow-card-app').hidden, false); assert.ok(flowButton(ui, 'app', 'Set up with an agent'));
   ui.$('message-input').value = 'Keep my feedback';
-  ui.$('flow-card-preview').querySelectorAll('button').find(button => button.textContent === 'Prepare with agent').click(); await flush();
+  flowButton(ui, 'app', 'Set up with an agent').click(); await flush();
   assert.equal(ui.$('message-input').value, 'Keep my feedback');
-  assert.match(flowText(ui, 'preview'), /Preparing your project review/);
-  assert.equal(ui.$('flow-card-preview').querySelectorAll('button').find(button => button.textContent === 'Preparing…').disabled, true);
+  assert.match(flowText(ui, 'app'), /Preparing how to run your app/);
+  assert.equal(ui.$('flow-card-app').querySelector('.flow-panel-state').textContent, 'Preparing');
+  assert.equal(flowButton(ui, 'app', 'Set up with an agent'), undefined, 'Preparation cannot be submitted twice.');
   assert.equal(ui.$('message-input').disabled, false, 'The main composer stays available.');
   const request = ui.requests.find(request => request.path.endsWith('/review/prepare'));
   assert.equal(request.projectId, 'project-one'); assert.equal(request.body.change, '');
@@ -5533,11 +5609,11 @@ test('Flow project review prepares in the background without changing or sending
   assert.equal(ui.requests.filter(request => request.path.endsWith('/review/start')).length, 0);
   value = { ...value, preparation: { id: 'prepare-one', status: 'running' } };
   held.resolve(response(value, 202)); await flush();
-  assert.match(flowText(ui, 'preview'), /Preparing your project review/);
+  assert.match(flowText(ui, 'app'), /Preparing how to run your app/);
   value = { ...reviewFixture(), preparation: { id: 'prepare-one', status: 'ready' } };
   await ui.window.relayProjectReview.refresh(); await flush();
-  assert.doesNotMatch(flowText(ui, 'preview'), /Preparing your project review/);
-  assert.match(flowText(ui, 'preview'), /Web app/);
+  assert.doesNotMatch(flowText(ui, 'app'), /Preparing how to run your app/);
+  assert.match(flowText(ui, 'app'), /Web app/);
   assert.equal(ui.$('message-input').value, 'Keep my feedback');
 });
 
@@ -5555,12 +5631,14 @@ test('Flow project review launches a bound profile, opens point-and-tell and pre
     return next();
   });
   await ui.window.relayProjectReview.refresh(); ui.window.relayFlow.enter(); await flush();
-  const cardButton = text => ui.$('flow-card-preview').querySelectorAll('button').find(button => button.textContent === text);
+  const cardButton = text => ui.$('flow-card-app').querySelectorAll('button').find(button => button.textContent === text);
+  assert.ok(cardButton('Start')); assert.equal(ui.$('flow-peek').hidden, true);
   cardButton('Launch map').click(); await flush();
   assert.equal(ui.$('project-review-dialog').open, true); assert.match(ui.$('project-review-dialog').textContent, /npm run dev/);
   ui.$('project-review-dialog').querySelectorAll('button').find(button => button.textContent === 'Start review').click(); await flush();
-  assert.match(flowText(ui, 'preview'), /Ready/); assert.equal(cardButton('Start review').disabled, true);
-  cardButton('Open preview & point').click(); await flush();
+  assert.match(flowText(ui, 'app'), /Ready/); assert.equal(cardButton('Start'), undefined); assert.ok(cardButton('Stop'));
+  assert.equal(ui.$('flow-card-app').querySelector('.flow-panel-state').textContent, 'Running'); assert.match(flowText(ui, 'app'), /:3000/);
+  cardButton('Open preview').click(); await flush();
   assert.deepEqual(ui.previewOpens, [{ projectId: 'project-one', url: 'http://localhost:3000/' }]);
   await ui.pickInPreview({ projectId: 'project-one', text: 'Change this heading', image: null }); await flush();
   assert.match(ui.$('message-input').value, /Change this heading/);
@@ -5570,7 +5648,7 @@ test('Flow project review launches a bound profile, opens point-and-tell and pre
   assert.equal(ui.$('project-review-dialog').open, false);
   assert.match(ui.$('message-input').value, /Change this heading/); assert.doesNotMatch(ui.$('message-input').value, /Requested change/);
   assert.equal(ui.requests.find(request => request.path.endsWith('/review/prepare')).body.change, 'Start a local database before the API');
-  cardButton('Stop review').click(); await flush(); assert.equal(cardButton('Stop review'), undefined);
+  cardButton('Stop').click(); await flush(); assert.equal(cardButton('Stop'), undefined);
   assert.deepEqual(ui.previewCloses, [{ projectId: 'project-one', urls: ['http://localhost:3000/'] }], 'Stopping the review closes its preview window.');
 });
 
@@ -5592,15 +5670,15 @@ test('Flow project review opens each interface in its own preview window, and St
     return next();
   });
   await ui.window.relayProjectReview.refresh(); ui.window.relayFlow.enter(); await flush();
-  const cardButton = text => ui.$('flow-card-preview').querySelectorAll('button').find(button => button.textContent === text);
-  assert.match(cardButton('Open Admin dashboard').title, /its own preview window, beside the others/);
+  const cardButton = text => ui.$('flow-card-app').querySelectorAll('button').find(button => button.textContent === text);
+  assert.match(cardButton('Open Admin dashboard').title, /preview window and point at what to change/);
   cardButton('Open Web app').click(); await flush();
   cardButton('Open Admin dashboard').click(); await flush();
   assert.deepEqual(ui.previewOpens, [{ projectId: 'project-one', url: 'http://localhost:3000/' }, { projectId: 'project-one', url: 'http://localhost:4201/' }], 'Each interface is opened by its own address, for a window of its own.');
   assert.deepEqual(ui.previewCloses, [], 'Opening one closes nothing.');
   await ui.pickInPreview({ projectId: 'project-one', text: 'In the preview of Admin dashboard (localhost:4201/users), the “Save” button (#save): ', image: null }); await flush();
   assert.match(ui.$('message-input').value, /^In the preview of Admin dashboard \(localhost:4201\/users\)/, 'A pick from either window goes into the message box.');
-  cardButton('Stop review').click(); await flush();
+  cardButton('Stop').click(); await flush();
   assert.deepEqual(ui.previewCloses, [{ projectId: 'project-one', urls: ['http://localhost:3000/', 'http://localhost:4201/', 'http://127.0.0.1:8000/'] }], 'The review’s own services close; the port another app holds is left alone.');
 });
 
@@ -5612,13 +5690,13 @@ test('Flow project review ignores a stale workspace response and retains Stop wi
   });
   const refreshing = ui.window.relayProjectReview.refresh(); await flush(); assert.equal(waiting, true);
   await ui.switchProject('project-two'); held.resolve(); await refreshing; await flush();
-  ui.window.relayFlow.enter(); await flush(); assert.doesNotMatch(flowText(ui, 'preview'), /Development/);
+  ui.window.relayFlow.enter(); await flush(); assert.doesNotMatch(flowText(ui, 'app'), /Development/);
   value.error = 'The map is invalid'; value.plan = null;
   value.run = { id: 'existing', revision: 'old', profileId: 'dev', status: 'starting', steps: [] };
   ui.setIntercept((request, next) => request.path === '/api/commands/review' ? response(value) : next());
   await ui.window.relayProjectReview.refresh(); await flush();
-  assert.match(flowText(ui, 'preview'), /map is invalid/);
-  assert.equal(ui.$('flow-card-preview').querySelectorAll('button').find(button => button.textContent === 'Stop review').disabled, false);
+  assert.match(flowText(ui, 'app'), /map is invalid/);
+  assert.equal(ui.$('flow-card-app').querySelectorAll('button').find(button => button.textContent === 'Stop').disabled, false);
 });
 
 test('limits stay out of the message box, in Normal and Flow, and stay in Plan usage', async () => {
@@ -5681,6 +5759,31 @@ test('Flow retains observed native compaction counts after the run completes', a
   assert.match(ui.$('flow-status').title, /2 native compaction notifications/);
 });
 
+test('Flow panels keep their places, mark attention, and expose actions without a card dialog (#194)', async () => {
+  const ui = await flowBrowser({ usage: { claude: { available: true, windows: [{ id: 'five', label: '5-hour', usedPercent: 80, resetsAt: new Date(Date.now() + 2 * 3600e3).toISOString() }] } } });
+  const chat = ui.canonical.get('project-one'); let review = { plan: null, run: null, error: null };
+  ui.setIntercept((request, next) => request.path === '/api/commands/review' ? response(review) : next());
+  await ui.window.relayUI.refreshAccounts(); ui.window.relayFlow.enter(); await flush();
+  const sides = () => ['left', 'right'].map(side => ui.$(`flow-${side}-cards`).children.map(card => card.dataset.card));
+  assert.deepEqual(sides(), [['activity', 'tasks', 'usage'], ['changes', 'app']]);
+  const usage = ui.$('flow-card-usage').querySelectorAll('.flow-plan').find(item => item.dataset.provider === 'claude');
+  assert.equal(usage.dataset.level, 'low'); assert.match(usage.textContent, /20% left/);
+  usage.querySelector('button').click(); await flush(); assert.equal(ui.$('usage-dialog').matches(':popover-open'), true); ui.$('usage-dialog').hidePopover();
+  const steps = ['Read', 'Plan', 'Write', 'Test', 'Ship'].map((text, index) => ({ text, status: index < 2 ? 'done' : index === 2 ? 'active' : 'pending' }));
+  Object.assign(chat, { status: 'running', activeRun: { id: 'run-2', provider: 'claude', phase: 'responding', startedAt: new Date(Date.now() - 125000).toISOString(), plan: { steps } }, runs: [{ id: 'run-1', provider: 'codex', startedAt: '2026-11-06T09:00:00.000Z', status: 'complete' }], checkpoints: { 'run-1': { files: 5 } } });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('flow-card-activity').dataset.state, 'live');
+  assert.match(flowText(ui, 'activity'), /Claude.*Writing.*2 of 5/);
+  assert.equal(ui.$('flow-card-activity').querySelectorAll('.flow-step').find(step => step.classList.contains('active')).getAttribute('aria-current'), 'step');
+  assert.equal(flowButton(ui, 'changes', 'Undo last run').disabled, true);
+  assert.equal(ui.$('flow-peek').hidden, true, 'Panel contents are available without opening a card.');
+  review = { plan: null, run: null, error: null, preparation: { id: 'prepare-1', status: 'running', approvals: 1 } };
+  await ui.window.relayProjectReview.refresh(); await flush();
+  assert.equal(ui.$('flow-card-app').dataset.state, 'attention'); assert.match(flowText(ui, 'app'), /Needs you/);
+  assert.deepEqual(sides(), [['activity', 'tasks', 'usage'], ['changes', 'app']], 'Attention does not move the wide panels away from their places.');
+  assert.equal(ui.$('flow-space').querySelector('.flow-layout-option'), null, 'Flow has one layout.');
+});
+
 test('Flow’s workspace name opens the workspace menu, and switching keeps Flow on for the other workspace', async () => {
   const ui = await flowBrowser({ moreProjects: true, wide: true }), shell = ui.$('app-shell');
   assert.equal(ui.window.relayUI.commands.flow(), true); await flush();
@@ -5734,11 +5837,14 @@ test('Flow mode shows only the chat and its cards, and leaving brings the layout
   assert.equal(ui.window.relayUI.commands.flow(), true); await flush();
   assert.equal(shell.classList.contains('flow'), true);
   assert.equal(ui.$('agents-panel').hidden, true, 'The side panel steps aside.');
-  assert.equal(ui.$('flow-left').hidden, false); assert.equal(ui.$('flow-right').hidden, false); assert.equal(ui.$('flow-strip').hidden, true, 'A wide window keeps the cards at the sides.');
-  assert.deepEqual(ui.$('flow-left').children.map(card => card.id), ['flow-left-cards', 'flow-space'], 'The cards scroll in their own area and the utility section stays at the foot.');
-  assert.deepEqual(ui.$('flow-left').children[0].children.map(card => card.id), ['flow-card-next', 'flow-card-tasks', 'flow-card-plans']);
-  assert.deepEqual(ui.$('flow-right').children.map(card => card.id), ['flow-right-cards', 'flow-connect']);
-  assert.deepEqual(ui.$('flow-right').children[0].children.map(card => card.id), ['flow-card-working', 'flow-card-happened', 'flow-card-files', 'flow-card-preview']);
+  // Flow has one layout, with agents, tasks and usage on the left and files and app on the right.
+  assert.equal(shell.classList.contains('flow-cards-left'), false); assert.equal(ui.window.relayFlow.layout, undefined);
+  assert.equal(ui.$('flow-left').hidden, false); assert.equal(ui.$('flow-right').hidden, false); assert.equal(ui.$('flow-strip').hidden, true, 'A wide window keeps the cards at the side.');
+  assert.deepEqual(ui.$('flow-left').children.map(card => card.id), ['flow-status', 'flow-left-cards', 'flow-space'], 'The status line heads the rail, the cards scroll under it and the utility sections stay at the foot.');
+  assert.deepEqual(ui.$('flow-left-cards').children.map(card => card.id), ['flow-card-activity', 'flow-card-tasks', 'flow-card-usage']);
+  assert.deepEqual(ui.$('flow-right-cards').children.map(card => card.id), ['flow-card-changes', 'flow-card-app']);
+  assert.equal(ui.$('flow-left-cards').children.every(card => !card.hidden), true, 'Idle panels keep their labels and direct controls.');
+  assert.equal(ui.$('flow-status').parentNode.id, 'flow-left');
   assert.equal(ui.$('toggle-flow').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('flow-status').hidden, false); assert.equal(ui.$('flow-status-text').textContent, 'Ready');
   assert.equal(ui.$('toggle-flow-label').textContent, 'Flow'); assert.equal(ui.$('view-normal').getAttribute('aria-pressed'), 'false', 'One switch says which view is in use.'); assert.equal(ui.$('flow-brand').hidden, false); assert.equal(ui.$('flow-brand-workspace').textContent, 'Example workspace');
   assert.equal(ui.$('message-input').placeholder, 'What should we build next?', 'Flow has its own voice in the message box.');
@@ -5749,6 +5855,7 @@ test('Flow mode shows only the chat and its cards, and leaving brings the layout
   assert.equal(shell.classList.contains('flow'), false);
   assert.equal(ui.$('agents-panel').hidden, false, 'The side panel that was open comes back.');
   assert.equal(ui.$('flow-left').hidden, true); assert.equal(ui.$('flow-status').hidden, true); assert.equal(ui.$('toggle-sidebar').disabled, false);
+  assert.equal(shell.classList.contains('flow-cards-left'), false, 'Normal keeps its own layout.');
   assert.equal(ui.$('toggle-flow-label').textContent, 'Flow'); assert.equal(ui.$('flow-brand').hidden, true); assert.equal(ui.$('message-input').placeholder, 'Describe the task or ask a question…');
   assert.equal(ui.menuStates.at(-1).flow, false); assert.equal(ui.storage.get('throughline:flow'), 'off');
   // The choice is remembered per browser, and a workspace is needed for it.
@@ -5760,78 +5867,49 @@ test('Flow mode shows only the chat and its cards, and leaving brings the layout
 
 test('Flow plan usage follows the selected model and keeps weekly exhaustion visible beside five-hour allowance', async () => {
   const ui = await flowBrowser({ wide: true, usage: { claude: { available: true, windows: [
-    { id: 'five', label: '5-hour', usedPercent: 20 },
-    { id: 'weekly', label: 'Weekly', usedPercent: 40 },
-    { id: 'opus', label: 'Weekly · Opus', scope: 'opus', usedPercent: 100 },
+    { id: 'five', label: '5-hour', usedPercent: 20 }, { id: 'weekly', label: 'Weekly', usedPercent: 40 }, { id: 'opus', label: 'Weekly · Opus', scope: 'opus', usedPercent: 100 },
   ] } } });
-  await ui.window.relayUI.refreshAccounts(); await flush();
-  await ui.window.relayUI.selectAgentModel('claude', 'claude-sonnet'); await flush();
+  await ui.window.relayUI.refreshAccounts(); await ui.window.relayUI.selectAgentModel('claude', 'claude-sonnet');
   ui.window.relayFlow.enter(); await flush();
-  assert.match(flowText(ui, 'plans'), /Claude\s*80% left\s*5-hour limit\s*Weekly · 60% left/);
-  assert.doesNotMatch(flowText(ui, 'plans'), /Opus/, 'Another model’s weekly limit does not replace this model’s allowance.');
-  const chat = ui.canonical.get('project-one'); chat.models.claude = chat.model = 'claude-opus';
-  await ui.window.relayUI.refresh(); await flush();
-  assert.match(flowText(ui, 'plans'), /Claude\s*80% left\s*5-hour limit\s*Weekly · Opus · 0% left/);
-  const claude = ui.$('flow-card-plans').querySelectorAll('.flow-plan').find(row => row.dataset.provider === 'claude');
-  assert.equal(claude.querySelector('.flow-plan-secondary').dataset.level, 'critical');
-  assert.match(ui.$('flow-strip').textContent, /Claude · 5-hour · 80% left · Weekly · Opus · 0% left/, 'The narrow layout also names both periods.');
+  assert.match(flowText(ui, 'usage'), /Claude\s*60% left\s*Weekly limit\s*5-hour · 80% left/);
+  assert.doesNotMatch(flowText(ui, 'usage'), /Opus/);
+  const row = () => ui.$('flow-card-usage').querySelectorAll('.flow-plan').find(item => item.dataset.provider === 'claude');
+  assert.equal(row().dataset.level, 'ok');
+  const chat = ui.canonical.get('project-one'); chat.models.claude = chat.model = 'claude-opus'; await ui.window.relayUI.refresh(); await flush();
+  assert.match(flowText(ui, 'usage'), /Claude\s*0% left\s*Weekly limit for Opus\s*5-hour · 80% left/);
+  assert.equal(row().querySelector('.flow-usage-row').dataset.level, 'critical'); assert.equal(row().dataset.level, 'critical');
+  assert.equal(ui.$('flow-card-usage').dataset.state, 'attention');
+  assert.match(ui.$('flow-strip').textContent, /Claude 0% left/);
 });
 
-test('Flow cards say in plain words how routing and handoff work, what is left, what is next and what changed', async () => {
+test('Flow Activity shows progress and queue counts, Usage shows binding limits, and Changes offers Undo directly', async () => {
   const later = hours => new Date(Date.now() + hours * 3600e3).toISOString();
   const ui = await flowBrowser({ usage: { claude: { available: true, windows: [{ id: 'five', label: '5-hour', usedPercent: 38, resetsAt: later(2) }, { id: 'week', label: 'Weekly', usedPercent: 62, resetsAt: later(50) }] }, codex: { available: true, windows: [{ id: 'week', label: 'Weekly', usedPercent: 92, resetsAt: later(30) }] } } });
-  const chat = ui.canonical.get('project-one');
-  assert.equal(ui.window.relayFlow.enter(), true); await flush();
+  const chat = ui.canonical.get('project-one'); ui.window.relayFlow.enter(); await flush();
   Object.assign(chat, { routing: { mode: 'balanced', allowApi: false, check: true }, queue: [{ id: 'q1', text: 'Then write the docs for it', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }],
-    runs: [{ id: 'run-1', provider: 'claude', startedAt: '2026-11-06T09:00:00.000Z', status: 'complete' }, { id: 'run-2', provider: 'codex', startedAt: '2026-11-06T10:00:00.000Z', status: 'complete' }],
-    checkpoints: { 'run-1': { files: 3 }, 'run-2': { files: 2, undone: 'rewind-9' } },
+    runs: [{ id: 'run-1', provider: 'claude', startedAt: '2026-11-06T09:00:00.000Z', status: 'complete' }], checkpoints: { 'run-1': { files: 3 } },
     status: 'running', activeRun: { id: 'run-3', provider: 'codex', startedAt: new Date().toISOString(), plan: { steps: [{ text: 'Read the code', status: 'done' }, { text: 'Write the tests', status: 'active' }, { text: 'Fix the bug', status: 'pending' }] } } });
   await ui.window.relayUI.refresh(); await ui.window.relayUI.refreshAccounts(); await flush();
-  assert.equal(ui.window.relayFlow.enter(), true); await flush();
-  assert.match(ui.$('flow-status-text').textContent, /^Codex is on “Write the tests” · \d/, 'The status bar says what is happening.'); assert.equal(ui.$('flow-status').dataset.live, 'true');
-  const working = flowText(ui, 'working');
-  assert.match(working, /^How it’s working now\s*Routing\s*Smart\s*Codeshi matches the model and effort to each message, spends allowance where it resets soonest, and hands off adaptively as limits approach\./, 'The mode leads, with its handoff.');
-  assert.match(working, /After a run changes files, your tests run/);
-  assert.doesNotMatch(working, /Next message/, 'Redundant Next message section is removed.');
-  assert.doesNotMatch(working, /Near a limit/, 'Handoff follows the mode; there is no separate line for it.');
-  assert.equal(ui.$('flow-card-working').querySelectorAll('[role="radio"]').every(radio => radio.disabled), true, 'The mode waits while a run works.');
-  const plans = flowText(ui, 'plans');
-  assert.match(plans, /Claude\s*62% left\s*5-hour limit · resets/, 'Five-hour allowance leads, even when the weekly allowance is lower.');
-  assert.match(plans, /Weekly · 38% left · resets/); assert.match(plans, /Codex\s*8% left\s*Weekly limit · resets/, 'A weekly-only account keeps its reported period.');
-  assert.equal(ui.$('flow-card-plans').querySelectorAll('.flow-plan').map(item => item.dataset.level).join(','), 'critical,ok', 'Codex, then Claude, as in Plan usage.');
-  const next = flowText(ui, 'next');
-  assert.match(next, /1 of 3 done\./); assert.match(next, /Read the code.*Write the tests.*Fix the bug/); assert.match(next, /Then · 1 queued message\s*Then write the docs for it/);
-  assert.equal(ui.$('flow-card-next').querySelectorAll('.flow-step').map(step => step.className).join('|'), 'flow-step done|flow-step active|flow-step pending');
-  const steps = ui.$('flow-card-next').querySelectorAll('.flow-step');
-  const activeStep = steps.find(s => s.classList.contains('active'));
-  const doneStep = steps.find(s => s.classList.contains('done'));
-  const pendingStep = steps.find(s => s.classList.contains('pending'));
-  assert.equal(activeStep.querySelector('.flow-step-working-badge'), null, 'Active step is highlighted only, with no badge');
-  assert.equal(activeStep.querySelector('.flow-step-meta'), null, 'Active step shows no agent status line');
-  assert.equal(doneStep.querySelector('.flow-step-working-badge'), null, 'Done step has no working badge');
-  assert.equal(pendingStep.querySelector('.flow-step-working-badge'), null, 'Pending step has no working badge');
-  const files = flowText(ui, 'files');
-  assert.match(files, /3 files changed, across 2 runs\./, 'Undone changes are not counted.');
-  assert.match(files, /Changes undone\s*Codex.*Redo.*3 files changed\s*Claude.*Undo/, 'Newest first.');
-  const actions = ui.$('flow-card-files').querySelectorAll('.flow-run-action');
-  assert.deepEqual(actions.map(action => [action.textContent, action.disabled]), [['Redo', true], ['Undo', true]], 'Undo waits for the run to finish.');
-  // The run ends: the cards follow, and Undo opens the same preview as the line in the chat.
+  assert.match(ui.$('flow-status-text').textContent, /^Codex is on “Write the tests” · \d/);
+  assert.match(flowText(ui, 'activity'), /Codex.*Working.*1 of 3.*Read the code.*Write the tests.*Fix the bug.*1 message queued/);
+  assert.equal(ui.$('flow-card-activity').querySelectorAll('.flow-step').map(step => step.className).join('|'), 'flow-step done|flow-step active|flow-step pending');
+  assert.match(flowText(ui, 'usage'), /Claude\s*38% left\s*Weekly limit · resets/);
+  assert.match(flowText(ui, 'usage'), /5-hour · 62% left/); assert.match(flowText(ui, 'usage'), /Codex\s*8% left/);
+  assert.equal(ui.$('flow-card-usage').dataset.state, 'attention'); assert.match(flowText(ui, 'usage'), /Flow moves new work to Claude before Codex runs out/);
+  assert.equal(flowButton(ui, 'changes', 'Undo last run').disabled, true);
   Object.assign(chat, { status: 'complete', activeRun: null, lastRun: { id: 'run-3', provider: 'codex', status: 'complete', plan: chat.activeRun.plan } });
   ui.setIntercept((request, next) => request.path === '/api/checkpoints/preview' ? response({ digest: 'd', files: [], run: {}, runId: request.body.target.id }) : next());
   await ui.window.relayUI.refresh(); await flush();
-  assert.doesNotMatch(flowText(ui, 'working'), /Next message/, 'Redundant Next message section is removed.');
-  assert.equal(ui.$('flow-status-text').textContent, 'Done'); assert.equal(ui.$('flow-status').dataset.live, 'false');
-  assert.doesNotMatch(flowText(ui, 'next'), /Read the code/, 'A finished plan is not what’s next.'); assert.match(flowText(ui, 'next'), /Then · 1 queued message/);
-  const undo = ui.$('flow-card-files').querySelectorAll('.flow-run-action').find(action => action.textContent === 'Undo');
-  assert.equal(undo.disabled, false); undo.click(); await flush();
+  assert.equal(ui.$('flow-status-text').textContent, 'Done'); assert.doesNotMatch(flowText(ui, 'activity'), /Read the code/); assert.match(flowText(ui, 'activity'), /1 message queued/);
+  assert.equal(flowButton(ui, 'changes', 'Undo last run').disabled, false); flowButton(ui, 'changes', 'Undo last run').click(); await flush();
   assert.deepEqual(ui.requests.filter(request => request.path === '/api/checkpoints/preview').map(request => request.body.target), [{ kind: 'run', id: 'run-1' }]);
 });
 
-test('Flow’s What happened card explains each recent decision with its recorded reason and outcome (#107)', async () => {
+test('Now’s details explain why Codeshi chose the agent, without an internal run history list (#107, #194)', async () => {
   const ui = await flowBrowser({ wide: true });
   const chat = ui.canonical.get('project-one');
   assert.equal(ui.window.relayFlow.enter(), true); await flush();
-  assert.match(flowText(ui, 'happened'), /Nothing yet\./, 'An empty conversation says what will appear.');
+  assert.equal(ui.$('flow-card-activity').querySelector('.flow-why'), null, 'Nothing has happened yet.');
   const at = minutes => new Date(Date.UTC(2026, 10, 11, 9, minutes)).toISOString();
   Object.assign(chat, { runs: [
     { id: 'r0', provider: 'claude', model: 'claude-haiku', relation: 'assessment', startedAt: at(0), endedAt: at(0), status: 'complete' },
@@ -5842,15 +5920,31 @@ test('Flow’s What happened card explains each recent decision with its recorde
     { id: 'r5', provider: 'gemini', startedAt: at(15), endedAt: null, status: 'running' },
   ] });
   await ui.window.relayUI.refresh(); await flush();
-  const items = ui.$('flow-card-happened').querySelectorAll('.flow-happened-item');
-  assert.deepEqual(items.map(item => item.dataset.kind), ['handoff', 'handoff', 'retry'], 'The newest three finished runs, newest first; assessments and the running run are left out.');
-  assert.match(items[0].textContent, /^Switched from Claude to Gemini.*Stopped at a usage limit.*claude quota is near/);
-  assert.match(items[1].textContent, /^Handed the task from Codex to Claude.*Stopped.*Codex weekly limit at 91%\./);
-  assert.match(items[2].textContent, /^Tests failed, so it tried again with Codex.*Tests passed/);
-  assert.equal(items[0].querySelector('.flow-happened-outcome').dataset.tone, 'bad');
-  assert.equal(ui.$('flow-card-happened').querySelectorAll('button').length, 0, 'Timeline is offered once, on Files changed.');
-  chat.runs = chat.runs.slice(0, 2); await ui.window.relayUI.refresh(); await flush();
-  assert.match(ui.$('flow-card-happened').querySelector('.flow-happened-item').textContent, /^Chose Codex.*for a complex task.*Tests failed.*A cross-folder refactor\./, 'The reason is the one recorded with the run.');
+  chat.lastRun = chat.runs[4]; await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('flow-card-activity').querySelector('.flow-why').dataset.kind, 'handoff', 'The latest decision shows.');
+  assert.match(ui.$('flow-card-activity').querySelector('.flow-why').textContent, /Took over from Claude.*claude quota is near/);
+  assert.equal(ui.$('flow-card-activity').querySelector('[data-key="earlier-runs"]'), null, 'Run history toggle is omitted.');
+  assert.equal(ui.$('flow-card-activity').querySelector('.flow-happened'), null, 'Past runs accordion is omitted.');
+  assert.equal(ui.$('flow-card-activity').querySelectorAll('.flow-happened-item').length, 0);
+  assert.equal(ui.$('flow-card-activity').querySelectorAll('button').some(button => button.textContent.includes('Run history')), false);
+  assert.equal(ui.$('flow-card-activity').querySelectorAll('button').some(button => button.textContent === 'Timeline'), false, 'Timeline is offered once, in Changes.');
+
+  // When an active run has routing, it leads with why that active run was chosen
+  chat.status = 'running';
+  chat.activeRun = { id: 'r5', provider: 'gemini', routing: { mode: 'smart', tier: 'deep', reason: 'Deep query.' }, startedAt: at(15), endedAt: null, status: 'running' };
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('flow-card-activity').querySelector('.flow-why').dataset.kind, 'route');
+  assert.match(ui.$('flow-card-activity').querySelector('.flow-why').textContent, /Chosen for a complex task.*Deep query\./);
+  assert.equal(ui.$('flow-card-activity').querySelector('[data-key="earlier-runs"]'), null);
+
+  // Manual run has no .flow-why
+  chat.status = 'running';
+  chat.activeRun = { id: 'r6', provider: 'gemini', startedAt: at(16), endedAt: null, status: 'running' };
+  chat.runs = [{ id: 'r6', provider: 'gemini', startedAt: at(16), endedAt: null, status: 'running' }];
+  delete chat.lastRun;
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('flow-card-activity').querySelector('.flow-why'), null, 'Manual run without routing has no reason banner.');
+  assert.equal(ui.$('flow-card-activity').querySelectorAll('button').length, 0);
 });
 
 test('Flow mode card polish: extra task indicators, multi-window quota glance, and active agent highlighting (#136)', async () => {
@@ -5869,33 +5963,34 @@ test('Flow mode card polish: extra task indicators, multi-window quota glance, a
   const runningTask = { id: 'task-extra-1', title: 'Refactor background indexing engine', folderName: 'core', status: 'running', conversationId: 'lane-task-1' };
   chat.parallelTasks = [runningTask];
   await ui.window.relayUI.refresh(); await flush();
-  const taskEl = ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(el => el.classList.contains('flow-task-running'));
+  const taskEl = ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(el => el.dataset.taskId === runningTask.id);
   assert(taskEl, 'Running extra task row exists in Tasks side by side');
-  assert(taskEl.querySelector('.flow-pulse-dot'), 'Running extra task has animated pulsing dot indicator');
+  assert.equal(taskEl.querySelector('.task-row').dataset.state, 'working', 'A running task uses the shared working icon.');
   assert.match(flowText(ui, 'tasks'), /Refactor background indexing engine\s*Working/, 'Extra task shows unclipped title and its Working status');
+  assert.equal(ui.$('flow-card-tasks').dataset.state, 'live');
 
   // 2. Active agent highlighting on plans card and status bar
   chat.status = 'running';
   chat.activeRun = { id: 'run-active', provider: 'claude', startedAt: new Date().toISOString() };
   await ui.window.relayUI.refresh(); await flush();
-  let claudePlan = ui.$('flow-card-plans').querySelectorAll('.flow-plan').find(row => row.dataset.provider === 'claude');
+  let claudePlan = ui.$('flow-card-usage').querySelectorAll('.flow-plan').find(row => row.dataset.provider === 'claude');
   assert(claudePlan, 'Claude plan item exists');
   assert(claudePlan.classList.contains('flow-plan-active'), 'Executing agent has .flow-plan-active');
   assert(claudePlan.querySelector('.flow-plan-working-badge'), 'Executing agent has Working badge');
   assert.equal(ui.$('flow-status').dataset.provider, 'claude', 'Status bar tracks active provider');
-  const currentWork = ui.$('flow-card-next').querySelector('.flow-current-work');
+  const currentWork = ui.$('flow-card-activity').querySelector('.flow-now');
   assert(currentWork, 'Executing task without steps renders prominent .flow-current-work card');
-  assert(currentWork.classList.contains('flow-plan-active'), 'Current work has active highlight');
+  assert.equal(currentWork.dataset.tone, 'live');
   assert.equal(currentWork.querySelector('.flow-plan-working-badge'), null, 'Current work shows no working badge');
-  assert.equal(currentWork.querySelector('.flow-task-meta'), null, 'Current work shows no agent status or timer');
+  assert.equal(currentWork.querySelector('.task-row-meta'), null, 'Current work shows no agent status or timer');
 
   // 3. Limits in overlay window instead of expanding inline in card
-  const allLimitsBtn = ui.$('flow-card-plans').querySelector('.flow-button');
+  const allLimitsBtn = claudePlan.querySelector('.flow-usage-row');
   assert(allLimitsBtn, 'All limits button exists in card');
-  assert.equal(allLimitsBtn.textContent, 'All limits');
+  assert.match(allLimitsBtn.getAttribute('aria-label'), /Show all its limits/);
   allLimitsBtn.click(); await flush();
   assert.equal(ui.$('usage-dialog').matches(':popover-open'), true, 'Opens limits overlay window');
-  assert.equal(ui.$('flow-card-plans').querySelector('.flow-plan-windows'), null, 'Cards avoid expanding multi-window lists directly in the rail');
+  assert.equal(ui.$('flow-card-usage').querySelector('.flow-plan-windows'), null, 'Cards avoid expanding multi-window lists directly in the rail');
 
   // 4. Clean status copy for idle quota stop and continuation prompt filtering
   chat.status = 'incomplete';
@@ -5907,9 +6002,6 @@ test('Flow mode card polish: extra task indicators, multi-window quota glance, a
   // Draft continuation prompt does not produce synthetic error
   chat.routing = { mode: 'smart' };
   await ui.window.relayUI.refresh(); await flush();
-  ui.$('message-input').value = 'Continue the unfinished task from this shared conversation. Inspect the current files and saved activity first, and finish what remains.';
-  ui.fire('message-input', 'input'); await flush();
-  assert.doesNotMatch(flowText(ui, 'working'), /Next message/);
 });
 
 test('Flow turns routing on with Smart by default, keeps mode changes in Agent settings, and turns routing off on leaving', async () => {
@@ -5921,16 +6013,13 @@ test('Flow turns routing on with Smart by default, keeps mode changes in Agent s
   ui.window.relayFlow.enter(); await flush();
   assert.deepEqual(chat.routing, { mode: 'smart', allowApi: false, check: false }, 'Entering Flow turns routing on, Smart at first: Flow has no manual mode.');
   assert.equal(bodies.at(-1).executionRevision, 0, 'The routing change carries the new-work policy revision.');
-  const card = ui.$('flow-card-working');
-  assert.equal(card.querySelector('.flow-mode').dataset.mode, 'smart');
-  assert.match(flowText(ui, 'working'), /Routing\s*Smart\s*Codeshi matches the model and effort to each message/);
-  assert.doesNotMatch(flowText(ui, 'working'), /Off|Normal execution/);
-  ui.findButton('Agent settings').click(); await flush();
+  // The mode is chosen and shown in the message box's model picker, not repeated on a card (#194).
+  assert.doesNotMatch(ui.$('flow-left').textContent, /Smart|Routing/);
+  ui.window.relayAgents.open(); await flush();
   assert.equal(ui.$('agents-routing').hidden, false); assert.equal(ui.$('agents-routing-note').hidden, true);
   const ultra = ui.$('routing-options').querySelectorAll('.routing-option').find(row => row.dataset.mode === 'ultra');
   ultra.click(); await flush();
   assert.deepEqual(chat.routing, { mode: 'ultra', allowApi: false, check: false }, 'Agent settings change the mode without changing billing or tests.');
-  assert.equal(card.querySelector('.flow-mode').dataset.mode, 'ultra');
   ui.$('flow-detail-close').click(); await flush();
   ui.$('model-picker-button').click(); await flush();
   assert.equal(ui.$('flow-detail').open, true, 'Clicking Routing from the chat field opens the overlay dialog.');
@@ -5995,25 +6084,25 @@ test('leaving Flow restores manual task control and repairs saved Flow authority
   }
 });
 
-test('a narrow window keeps the Flow cards out of the chat as chips, and one opens at a time', async () => {
+test('a narrow window keeps the Flow panels out of the chat as chips, and one opens at a time', async () => {
   const ui = await flowBrowser({ wide: true }), chat = ui.canonical.get('project-one');
   ui.window.relayFlow.enter(); await flush();
-  Object.assign(chat, { routing: { mode: 'ultra' }, queue: [{ id: 'q1', text: 'Next thing', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }] });
+  Object.assign(chat, { queue: [{ id: 'q1', text: 'Next thing', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }] });
   await ui.window.relayUI.refresh(); await flush();
-  ui.window.relayFlow.enter(); await flush();
-  // Every media query matches here, so the window counts as narrow: chips under the header, no side columns.
-  assert.equal(ui.$('flow-left').hidden, true); assert.equal(ui.$('flow-strip').hidden, false);
-  const chips = () => ui.$('flow-strip').querySelectorAll('.flow-chip').map(chip => chip.textContent);
-  assert.deepEqual(chips(), ['1 queued message', 'Tasks', 'Plans', 'Ultra', 'What happened', 'Files', 'Run and review your project', 'Your space'], 'Every card has a chip, with preferences available separately.');
-  ui.$('flow-strip').querySelectorAll('.flow-chip')[0].click(); await flush();
-  assert.equal(ui.$('flow-peek').hidden, false); assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-next'); assert.equal(ui.document.activeElement, ui.$('flow-peek-close'));
-  assert.equal(ui.$('flow-strip').querySelectorAll('.flow-chip')[0].getAttribute('aria-pressed'), 'true');
-  ui.$('flow-strip').querySelectorAll('.flow-chip')[2].click(); await flush();
-  assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-plans', 'Another chip swaps the open card.');
+  // Every media query matches in this fixture, so both rails become the chip strip.
+  assert.equal(ui.$('flow-left').hidden, true); assert.equal(ui.$('flow-right').hidden, true); assert.equal(ui.$('flow-strip').hidden, false);
+  assert.equal(ui.$('flow-strip').children[0].id, 'flow-status');
+  const chip = id => ui.$('flow-strip').querySelectorAll('.flow-chip').find(item => item.dataset.card === id);
+  chip('activity').click(); await flush();
+  assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-activity'); assert.equal(ui.$('flow-peek-title').textContent, 'Activity');
+  assert.ok(ui.document.activeElement === ui.$('flow-peek-close')); assert.match(ui.$('flow-peek-body').textContent, /1 message queued/);
+  assert.equal(chip('activity').getAttribute('aria-pressed'), 'true');
+  chip('app').click(); await flush();
+  assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-app');
   ui.document.dispatchEvent(new UIEvent('keydown', { key: 'Escape' })); await flush();
-  assert.equal(ui.$('flow-peek').hidden, true); assert.equal(ui.$('flow-right').children[0].children.map(card => card.id).join(','), 'flow-card-working,flow-card-happened,flow-card-files,flow-card-preview', 'The cards go back to their sides.'); assert.equal(ui.$('flow-right').children[1].id, 'flow-connect');
-  assert.equal(ui.$('flow-card-working').querySelectorAll('button').some(item => /hide/i.test(item.getAttribute('aria-label') || '')), false, 'Cards have no close button.');
-  assert.equal(ui.window.relayFlow.cards().length, 7);
+  assert.equal(ui.$('flow-peek').hidden, true); assert.equal(ui.$('flow-card-app').parentNode.id, 'flow-right-cards');
+  assert.equal(ui.window.relayFlow.cards().length, 5);
+  assert.equal(ui.document.activeElement?.dataset.card || ui.document.activeElement?.id || ui.document.activeElement?.tagName, 'app', 'Closing returns focus to the selected chip.');
 });
 
 test('Smart results are off by default, kept out of Flow, and open in a dialog from Settings › Experimental when enabled (#139, #190)', async () => {
@@ -6115,8 +6204,10 @@ test('Smart results ask for the selected workspace, and a failure is said with a
 
 test('Flow details use a dismissible sheet and restore the workbench when leaving', async () => {
   const ui = await flowBrowser();
+  Object.assign(ui.canonical.get('project-one'), { runs: [{ id: 'run-1', provider: 'codex', startedAt: '2026-11-06T09:00:00.000Z', status: 'complete' }], checkpoints: { 'run-1': { files: 2 } } });
+  await ui.window.relayUI.refresh();
   ui.window.relayFlow.enter(); await flush();
-  const openAgents = ui.$('flow-card-working').querySelectorAll('button').find(button => button.textContent === 'Agent settings');
+  const openAgents = ui.$('model-picker-button');
   openAgents.focus(); openAgents.click(); await flush();
   assert.equal(ui.$('flow-detail').open, true);
   assert.equal(ui.$('agents-panel').parentNode.id, 'flow-detail-body', 'Agents no longer opens the docked sidebar.');
@@ -6126,15 +6217,15 @@ test('Flow details use a dismissible sheet and restore the workbench when leavin
   assert.equal(ui.$('flow-detail').open, false); assert.equal(ui.$('agents-panel').hidden, true);
   assert.equal(ui.$('agents-panel').parentNode.id, 'app-shell'); assert.equal(ui.document.activeElement, openAgents);
 
-  const timeline = ui.$('flow-card-files').querySelectorAll('button').find(button => button.textContent === 'Timeline');
-  assert(timeline, 'Timeline is available even when no files have changed.');
+  const timeline = ui.$('flow-card-changes').querySelectorAll('button').find(button => /^Timeline:/.test(button.getAttribute('aria-label') || ''));
   timeline.focus(); timeline.click(); await flush();
   assert.equal(ui.$('flow-detail-title').textContent, 'Your timeline');
   assert.equal(ui.$('timeline-panel').parentNode.id, 'flow-detail-body');
-  assert(ui.requests.some(request => request.path === '/api/checkpoints'), 'The real timeline still loads its checkpoints.');
+  assert(ui.requests.some(request => request.path === '/api/checkpoints'));
   ui.$('flow-detail').dispatchEvent(new UIEvent('cancel')); await flush();
   assert.equal(ui.$('flow-detail').open, false); assert.equal(ui.$('timeline-panel').hidden, true);
-  assert.equal(ui.document.activeElement, timeline);
+  assert.equal(ui.$('flow-peek').hidden, true, 'Wide panels need no intermediate card dialog.');
+  assert.ok(ui.document.activeElement === timeline, 'Closing returns to the direct action.');
 
   ui.window.relayAgents.open(); await flush();
   ui.window.relayTimeline.open(); await flush();
@@ -6172,10 +6263,10 @@ test('Flow separates its utilities across the rails and excludes shell tools unt
   ui.window.relayFlow.enter(); await flush();
   assert.equal(phone.closest('.flow-utility')?.id, 'flow-connect');
   assert.equal(ui.$('relay-settings').closest('.flow-utility')?.id, 'flow-space');
-  assert.equal(ui.$('flow-status').parentNode.id, 'flow-card-working');
+  assert.equal(ui.$('flow-status').parentNode.id, 'flow-left');
   assert.equal(ui.$('appearance-options').closest('.flow-utility')?.id, 'flow-space');
   assert.equal(ui.window.relayPanel.isOpen(), false);
-  const buttons = ['next', 'working', 'files'].flatMap(id => ui.$(`flow-card-${id}`).querySelectorAll('button').map(button => button.textContent));
+  const buttons = ['activity', 'tasks', 'changes', 'app', 'usage'].flatMap(id => ui.$(`flow-card-${id}`).querySelectorAll('button').map(button => button.textContent));
   assert.equal(buttons.some(text => text === 'Run commands' || text === 'Terminal'), false);
   assert.equal(ui.window.relayUI.commands.terminal(), false);
   ui.window.relayPanel.show('run'); ui.window.relayTerminal.open();
@@ -6200,15 +6291,17 @@ test('Flow separates its utilities across the rails and excludes shell tools unt
 
 test('dismissing Flow details in a narrow window returns to its originating card', async () => {
   const ui = await flowBrowser({ wide: true });
+  Object.assign(ui.canonical.get('project-one'), { runs: [{ id: 'run-1', provider: 'codex', startedAt: '2026-11-06T09:00:00.000Z', status: 'complete' }], checkpoints: { 'run-1': { files: 2 } } });
+  await ui.window.relayUI.refresh();
   ui.window.relayFlow.enter(); await flush();
-  ui.window.relayFlow.peek('files'); await flush();
-  const timeline = ui.$('flow-card-files').querySelectorAll('button').find(button => button.textContent === 'Timeline');
+  ui.window.relayFlow.peek('changes'); await flush();
+  const timeline = ui.$('flow-card-changes').querySelectorAll('button').find(button => /^Timeline:/.test(button.getAttribute('aria-label') || ''));
   timeline.focus(); timeline.click(); await flush();
   assert.equal(ui.$('flow-detail').open, true); assert.equal(ui.$('flow-peek').hidden, true);
   ui.$('flow-detail-close').click(); await flush();
   assert.equal(ui.$('flow-peek').hidden, false);
-  assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-files');
-  assert.equal(ui.document.activeElement, timeline, 'Keyboard focus returns to the visible originating action.');
+  assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-changes');
+  assert.ok(ui.document.activeElement === timeline, 'Keyboard focus returns to the visible originating action.');
   timeline.click(); await flush();
   ui.window.relayFlow.leave(); await flush();
   assert.equal(ui.$('flow-peek').hidden, true, 'Leaving Flow does not reopen its narrow card.');
@@ -6226,7 +6319,7 @@ test('narrow Flow keeps appearance, settings and phone access reachable through 
   ui.$('flow-peek-close').click(); await flush();
   assert.equal(ui.$('flow-peek').hidden, true);
   assert.equal(ui.$('flow-space').parentNode.id, 'flow-left');
-  assert.equal(ui.$('flow-connect').parentNode.id, 'flow-right');
+  assert.equal(ui.$('flow-connect').parentNode.id, 'flow-right', 'The connection controls return to the right rail.');
 });
 
 
@@ -6300,7 +6393,8 @@ test('Flow keeps waiting tasks and completed task threads reachable while view c
   await ui.window.relayUI.refresh(); await flush();
   const action = text => ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(item => item.textContent.includes(text))?.querySelector('button') || ui.$('flow-card-tasks').querySelectorAll('button').find(button => button.textContent === text);
   assert.equal(ui.window.relayFlow.leave(), false);
-  assert.match(flowText(ui, 'tasks'), /2 tasks · 1 waiting.*Workspace chat.*Whole workspace.*Docs.*waiting to start.*Another task is working\..*Search.*finished/, 'Tasks beside the chat are listed with how they stand.');
+  assert.match(flowText(ui, 'tasks'), /Waiting to start/);
+  assert.match(flowText(ui, 'tasks'), /Workspace chat.*Docs.*Waiting to start.*Another task is working\..*Search/, 'Tasks beside the chat are listed with how they stand.');
   action('Docs').click(); await flush();
   assert.match(ui.$('task-banner').textContent, /website · Waiting/);
   ui.$('task-banner').querySelectorAll('button').find(button => button.textContent === 'Cancel').click(); await flush();
@@ -6309,7 +6403,7 @@ test('Flow keeps waiting tasks and completed task threads reachable while view c
   action('Search').click(); await flush();
   assert.equal(ui.state().taskId, complete.id);
   assert.equal(ui.window.relayFlow.leave(), false, 'The task’s reset wait stays protected and reachable.');
-  assert.match(flowText(ui, 'next'), /This task runs beside the workspace chat/);
+  assert.equal(ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(row => row.dataset.taskId === complete.id).getAttribute('aria-current'), 'true');
   action('Workspace chat').click(); await flush();
   assert.equal(ui.state().taskId, null);
   assert.equal(ui.$('task-banner').hidden, true, 'Returning clears the selected task banner.');
@@ -6476,15 +6570,13 @@ test('Antigravity with additional-folder support sends in the workspace chat and
   project.folders = original;
 });
 
-test('Flow explains Review first and deferred automatic tests without treating them as verified', async () => {
+test('Flow shows deferred automatic tests without treating them as verified', async () => {
   const ui = await flowBrowser({ workbench: true }), chat = ui.canonical.get('project-one');
   ui.window.relayFlow.enter(); await flush();
   chat.routing = { mode: 'balanced', check: true };
   await ui.window.relayUI.refresh(); await flush();
   ui.state().status.verificationCadence = 'review-first';
   ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
-  assert.match(flowText(ui, 'working'), /Routine automatic tests wait while you review/);
-  assert.match(flowText(ui, 'working'), /Small safeguards now; verify when you ask to finalize/);
   chat.messages.push({ id: 'deferred-check', role: 'activity', provider: 'codex', text: 'Tests deferred: npm test\nNo Codeshi-managed test result is available.', status: 'complete' });
   await ui.window.relayUI.refresh(); await flush();
   assert.match(ui.$('messages').textContent, /Automatic tests deferred/);
@@ -6492,48 +6584,22 @@ test('Flow explains Review first and deferred automatic tests without treating t
 });
 
 
-test('Flow toggles Review first inline, persists it across views and recovers from a failed save', async () => {
+test('Review first lives in Settings › Testing, not on a Flow card (#194)', async () => {
   const ui = await flowBrowser({ workbench: true });
   ui.window.relayFlow.enter(); await flush();
-  const toggle = ui.$('flow-testing-toggle');
-  assert.equal(toggle.getAttribute('role'), 'switch');
-  assert.equal(toggle.getAttribute('aria-checked'), 'false');
-  const saved = deferred(); let fail = false;
-  ui.setIntercept((request, next) => {
-    if (request.path === '/api/preferences' && request.method === 'POST') {
-      if (fail) return response({ error: 'Disk unavailable' }, 503);
-      const result = next(); return saved.promise.then(() => result);
-    }
-    return next();
-  });
-  toggle.click(); await flush();
-  assert.equal(toggle.disabled, true);
-  toggle.click(); await flush();
-  assert.equal(ui.requests.filter(request => request.path === '/api/preferences' && request.method === 'POST').length, 1);
-  saved.resolve(); await flush();
-  assert.equal(toggle.disabled, false);
-  assert.equal(toggle.getAttribute('aria-checked'), 'true');
-  assert.match(flowText(ui, 'working'), /Small safeguards now; verify when you ask to finalize/);
-  assert.equal(ui.$('settings').open, false, 'No Settings dialog is needed.');
-  ui.$('message-input').value = 'Keep my draft'; ui.fire('message-input', 'input'); await flush();
-  assert.equal(ui.$('flow-testing-toggle'), toggle, 'Draft previews keep the switch in place.');
+  assert.equal(ui.$('flow-testing-toggle'), null, 'Flow repeats no setting that Settings already holds.');
   ui.window.relayFlow.leave(); await flush();
   await ui.window.relaySettings.open('general'); await flush();
-  assert.equal(ui.$('settings-testing-cadence').value, 'review-first');
-  ui.window.relaySettings.close();
-  ui.window.relayFlow.enter(); await flush();
-  fail = true; toggle.click(); await flush();
-  assert.equal(toggle.getAttribute('aria-checked'), 'true');
-  assert.equal(toggle.disabled, false);
-  assert.match(ui.$('notice-text').textContent, /Testing preference could not be saved.*Disk unavailable/);
-  fail = false; toggle.click(); await flush();
-  assert.equal(toggle.getAttribute('aria-checked'), 'false');
-  assert.equal(ui.$('message-input').value, 'Keep my draft');
+  const cadence = ui.$('settings-testing-cadence');
+  cadence.value = 'review-first'; ui.fire('settings-testing-cadence', 'change'); await flush(); await flush();
+  assert.deepEqual(ui.requests.filter(request => request.path === '/api/preferences' && request.method === 'POST').map(request => request.body), [{ verificationCadence: 'review-first' }]);
+  assert.equal(cadence.value, 'review-first');
   assert.equal(ui.requests.some(request => request.method === 'POST' && /\/(messages|continue)$/.test(request.path)), false);
 });
 
 test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and auto-recedes on attention or completion', async () => {
-  const ui = await flowBrowser({ desktop: true });
+  // Centred keeps a rail on each side (#194), so both slide out for the Lounge.
+  const ui = await flowBrowser({ desktop: true, stored: { 'throughline:flow-layout': 'centred' } });
   // In normal view Lounge is hidden
   assert.equal(ui.$('toggle-flow-lounge').hidden, true);
 
@@ -7195,7 +7261,7 @@ test('Flow card feedback: unclipped tasks, active agent parity, binding windows 
   await ui.window.relayUI.refresh(); await flush();
 
   // Both Codex (main run) and Claude (separate task) are highlighted
-  const plansCard = ui.$("flow-card-plans");
+  const plansCard = ui.$("flow-card-usage");
   const codexPlan = plansCard.querySelectorAll(".flow-plan").find(p => p.dataset.provider === "codex");
   const claudePlan = plansCard.querySelectorAll(".flow-plan").find(p => p.dataset.provider === "claude");
   const geminiPlan = plansCard.querySelectorAll(".flow-plan").find(p => p.dataset.provider === "gemini");
@@ -7211,11 +7277,11 @@ test('Flow card feedback: unclipped tasks, active agent parity, binding windows 
   const tasksCard = ui.$("flow-card-tasks");
   const taskRow = tasksCard.querySelectorAll(".flow-task").find(el => el.dataset.taskId === parallelRunning.id);
   assert(taskRow, "Task row rendered");
-  assert(taskRow.classList.contains("flow-task-running"), "Running lane has .flow-task-running");
-  const titleEl = taskRow.querySelector(".flow-task-title");
+  assert.equal(taskRow.querySelector('.task-row').dataset.state, 'working');
+  const titleEl = taskRow.querySelector(".task-row-title");
   assert.equal(titleEl.textContent, "Refactor backend API endpoints with comprehensive schema verification", "Task title is unclipped");
-  assert.match(taskRow.querySelector(".flow-task-meta").textContent, /Claude · on “Update controller validations”/, "Recorded lane activity is visible");
-  assert(taskRow.querySelector(".flow-pulse-dot"), "Lane has pulsing dot indicator");
+  assert.match(taskRow.querySelector(".task-row-meta").textContent, /on “Update controller validations”/, "Recorded lane activity is visible");
+  assert(taskRow.querySelector(".task-row-icon"), "Lane uses the shared task-state icon");
   const openBtn = taskRow.querySelector(".flow-task-row");
   assert.equal(openBtn.tagName, "BUTTON");
   assert(openBtn, "The whole row is the button that switches to the task");
@@ -7239,30 +7305,31 @@ test('Flow card feedback: unclipped tasks, active agent parity, binding windows 
   assert.equal(planFor("gemini").classList.contains("flow-plan-active"), false);
   assert.equal(plansCard.querySelectorAll(".flow-plan-working-badge").length, 0, "No working badges remain");
 
-  // 4. How it's working now: distinguishes routing assessor, reviewer, wait reason, and composer
+  // 4. Now's line: distinguishes routing assessor, reviewer, a handoff waiting for you and a reset wait (#194)
   // A) Routing assessor
   chat.status = "running";
   chat.activeRun = { id: "run-assess", provider: "claude", purpose: "routing", phase: "probing", startedAt: new Date().toISOString() };
   await ui.window.relayUI.refresh(); await flush();
   assert.match(ui.$("flow-status-text").textContent, /Routing assessor: Claude is checking usage/);
-  assert.match(flowText(ui, "working"), /Assessors*Claude: checking account & plan usage/);
+  assert.match(flowText(ui, "activity"), /Choosing an agent.*Claude is checking usage/);
 
   // B) Reviewer
   chat.activeRun = { id: "run-rev", provider: "codex", purpose: "review", phase: "tool", startedAt: new Date().toISOString() };
   await ui.window.relayUI.refresh(); await flush();
   assert.match(ui.$("flow-status-text").textContent, /Reviewer: Codex is reviewing changes/);
-  assert.match(flowText(ui, "working"), /Reviewers*Codex: reviewing changes/);
+  assert.match(flowText(ui, "activity"), /Codex.*Reviewing the changes/);
 
   // B2) Flow moves a routed task by itself (#12), so an offer left while it works waits for you: on the card and in the
   // conversation, whether it needs charges accepted or its agent was pinned with automatic handoff off.
   chat.activeRun = { id: "run-work", provider: "codex", phase: "tool", startedAt: new Date().toISOString() };
   chat.handoffOffer = { id: "offer-api", runId: "run-work", from: { provider: "codex", usedPercent: 91.6, window: "5-hour" }, to: { provider: "claude", model: null, mode: "edit", approvalPolicy: "ask", billingSource: "api", usedPercent: 20 }, task: "Build the feature" };
   await ui.window.relayUI.refresh(); await flush();
-  assert.match(flowText(ui, "working"), /Handoff\s*Waiting for you: Codex has used 92% of its limit\. Hand off to Claude and accept its charges in the conversation\./);
+  assert.match(flowText(ui, "activity"), /Codex has used 92% of its limit\. Hand off to Claude and accept its charges in the chat\./);
+  assert.equal(ui.$("flow-card-activity").dataset.state, "attention", "A handoff that waits for you marks the card.");
   assert.equal(ui.$("handoff-offer").hidden, false);
   chat.handoffOffer = { ...chat.handoffOffer, id: "offer-pinned", to: { ...chat.handoffOffer.to, billingSource: "subscription" } };
   await ui.window.relayUI.refresh(); await flush();
-  assert.match(flowText(ui, "working"), /Hand off to Claude in the conversation\./);
+  assert.match(flowText(ui, "activity"), /Hand off to Claude in the chat\./);
   assert.equal(ui.$("handoff-offer").hidden, false, "A subscription offer in Flow is shown too: Flow only leaves one when it needs you.");
   chat.handoffOffer = null;
 
@@ -7271,21 +7338,20 @@ test('Flow card feedback: unclipped tasks, active agent parity, binding windows 
   chat.activeRun = null;
   chat.resume = { providers: ["claude"], resetsAt: later(2) };
   await ui.window.relayUI.refresh(); await flush();
-  assert.match(flowText(ui, "working"), /Waitings*Claude usage limit to reset/);
+  assert.match(flowText(ui, "activity"), /Waiting for Claude’s limit.*Resets/);
 
   // D) Idle composer
   delete chat.resume;
   chat.status = "complete";
   await ui.window.relayUI.refresh(); await flush();
-  assert.match(flowText(ui, "working"), /Composer/);
-  assert.doesNotMatch(flowText(ui, "working"), /Next message/);
+  assert.equal(ui.$("flow-card-activity").querySelector(".flow-now"), null, "The idle panel has no obsolete run details.");
 
   // 5. Plan items do not render detailed windows and freshness section
   assert.strictEqual(claudePlan.querySelector(".flow-plan-details"), null, "Claude plan does not have detailed windows breakdown");
   assert.strictEqual(geminiPlan.querySelector(".flow-plan-details"), null, "Gemini plan does not have detailed windows breakdown");
 });
 
-test('Tasks side by side shows workspace tasks, approvals, copy state, start/review/close actions, and multi-folder task drafting (#88, #107)', async () => {
+test('Tasks side by side in Flow shows agent-created tasks, approvals, copy state, and start/review/close actions without manual task creation (#88, #107, #194)', async () => {
   const ui = await flowBrowser({ tasksUI: true }), chat = ui.canonical.get('project-one');
   const project = ui.state().projects.find(item => item.id === 'project-one');
   const allFolders = clone(project.folders);
@@ -7310,43 +7376,37 @@ test('Tasks side by side shows workspace tasks, approvals, copy state, start/rev
     return next();
   });
 
-  // Single-folder workspace: New task opens a task draft right away and What's next explains it.
+  // In Flow, Tasks shows None when empty and offers no manual New task creation; manual new tasks belong to Normal mode only.
   project.folders = [firstFolder];
   ui.window.relayFlow.enter(); await flush();
-  assert.match(flowText(ui, 'tasks'), /No tasks beside the chat yet/);
-
-  ui.$('flow-card-tasks').querySelector('.flow-task-new').click(); await flush(); await flush();
-  assert.equal(calls.at(-1).path, '/api/tasks/plan');
-  assert.equal(calls.at(-1).body.folderId, firstFolder.id);
-  assert.match(flowText(ui, 'tasks'), new RegExp(`New task in ${firstFolder.displayName || firstFolder.name}.*Drafting in the message box.*Cancel`));
-  assert.match(flowText(ui, 'next'), /Describe the new task in the message box/);
-  ui.$('flow-card-tasks').querySelectorAll('button').find(b => b.textContent === 'Cancel').click(); await flush();
-  assert.equal(ui.state().taskDraft, null);
+  assert.equal(ui.$('flow-card-tasks').querySelectorAll('.flow-task').length, 0);
+  assert.equal(ui.$('flow-new-task'), null);
+  assert.equal(ui.$('flow-folder-menu'), null);
+  assert.match(flowText(ui, 'tasks'), /None/);
+  ui.$('workspace-search').value = '>New task'; ui.fire('workspace-search', 'input');
+  assert(!ui.$('command-results').textContent.includes('New task beside this one'), 'Manual new task is omitted from command palette in Flow.');
+  ui.$('workspace-search').value = '';
+  await ui.window.relayTaskThreads.open(firstFolder.id); await flush();
+  assert.equal(ui.state().taskDraft, null, 'Opening a manual task draft is blocked in Flow.');
+  assert.match(ui.$('notice-text').textContent, /Normal view/);
 
   // Multi-folder + side-by-side tasks: live step, approval badge, Review pill, held Start, ended Close, and switching.
   project.folders = allFolders;
   chat.parallelTasks = [running, copy, held, merged];
   await ui.window.relayUI.refresh(); await flush();
   const card = ui.$('flow-card-tasks');
-  assert.match(flowText(ui, 'tasks'), /4 tasks · 1 working · 1 needing you · 1 ready to merge/);
+  assert.equal(ui.$('flow-card-tasks').querySelector('.flow-panel-count').textContent, '4');
+  assert.equal(ui.$('flow-card-tasks').dataset.state, 'attention');
 
   const mainRow = () => card.querySelectorAll('.flow-task').find(el => el.dataset.role === 'main');
   const row = id => card.querySelectorAll('.flow-task').find(el => el.dataset.taskId === id);
   assert.equal(mainRow().getAttribute('aria-current'), 'true');
-  assert.equal(row(running.id).querySelector('.flow-task-badge').textContent, '2 approvals');
-  assert.match(row(running.id).querySelector('.flow-task-meta').textContent, /^Codex · on “Add discount validation”/);
-  assert.equal(row(copy.id).querySelector('.flow-task-pill').textContent, 'Review');
-  assert.match(row(copy.id).querySelector('.flow-task-meta').textContent, /^finished/);
-  assert.match(row(held.id).textContent, /paused — ready to start.*Codeshi restarted/);
-  assert.match(row(merged.id).querySelector('.flow-task-meta').textContent, /2 files merged/);
-
-  // New task in multi-folder workspace prompts inline folder chooser.
-  card.querySelector('.flow-task-new').click(); await flush();
-  const folderPicker = card.querySelector('.flow-task-folders');
-  assert(folderPicker, 'Multi-folder workspace shows inline folder picker');
-  folderPicker.querySelectorAll('button').find(b => b.textContent === (secondFolder.displayName || secondFolder.name)).click(); await flush(); await flush();
-  assert.equal(calls.at(-1).body.folderId, secondFolder.id);
-  card.querySelectorAll('button').find(b => b.textContent === 'Cancel').click(); await flush();
+  assert.equal(row(running.id).querySelector('.flow-task-badge').textContent, '2');
+  assert.match(row(running.id).querySelector('.task-row-meta').textContent, /on “Add discount validation”/);
+  assert.equal(row(copy.id).querySelector('.task-row').dataset.state, 'review');
+  assert.match(row(copy.id).querySelector('.task-row-meta').textContent, /Ready to review/);
+  assert.match(row(held.id).textContent, /Paused.*Codeshi restarted/);
+  assert.equal(row(merged.id).querySelector('.task-row').dataset.state, 'finished'); assert.equal(row(merged.id).querySelector('.task-row-meta'), null, 'Finished tasks use one line.');
 
   // Start held task, Review & merge worktree task, Open task thread, and Close ended task.
   row(held.id).querySelectorAll('button').find(b => b.textContent === 'Start').click(); await flush();
@@ -7365,7 +7425,7 @@ test('Tasks side by side shows workspace tasks, approvals, copy state, start/rev
   assert.equal(ui.state().taskId, null);
 
   // Close only takes a task off the list for good, so the button says so and asks first.
-  const removeButton = () => row(merged.id).querySelectorAll('button').find(b => b.textContent === 'Remove from list');
+  const removeButton = () => row(merged.id).querySelectorAll('button').find(b => /^Remove from list:/.test(b.getAttribute('aria-label') || ''));
   let removeAsked = []; ui.window.confirm = text => { removeAsked.push(text); return false; };
   removeButton().click(); await flush();
   assert.equal(removeAsked.length, 1); assert.match(removeAsked[0], /from the task list\?[\s\S]*won’t be able to open its chat again/);
@@ -7376,12 +7436,12 @@ test('Tasks side by side shows workspace tasks, approvals, copy state, start/rev
   assert.equal(row(merged.id), undefined);
 
   // Task limits opens the task limits dialog.
-  card.querySelectorAll('button').find(b => b.textContent === 'Task limits').click(); await flush();
+  card.querySelectorAll('button').find(b => /^Task limits:/.test(b.getAttribute('aria-label') || '')).click(); await flush();
   assert.equal(ui.$('limits-dialog').open, true);
   ui.$('limits-cancel').click(); await flush();
 });
 
-test('Tasks side by side chip updates with task state and closes peek on selection in a narrow window (#88, #107)', async () => {
+test('Now’s chip follows the tasks beside the chat, and choosing a task from its details closes them, in a narrow window (#88, #107, #194)', async () => {
   const ui = await flowBrowser({ wide: true }), chat = ui.canonical.get('project-one');
   const folder = ui.state().projects[0].folders[0];
   const taskA = { id: 'eeeeeeee-0000-4000-8000-000000000005', title: 'Audit routes', folderName: folder.name, folderId: folder.id, status: 'running', approvals: 1, conversationId: 'lane-audit' };
@@ -7392,23 +7452,23 @@ test('Tasks side by side chip updates with task state and closes peek on selecti
     return next();
   });
   ui.window.relayFlow.enter(); await flush();
-  const tasksChip = () => ui.$('flow-strip').querySelectorAll('.flow-chip')[1];
-  assert.equal(tasksChip().textContent, '1 task needs you');
+  const nowChip = () => ui.$('flow-strip').querySelectorAll('.flow-chip').find(chip => chip.dataset.card === 'tasks');
+  assert.equal(nowChip().textContent, 'Tasks · 1 needs you'); assert.equal(nowChip().dataset.attention, 'true');
 
   taskA.approvals = 0;
   await ui.window.relayUI.refresh(); await flush();
-  assert.equal(tasksChip().textContent, '1 working');
+  assert.equal(nowChip().textContent, 'Tasks · 1 working'); assert.equal(nowChip().dataset.attention, 'false');
 
-  taskA.status = 'complete';
-  await ui.window.relayUI.refresh(); await flush();
-  assert.equal(tasksChip().textContent, '2 tasks');
-
-  tasksChip().click(); await flush();
+  nowChip().click(); await flush();
   assert.equal(ui.$('flow-peek').hidden, false);
   assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-tasks');
   ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(el => el.dataset.taskId === taskB.id).querySelector('button').click(); await flush();
   assert.equal(ui.state().taskId, taskB.id);
-  assert.equal(ui.$('flow-peek').hidden, true, 'Opening a task from the peek closes the peek drawer.');
+  assert.equal(ui.$('flow-peek').hidden, true, 'Opening a task from the details closes them.');
+
+  taskA.status = 'complete';
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(nowChip().textContent, 'Tasks · 2', 'The chip retains all reachable tasks after work ends.');
 });
 
 // Orchestrate (#12): one read-only run plans a message as steps, and the plan opens from the Plan button in the top bar.
@@ -7561,8 +7621,8 @@ test('In Flow, one read-only run plans the message with the deepest work the mod
   assert.equal(ui.$('orchestration-status').textContent, 'Codex · gpt-6.1-sol is planning the steps, read-only. Nothing from this plan runs until you approve it.');
   assert.equal(ui.$('orchestration-queue').textContent, '1 queued message waits until you approve or discard this plan.');
   assert.deepEqual(['orchestration-discard', 'orchestration-again', 'orchestration-write'].map(id => ui.$(id).hidden), [true, true, true], 'A plan being made is stopped with Stop, like any run.');
-  assert.match(flowText(ui, 'next'), /Codex is drafting the plan\. Its cards show on the Plan when they’re ready\./);
-  assert.match(flowText(ui, 'next'), /Then · 1 queued message · waiting for the plan/);
+  assert.match(flowText(ui, 'next'), /Drafting a plan.*Its cards show on the Plan when they’re ready/);
+  assert.match(flowText(ui, 'next'), /1 message queued after this/);
   assert.deepEqual([ui.$('open-plan').dataset.state, ui.$('open-plan-state').textContent], ['planning', 'Planning…']);
 
   // The plan arrives.
@@ -7597,16 +7657,16 @@ test('In Flow, one read-only run plans the message with the deepest work the mod
   assert.equal(ui.$('open-plan').dataset.state, 'none', 'The Plan button speaks for the Plan’s cards; this plan made none.');
 });
 
-test('In a narrow window, What’s next’s chip says when a plan is being made, waits or isn’t ready', async () => {
+test('In a narrow window, Now’s chip says when a plan is being made, waits or isn’t ready', async () => {
   const ui = await orchestrateBrowser({ wide: true }), conversation = ui.canonical.get('project-one');
   ui.window.relayFlow.enter(); await flush();
   Object.assign(conversation, { routing: { mode: 'smart', allowApi: false, check: false }, queue: [{ id: 'q1', text: 'Next thing', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }] });
   await ui.window.relayUI.refresh(); await flush();
-  const chip = () => ui.$('flow-strip').querySelectorAll('.flow-chip').find(item => /^What’s next: /.test(item.getAttribute('aria-label'))).textContent;
-  assert.equal(chip(), '1 queued message');
-  for (const [status, text] of [['planning', 'Planning'], ['draft', 'Plan waiting'], ['failed', 'Draft not used'], ['discarded', '1 queued message']]) {
+  const chip = () => ui.$('flow-strip').querySelectorAll('.flow-chip').find(item => /^Activity: /.test(item.getAttribute('aria-label'))).textContent;
+  assert.match(chip(), /1 message queued/);
+  for (const [status, text] of [['planning', /Drafting a plan/], ['draft', /A plan of 2 steps is waiting/], ['failed', /drafted cards couldn’t be used/], ['discarded', /1 message queued/]]) {
     conversation.orchestrations = [draftPlan({ status })]; await ui.window.relayUI.refresh(); await flush();
-    assert.equal(chip(), text, status);
+    assert.match(chip(), text, status);
   }
 });
 
@@ -8060,7 +8120,7 @@ test('a restore can also rewind the conversation, and folded messages show as on
     return next();
   });
   ui.window.relayUI.showSidePanel('timeline'); await flush();
-  ui.$('timeline-content').querySelector('button').click(); await flush();
+  ui.$('timeline-content').querySelector('.timeline-details').querySelector('.checkpoint-actions').querySelector('button').click(); await flush();
   assert.equal(ui.$('rewind-conversation').hidden, false);
   assert.match(ui.$('rewind-conversation-detail').textContent, /3 later messages are folded away.*fresh session.*prompt goes back in the message box/);
   assert.equal(ui.$('confirm-rewind').disabled, true, 'Files already match, so nothing happens until the conversation is chosen.');
@@ -9787,7 +9847,7 @@ test('in Flow, Tasks side by side groups Plan cards and Plan chat into one Plan 
   assert.equal(row('card-task'), undefined, 'Plan card tasks never render as standalone Flow task rows.');
   const planRow = row('plan');
   assert.ok(planRow, 'A single Plan row represents active Plan work and approvals.');
-  assert.equal(planRow.querySelector('.flow-task-badge').textContent, '2 approvals');
+  assert.equal(planRow.querySelector('.flow-task-badge').textContent, '2');
 
   // Clicking the Plan row opens Plan view, unhides Plan chat, and switches to plan-chat (which has an approval).
   planRow.querySelector('.flow-task-row').click(); await flush(); await flush(); await flush();
@@ -9803,7 +9863,7 @@ test('in Flow, Tasks side by side groups Plan cards and Plan chat into one Plan 
   assert.equal(ui.state().taskId, null);
   planTask.approvals = 0; planTask.status = 'complete';
   await ui.window.relayUI.refresh(); await flush();
-  assert.equal(row('plan').querySelector('.flow-task-badge').textContent, '1 approval');
+  assert.equal(row('plan').querySelector('.flow-task-badge').textContent, '1');
   row('plan').querySelector('.flow-task-row').click(); await flush(); await flush(); await flush();
   assert.equal(ui.window.relayFlow.view(), 'plan');
   assert.equal(ui.window.relayBoard.isOpen(), true);
@@ -10023,7 +10083,7 @@ test('Flow split-into-parts managed tasks stay out of Plan row, Task lanes, and 
   assert.doesNotMatch(ui.$('flow-status-text').textContent, /Task lane/);
   assert.equal(ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(el => el.dataset.taskId === 'plan'), undefined);
   assert.equal(ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(el => el.dataset.taskId === 'split-t1'), undefined);
-  assert.doesNotMatch(ui.$('flow-card-working').textContent, /Task lanes/);
+  assert.doesNotMatch(flowText(ui, 'activity'), /task working/, 'Flow’s own parts are not counted as tasks beside the chat.');
 
   // Opening a managed split part inside Flow, then switching to Plan or Normal, hides split UI and exits the managed part.
   ui.$('split-progress-toggle').click(); await flush();
@@ -10096,6 +10156,7 @@ test('Tasks side by side is experimental: marked in Normal and Flow, and turning
   assert.equal(ui.$('task-section').hidden, false);
   ui.window.relayFlow.enter(); await flush();
   assert.equal(ui.$('flow-card-tasks-title').querySelector('.experimental-badge').textContent, 'Experimental');
+  assert.equal(ui.$('flow-new-task'), null);
   ui.window.relayFlow.leave(); await flush();
 
   // Settings › Experimental includes the toggle for Tasks side by side.
@@ -10125,11 +10186,10 @@ test('Tasks side by side is experimental: marked in Normal and Flow, and turning
   assert.equal(ui.state().taskDraft, null);
   assert.match(ui.$('notice-text').textContent, /Settings › Experimental/);
 
-  // Flow narrow strip leaves out Tasks side by side when off.
+  // Flow leaves out the tasks section when off.
   ui.window.relayFlow.enter(); await flush();
-  ui.$('flow-strip').hidden = false;
-  ui.window.relayFlow.peek('tasks');
-  assert.equal(ui.$('flow-peek').hidden, true);
+  assert.equal(ui.$('flow-new-task'), null);
+  assert.equal(ui.$('flow-card-tasks').hidden, true);
 });
 
 test("approving a pending request keeps focus on Stop, Escape closes an open Plan card from outside #board-view, and worktree file counts override stale no-change chips (#162)", async () => {
@@ -10451,4 +10511,303 @@ test('sidebar switch navigates Workspaces, Run and Git; Git opens diffs as tabs;
   ui.$('sidebar-switch').dispatchEvent(new UIEvent('keydown', { key: 'Home' }));
   assert.equal(ui.window.relaySidebar.active(), 'workspaces');
   assert.equal(ui.$('sidebar-workspaces').hidden, false);
+});
+
+
+test("File view edits text files with syntax highlight, undo/redo, Cmd+S save, Revert and unsaved close prompt", async () => {
+  const ui = await browser({ filesUI: true });
+  const hash1 = "a".repeat(64), hash2 = "b".repeat(64);
+  let diskText = "const x = 1;\nconst y = 2;", diskHash = hash1;
+  const saves = [];
+  ui.setIntercept((request, next) => {
+    if (request.path === "/api/files") return response({ entries: [{ kind: "file", name: "app.js", path: "src/app.js" }, { kind: "file", name: "photo.png", path: "photo.png" }], nextOffset: null });
+    if (request.path === "/api/files/preview") {
+      if (request.params.path === "photo.png") return response({ name: "photo.png", kind: "image", mime: "image/png", bytes: 68, data: "iVBORw0KGgo=", editable: false });
+      return response({ name: "app.js", kind: "text", mime: "text/plain", bytes: diskText.length, text: diskText, sha256: diskHash, editable: true });
+    }
+    if (request.path === "/api/files/save" && request.method === "POST") {
+      saves.push(request.body);
+      diskText = request.body.content;
+      diskHash = hash2;
+      return response({ name: "app.js", kind: "text", mime: "text/plain", bytes: diskText.length, text: diskText, sha256: diskHash, editable: true });
+    }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+
+  // Open an image: Edit button stays hidden.
+  await ui.window.relayFiles.openAt("frontend", "photo.png"); await flush();
+  assert.equal(ui.$("edit-preview").hidden, true);
+  ui.$("close-file-preview").click();
+
+  // Open an isolated task copy preview: Edit button stays hidden.
+  ui.window.relayFiles.showPreviewAt({ id: "frontend", name: "Frontend" }, "src/app.js", { name: "app.js", kind: "text", mime: "text/plain", bytes: 12, text: "const x = 1;", inCopy: true, sha256: hash1, editable: true });
+  assert.equal(ui.$("edit-preview").hidden, true);
+  ui.$("close-file-preview").click();
+
+  // Open a live text file: Edit button is shown.
+  await ui.window.relayFiles.openAt("frontend", "src/app.js"); await flush();
+  assert.equal(ui.$("edit-preview").hidden, false);
+  assert.equal(ui.$("save-preview").hidden, true);
+  assert.equal(ui.$("file-preview-dirty").hidden, true);
+
+  // Enter Edit mode: syntax-highlighted overlay, line-number gutter and textarea mount.
+  ui.$("edit-preview").click();
+  const input = ui.$("file-editor-input");
+  assert(input, "Editor textarea mounts on Edit.");
+  assert.equal(input.value, "const x = 1;\nconst y = 2;");
+  assert.equal(ui.$("file-preview-content").querySelector(".file-editor-gutter").querySelectorAll("span").length, 2);
+  assert(ui.$("file-preview-content").querySelector(".file-editor-highlight").querySelector(".tok-keyword"), "Syntax highlight renders inside editor.");
+  assert.equal(ui.$("save-preview").disabled, true);
+  assert.equal(ui.$("revert-preview").disabled, true);
+
+  // Typing marks the file unsaved and enables Save, Revert and Undo.
+  input.value = "const x = 42;\nconst y = 2;";
+  input.dispatchEvent(new UIEvent("input"));
+  assert.equal(ui.$("file-preview-dirty").hidden, false);
+  assert.equal(ui.$("save-preview").disabled, false);
+  assert.equal(ui.$("revert-preview").disabled, false);
+  assert.equal(ui.$("undo-preview").disabled, false);
+
+  // Undo (Cmd+Z) and Redo (Shift+Cmd+Z) work cleanly.
+  ui.window.dispatchEvent(new UIEvent("keydown", { key: "z", metaKey: true }));
+  assert.equal(input.value, "const x = 1;\nconst y = 2;");
+  assert.equal(ui.$("file-preview-dirty").hidden, true);
+  ui.window.dispatchEvent(new UIEvent("keydown", { key: "z", metaKey: true, shiftKey: true }));
+  assert.equal(input.value, "const x = 42;\nconst y = 2;");
+  assert.equal(ui.$("file-preview-dirty").hidden, false);
+
+  // Cmd+S saves with expectedHash and clears the unsaved mark.
+  ui.window.dispatchEvent(new UIEvent("keydown", { key: "s", metaKey: true }));
+  await flush();
+  assert.equal(saves.length, 1);
+  assert.equal(saves[0].folderId, "frontend");
+  assert.equal(saves[0].path, "src/app.js");
+  assert.equal(saves[0].content, "const x = 42;\nconst y = 2;");
+  assert.equal(saves[0].expectedHash, hash1);
+  assert.equal(ui.$("file-preview-dirty").hidden, true);
+  assert.equal(ui.$("save-preview").disabled, true);
+
+  // Edit again and click Revert: restores last saved content and clears unsaved mark.
+  input.value = "const x = 99;";
+  input.dispatchEvent(new UIEvent("input"));
+  assert.equal(ui.$("file-preview-dirty").hidden, false);
+  ui.$("revert-preview").click();
+  assert.equal(input.value, "const x = 42;\nconst y = 2;");
+  assert.equal(ui.$("file-preview-dirty").hidden, true);
+
+  // Closing with unsaved changes asks first; Keep editing keeps it open, Discard closes it.
+  input.value = "const x = 100;";
+  input.dispatchEvent(new UIEvent("input"));
+  ui.$("close-file-preview").click();
+  assert.equal(ui.$("file-preview").hidden, false);
+  assert.equal(ui.$("file-preview-banner").hidden, false);
+  assert.match(ui.$("file-preview-banner-text").textContent, /unsaved changes/i);
+  ui.$("file-discard-cancel").click();
+  assert.equal(ui.$("file-preview").hidden, false);
+  assert.equal(ui.$("file-preview-banner").hidden, true);
+  ui.window.dispatchEvent(new UIEvent("keydown", { key: "Escape" }));
+  assert.equal(ui.$("file-preview-banner").hidden, false);
+  ui.$("file-discard-confirm").click();
+  assert.equal(ui.$("file-preview").hidden, true);
+});
+
+test("File view handles changed-on-disk conflicts (Compare, Reload, Save anyway) and active-run warnings", async () => {
+  const ui = await browser({ filesUI: true });
+  const hash1 = "1".repeat(64), hash2 = "2".repeat(64), hash3 = "3".repeat(64);
+  let mode = "active-run";
+  const saves = [];
+  ui.setIntercept((request, next) => {
+    if (request.path === "/api/files/preview") {
+      return response({ name: "app.js", kind: "text", mime: "text/plain", bytes: 12, text: "line one\nline two", sha256: hash1, editable: true });
+    }
+    if (request.path === "/api/files/save" && request.method === "POST") {
+      saves.push(request.body);
+      if (mode === "active-run" && !request.body.confirmActiveRun) {
+        return response({ error: "An agent (Workspace chat) is working in this folder and has touched src/app.js.", details: { code: "ACTIVE_RUN", activeRun: { label: "Workspace chat", touched: true } } }, 409);
+      }
+      if (mode === "conflict" && !request.body.force) {
+        return response({ error: "This file changed on disk since you opened it.", details: { code: "FILE_CHANGED", current: { deleted: false, sha256: hash2, text: "line one\nfrom disk", bytes: 18 } } }, 409);
+      }
+      return response({ name: "app.js", kind: "text", mime: "text/plain", bytes: request.body.content.length, text: request.body.content, sha256: hash3, editable: true });
+    }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  await ui.window.relayFiles.openAt("frontend", "src/app.js"); await flush();
+  ui.$("edit-preview").click();
+  const input = ui.$("file-editor-input");
+
+  // 1. Active-run warning: warns, then Save anyway retries with confirmActiveRun: true and expectedHash preserved.
+  input.value = "line one\nmy edit";
+  input.dispatchEvent(new UIEvent("input"));
+  ui.$("save-preview").click(); await flush();
+  assert.equal(ui.$("file-preview-banner").hidden, false);
+  assert.match(ui.$("file-preview-banner-text").textContent, /working in this folder/);
+  assert(ui.$("file-active-run-save"));
+  ui.$("file-active-run-save").click(); await flush();
+  assert.equal(saves.length, 2);
+  assert.equal(saves[1].confirmActiveRun, true);
+  assert.equal(saves[1].expectedHash, hash1);
+  assert.equal(ui.$("file-preview-dirty").hidden, true);
+
+  // 2. Changed-on-disk conflict: shows Reload, Compare, Save anyway.
+  mode = "conflict";
+  input.value = "line one\nmy newer edit";
+  input.dispatchEvent(new UIEvent("input"));
+  ui.$("save-preview").click(); await flush();
+  assert.equal(ui.$("file-preview-banner").hidden, false);
+  assert.match(ui.$("file-preview-banner-text").textContent, /changed on disk/);
+  assert(ui.$("file-conflict-reload"));
+  assert(ui.$("file-conflict-compare"));
+  assert(ui.$("file-conflict-force"));
+
+  // Compare renders diff lines (− from disk, + your edit) and Back to editor restores edits.
+  ui.$("file-conflict-compare").click();
+  assert.equal(ui.$("file-conflict-compare").textContent, "Back to editor");
+  assert.match(ui.$("file-preview-content").textContent, /from disk/);
+  assert.match(ui.$("file-preview-content").textContent, /my newer edit/);
+  const diffRows = ui.$("file-preview-content").querySelectorAll(".diff-line");
+  assert(diffRows.some(row => row.classList.contains("del")));
+  assert(diffRows.some(row => row.classList.contains("add")));
+  ui.$("file-conflict-compare").click();
+  assert.equal(ui.$("file-editor-input").value, "line one\nmy newer edit");
+
+  // Save anyway sends force: true and clears conflict.
+  ui.$("file-conflict-force").click(); await flush();
+  assert.equal(saves.at(-1).force, true);
+  assert.equal(ui.$("file-preview-banner").hidden, true);
+  assert.equal(ui.$("file-preview-dirty").hidden, true);
+
+  // Trigger conflict again and click Reload: loads disk text and clears unsaved state.
+  ui.$("file-editor-input").value = "line one\ndiscard me";
+  ui.$("file-editor-input").dispatchEvent(new UIEvent("input"));
+  ui.$("save-preview").click(); await flush();
+  ui.$("file-conflict-reload").click();
+  assert.equal(ui.$("file-editor-input").value, "line one\nfrom disk");
+  assert.equal(ui.$("file-preview-dirty").hidden, true);
+  assert.equal(ui.$("file-preview-banner").hidden, true);
+});
+
+test('a workspace open in another window is brought forward there, and this window stays where it was (#203)', async () => {
+  const ui = await browser({ moreProjects: true, desktop: true, windows: { elsewhere: ['project-two'] } });
+  assert.equal(ui.state().projectId, 'project-one', 'The first load leaves project-two to the window showing it.');
+  assert.deepEqual(ui.windowClaims.at(-1), { projectId: 'project-one', initial: true });
+  await ui.switchProject('project-two');
+  assert.equal(ui.state().projectId, 'project-one', 'project-two is open elsewhere, so this window doesn\'t switch.');
+  assert.deepEqual(ui.windowClaims.at(-1), { projectId: 'project-two', initial: false });
+  assert.equal(ui.$('announcer').textContent, 'Other workspace is open in another window.');
+  assert.equal(ui.storage.get('ai-relay:active-project'), 'project-one', 'The main window remembers its own workspace.');
+});
+
+test('a workspace window shows the workspace in its address and keeps the main window\'s remembered one (#203)', async () => {
+  const ui = await browser({ moreProjects: true, desktop: true, windows: { elsewhere: ['project-one'] }, address: '?workspace=project-two', stored: { 'ai-relay:active-project': 'project-one' } });
+  assert.equal(ui.state().projectId, 'project-two');
+  assert.equal(ui.storage.get('ai-relay:active-project'), 'project-one', 'Not overwritten by the second window.');
+  assert.deepEqual(ui.addressChanges, ['?workspace=project-two']);
+});
+
+test('Ctrl-click, the context menu and a marker open and show workspaces in other windows (#203)', async () => {
+  const ui = await browser({ moreProjects: true, desktop: true, windows: { menu: 'window' } });
+  const row = id => ui.document.querySelectorAll('.workspace-item').find(item => item.dataset.projectId === id);
+  row('project-two').dispatchEvent(new UIEvent('click', { ctrlKey: true }));await flush();
+  assert.deepEqual(ui.windowOpens, ['project-two']);
+  assert.equal(ui.state().projectId, 'project-one', 'Ctrl-click opens a window; this one stays.');
+  row('project-two').dispatchEvent(new UIEvent('contextmenu'));await flush();
+  assert.deepEqual(ui.windowOpens, ['project-two', 'project-two'], 'Open in New Window from the context menu.');
+  assert.equal(row('project-two').querySelector('.workspace-window-mark'), null);
+  ui.windowsChanged({ elsewhere: ['project-two'] });
+  assert(row('project-two').querySelector('.workspace-window-mark'), 'Marked as open in another window.');
+  assert.equal(row('project-two').getAttribute('aria-description'), 'Open in another window');
+  assert.equal(row('project-one').querySelector('.workspace-window-mark'), null, 'This window\'s own workspace has no marker.');
+});
+
+// Companion lanes (#203): another workspace pinned beside this one, steered without leaving it.
+function laneRoutes(ui, { needs = [], git = null } = {}) {
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/needs-you') return response({ items: clone(needs), total: needs.length });
+    if (request.path === '/api/git') return response(git ? { repositories: [{ available: true, folderId: 'api', name: 'api', branch: git.branch, totalChanges: git.changes }] } : { repositories: [] });
+    return next();
+  });
+}
+const lane = (ui, id = 'project-two') => ui.document.querySelectorAll('.lane').find(item => item.dataset.projectId === id);
+
+test('the context menu pins a workspace beside this one, and its lane shows its state, branch and latest turn (#203)', async () => {
+  const ui = await browser({ moreProjects: true, desktop: true, windows: { menu: 'pin' }, lanesUI: true });
+  laneRoutes(ui, { git: { branch: 'feature/coupons', changes: 3 } });
+  const other = ui.canonical.get('project-two') || ui.conversations.find(c => c.id === ui.projects[1].conversationId);
+  other.messages = [{ id: 'u1', role: 'user', text: 'Add a coupon field' }, { id: 'a1', role: 'assistant', provider: 'claude', text: 'Added the **coupon** field and a test.' }];
+  other.lastRun = { id: 'r1', provider: 'claude', status: 'complete', endedAt: new Date().toISOString() };
+  const row = id => ui.document.querySelectorAll('.workspace-item').find(item => item.dataset.projectId === id);
+  row('project-two').dispatchEvent(new UIEvent('contextmenu')); await flush();
+  assert.deepEqual(ui.windowMenus.at(-1), ['project-two', { pin: 'can' }], 'The menu offers to pin it.');
+  assert.deepEqual(JSON.parse(ui.storage.get('codeshi:lanes:main')), ['project-two']);
+  assert.deepEqual(ui.laneReports.at(-1), ['project-two'], 'The desktop app is told, for notifications.');
+  const view = lane(ui);
+  assert(view, 'A lane for the pinned workspace.');
+  assert(ui.requests.some(request => request.path === '/api/conversation' && request.projectId === 'project-two' && request.params.tail === '6'), 'It reads the short form of that workspace\'s chat.');
+  assert.equal(view.querySelector('.lane-name').textContent, 'Other workspace');
+  assert.equal(view.querySelector('.lane-branch-name').textContent, 'feature/coupons');
+  assert.equal(view.querySelector('.lane-branch-changes').textContent, '+3');
+  assert.equal(view.querySelector('.lane-prompt-text').textContent, 'Add a coupon field');
+  assert.equal(view.querySelector('.lane-markdown').textContent, 'Added the coupon field and a test.', 'The reply\'s Markdown, as text.');
+  assert.equal(view.dataset.state, 'done');
+  assert(row('project-two').querySelector('.workspace-lane-mark'), 'The sidebar marks it as pinned.');
+  assert.equal(ui.state().projectId, 'project-one', 'This workspace stays in the main view.');
+  row('project-two').dispatchEvent(new UIEvent('contextmenu')); await flush();
+  assert.deepEqual(ui.windowMenus.at(-1), ['project-two', { pin: 'pinned' }], 'Now the menu offers to unpin it.');
+});
+
+test('a lane answers its workspace\'s approval and sends or queues a message there (#203)', async () => {
+  const ui = await browser({ moreProjects: true, desktop: true, workbench: true, questionsUI: true, lanesUI: true, stored: { 'codeshi:lanes:main': '["project-two"]' } });
+  laneRoutes(ui);
+  const other = ui.canonical.get('project-two') || ui.conversations.find(c => c.id === ui.projects[1].conversationId);
+  other.status = 'running'; other.activeRun = { id: 'run-2', provider: 'codex', startedAt: new Date().toISOString() }; other.executionRevision = 4;
+  other.pendingApprovals = [{ id: 'approval-1', runId: 'run-2', provider: 'codex', kind: 'commandExecution', command: 'npm run migrate' }];
+  ui.window.dispatchEvent(new UIEvent('relay-project-update', { detail: { projectId: 'project-two' } })); ui.runTimers(); await flush();
+  const view = lane(ui);
+  assert.equal(view.dataset.state, 'approval');
+  const approve = view.querySelectorAll('button').find(button => button.textContent === 'Approve');
+  assert(approve, 'The same approval card as the main view.');
+  approve.click(); await flush();
+  const answered = ui.requests.find(request => request.path.endsWith('/approval'));
+  assert.equal(answered.projectId, 'project-two', 'Answered for the lane\'s workspace.');
+  assert.deepEqual(answered.body, { runId: 'run-2', approvalId: 'approval-1', allow: true });
+  const input = view.querySelector('.lane-input');
+  input.value = 'Then add a changelog entry'; input.dispatchEvent(new UIEvent('input'));
+  view.querySelector('.lane-composer').dispatchEvent(new UIEvent('submit')); await flush();
+  const queued = ui.requests.find(request => request.path.endsWith('/queue'));
+  assert.equal(queued.projectId, 'project-two', 'Queued while that workspace\'s agent works.');
+  assert.equal(queued.body.text, 'Then add a changelog entry');
+  assert.equal(queued.body.executionRevision, 4);
+  assert.equal(queued.body.provider, 'codex');
+  assert.equal(ui.state().projectId, 'project-one');
+});
+
+test('Expand swaps a lane into the main view, and a notification for a pinned workspace opens its lane instead (#203)', async () => {
+  const ui = await browser({ moreProjects: true, desktop: true, windows: {}, lanesUI: true, stored: { 'codeshi:lanes:main': '["project-two"]' } });
+  laneRoutes(ui);
+  ui.menu('open-workspace', 'project-two'); await flush();
+  assert.equal(ui.state().projectId, 'project-one', 'The notification opens the lane, not the main view.');
+  lane(ui).querySelector('.lane-expand').click(); await flush();
+  assert.equal(ui.state().projectId, 'project-two', 'Expanded into the main view.');
+  assert(lane(ui, 'project-one'), 'The workspace you were in takes the lane\'s place.');
+  assert.equal(lane(ui, 'project-two'), undefined);
+  assert.deepEqual(JSON.parse(ui.storage.get('codeshi:lanes:main')), ['project-one']);
+  lane(ui, 'project-one').querySelector('.lane-popout').click(); await flush();
+  assert.deepEqual(ui.windowOpens, ['project-one'], 'Pop out opens it in a window of its own.');
+  assert.equal(lane(ui, 'project-one'), undefined, 'And unpins it.');
+});
+
+test('a narrow chat column turns lanes into strips that open over the page (#203)', async () => {
+  const ui = await browser({ moreProjects: true, desktop: true, lanesUI: true, lanesWidth: 700, stored: { 'codeshi:lanes:main': '["project-two"]' } });
+  laneRoutes(ui);
+  const strip = ui.document.querySelector('.lane-strip');
+  assert(strip, 'Not enough room beside a readable chat, so the lane is a strip.');
+  assert.equal(lane(ui), undefined, 'The lane itself waits until the strip is opened.');
+  assert.equal(strip.querySelector('.lane-strip-name').textContent, 'Other workspace');
+  strip.click(); await flush();
+  assert.equal(strip.getAttribute('aria-expanded'), 'true');
+  assert.equal(lane(ui).dataset.compact, 'true');
+  assert(lane(ui).classList.contains('overlay'), 'The lane opens over the page.');
 });

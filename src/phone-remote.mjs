@@ -5,9 +5,14 @@ import { FirebasePhoneClient, firebaseConfig, token, roomKey, seal, open, MAX_PA
 import { TRANSFER_ENCODING, conversationRoute, encodeConversation } from '../public/phone-transfer.mjs';
 import { pushSubscription } from './web-push.mjs';
 
-const FIVE_MINUTES = 300_000, SESSION = 7 * 24 * 60 * 60_000, ACTIVE_WINDOW = 45_000;
+// A page in front asks for something at least every 15 seconds, so a phone that has been quiet for longer than
+// ACTIVE_WINDOW left without saying so. A repeated request may come back for KEEP_REPLY after the phone paused the
+// page on the way, and an alert held back because the page was open goes to the lock screen if it leaves within HOLD.
+const FIVE_MINUTES = 300_000, SESSION = 7 * 24 * 60 * 60_000, ACTIVE_WINDOW = 25_000, KEEP_REPLY = FIVE_MINUTES, HOLD = 30_000;
+const TOO_LATE = 'This was sent too long ago, so Codeshi didn’t run it. Check the conversation, then try again.';
+const RESTARTED = 'Codeshi restarted before it could answer. Check the conversation before trying again.';
 const fail = (message, status = 400) => { throw Object.assign(Error(message), { status }); };
-const allowedGet = new Set(['/api/projects', '/api/status', '/api/conversation']);
+const allowedGet = new Set(['/api/projects', '/api/status', '/api/conversation', '/api/needs-you']);
 const allowedPost = new Set(['/api/tasks', '/api/tasks/plan', '/api/attachments']);
 export function phoneRemotePath(method, path) {
   if (typeof path !== 'string' || path.length > 2000 || !path.startsWith('/') || path.startsWith('//') || /[#\\]/.test(path)) return null;
@@ -57,10 +62,12 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
   const isActiveNow = room => room.state === 'active' && room.activeNow !== false && Boolean(room.lastSeenAt && now() - room.lastSeenAt < ACTIVE_WINDOW);
   const serializedRooms = () => [...rooms.values()]
     .filter(room => room.state === 'active' && !room.handoverFrom && room.secret && now() < room.expiresAt)
-    .map(({ id, secret, owner, peer, name, code, expiresAt, lastSeenAt, approvedAt, deviceId, push }) => ({
+    .map(({ id, secret, owner, peer, name, code, expiresAt, lastSeenAt, approvedAt, deviceId, push, seen }) => ({
       id, secret, owner: owner || null, peer, name, code, state: 'active', expiresAt,
       lastSeenAt: lastSeenAt || null, approvedAt: approvedAt || null, deviceId: deviceId || null,
       ...(push ? { push } : {}),
+      // IDs still inside their 30 seconds, so a request the phone sends again after a restart isn't run twice.
+      seen: [...(seen || new Map())].filter(([, entry]) => entry.expiresAt > now()).map(([id, entry]) => [id, entry.expiresAt]),
     }));
   function persist(authPatch = null) {
     if (!storeFile) return;
@@ -92,6 +99,12 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
         lastSeenAt: room.lastSeenAt || null, activeNow: isActiveNow(room), notifications: Boolean(room.push),
       })) };
   }
+  // The page counts as open from what it sends while in front. Anything it sends while away or made before it said
+  // it was leaving (both by the phone's own clock) doesn't count.
+  function opened(room, request) {
+    if (request.hidden === true || (room.leftAt && request.at < room.leftAt)) return false;
+    room.lastSeenAt = now(); room.activeNow = true; return true;
+  }
   async function publish(room, value) {
     if (!enabled || !rooms.has(room.id)) return;
     await client.request(`rooms/${room.id}/out`, 'PUT', await seal(room.key, room.id, 'out', { ...value, at: now() }));
@@ -100,7 +113,7 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
     await client.request(`rooms/${room.id}/meta`, 'PUT', { owner: room.owner, state: room.state, peer: room.peer || '', expiresAt: room.expiresAt });
   }
   async function remove(room, { persistStore = true } = {}) {
-    rooms.delete(room.id); room.stop?.(); clearTimeout(room.timer);
+    rooms.delete(room.id); room.stop?.(); clearTimeout(room.timer); clearTimeout(room.heldTimer); room.held = null;
     if (invite?.id === room.id) invite = null;
     for (const field of ['handoverId', 'meetingId']) if (room[field] && rooms.has(room[field])) {
       const linked = rooms.get(room[field]);
@@ -128,12 +141,26 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
     if (now() >= room.expiresAt) return remove(room);
     let request;
     try { request = await open(room.key, room.id, 'request', envelope.box); } catch { return; }
-    if (typeof request.id !== 'string' || !/^[a-f0-9]{32}$/.test(request.id) || !Number.isFinite(request.at) || Math.abs(now() - request.at) > 30_000) return;
+    if (typeof request.id !== 'string' || !/^[a-f0-9]{32}$/.test(request.id) || !Number.isFinite(request.at)) return;
     if (room.peer && room.peer !== envelope.uid) return;
     // A meeting point answers one key exchange and nothing else: it can never become a phone awaiting approval.
     if (room.meetingFor && request.kind !== 'meet') return;
     for (const [id, entry] of room.seen) if (now() > entry.expiresAt) room.seen.delete(id);
-    if (room.seen.has(request.id)) { const reply = room.seen.get(request.id).reply; if (reply) await publish(room, reply); return; }
+    room.kept ||= new Map();
+    for (const [id, entry] of room.kept) if (now() > entry.expiresAt) room.kept.delete(id);
+    // A request asked again, because its reply went missing on the way, gets the same reply and is never run again.
+    const known = room.seen.get(request.id) || room.kept.get(request.id);
+    if (known) {
+      const reply = known.restarted ? { id: request.id, status: 409, body: { error: RESTARTED } } : known.reply;
+      if (reply && request.quiet !== true) await publish(room, reply);
+      return;
+    }
+    if (Math.abs(now() - request.at) > 30_000) {
+      // Too old to run. A connected phone is told so instead of waiting for a reply that won't come.
+      if (room.state !== 'active' || room.peer !== envelope.uid || request.quiet === true) return;
+      return publish(room, request.kind === 'session' ? { id: request.id, state: room.state, code: room.code, expiresAt: room.expiresAt }
+        : { id: request.id, status: 408, body: { error: TOO_LATE } });
+    }
     const minute = Math.floor(now() / 60000);
     if (room.minute !== minute) { room.minute = minute; room.requests = 0; }
     if (++room.requests > 90 || room.seen.size >= 128) {
@@ -190,10 +217,13 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
       }
     } else if (request.kind === 'session') {
       if (room.state === 'active') {
-        if (request.active === false) room.activeNow = false;
-        else { room.lastSeenAt = now(); room.activeNow = true; }
+        // The page left: it was open until now. An alert held back while it was open goes to the lock screen.
+        if (request.active === false) { room.activeNow = false; room.lastSeenAt = now(); room.leftAt = Math.max(room.leftAt || 0, request.at); release(room); }
+        else opened(room, request);
         persist();
       }
+      // Said on the way out, with nobody left to read a reply.
+      if (request.quiet === true) return;
       reply = { id: request.id, state: room.state, code: room.code, expiresAt: room.expiresAt };
     } else if (room.state !== 'active') reply = { id: request.id, status: 401, body: { error: 'Approve this phone on the computer first.' } };
     else if (request.kind === 'logout') { await remove(room); return; }
@@ -220,7 +250,7 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
     } else if (request.kind === 'push') {
       // Lock-screen notifications (#23). The phone asks for this computer's public key, then hands over the
       // subscription its browser made with it. It belongs to this connection only and goes when the connection does.
-      room.lastSeenAt = now(); room.activeNow = true;
+      opened(room, request);
       if (!push) reply = { id: request.id, status: 409, body: { error: 'This version of Codeshi can’t send notifications.' } };
       else if (request.action === 'subscribe') {
         const subscription = pushSubscription(request.subscription);
@@ -233,7 +263,8 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
           : { id: request.id, status: 503, body: { error: 'Codeshi couldn’t make its notification key on the computer.' } };
       }
     } else if (request.kind === 'api') {
-      room.lastSeenAt = now(); room.activeNow = true;
+      // Acting from the open page answers anything held back for it.
+      if (opened(room, request) && request.method === 'POST') room.held = null;
       try {
         reply = { id: request.id, ...await phoneRemoteRequest({ handle, local }, request) };
         const view = request.method === 'GET' && conversationRoute(request.path);
@@ -248,6 +279,12 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
     // Removal or expiry while the local handler was running cannot restore the device or publish another reply.
     if (!enabled || !rooms.has(room.id) || now() >= room.expiresAt) return;
     entry.reply = reply;
+    // An action's reply is kept a little longer than its ID, for a page that paused while it was on its way.
+    if (request.kind !== 'session' && request.method !== 'GET') {
+      room.kept.set(request.id, { reply, expiresAt: now() + KEEP_REPLY });
+      for (const id of [...room.kept.keys()].slice(0, -16)) room.kept.delete(id);
+    }
+    room.lastReply = request.id;
     let cached = 0;
     for (const previous of [...room.seen.values()].reverse()) if (previous.reply) {
       cached += Buffer.byteLength(JSON.stringify(previous.reply));
@@ -358,7 +395,9 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
           code: typeof entry.code === 'string' ? entry.code : '',
           state: 'active', expiresAt: entry.expiresAt, lastSeenAt: entry.lastSeenAt || null,
           approvedAt: entry.approvedAt || null, deviceId: entry.deviceId || null,
-          push: pushSubscription(entry.push), activeNow: false, seen: new Map(), requests: 0,
+          push: pushSubscription(entry.push), activeNow: false, requests: 0,
+          seen: new Map((Array.isArray(entry.seen) ? entry.seen : []).filter(row => Array.isArray(row) && /^[a-f0-9]{32}$/.test(row[0]) && Number.isFinite(row[1]) && row[1] > now()).slice(0, 128)
+            .map(([id, expiresAt]) => [id, { expiresAt, reply: null, restarted: true }])),
         });
       }
       transition = transition.then(async () => {
@@ -397,19 +436,40 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
       eventTimer = null;
       if (current !== generation) return;
       const changed = projectsChanged; projectsChanged = false;
-      for (const room of rooms.values()) if (room.state === 'active') publish(room, { event: 'update', ...(changed ? { projectsChanged: true } : {}) }).catch(() => { error = 'Remote connection interrupted. Retrying…'; });
+      // Each update names the last reply, so a page that missed it behind this update asks again at once.
+      for (const room of rooms.values()) if (room.state === 'active') publish(room, { event: 'update', ...(changed ? { projectsChanged: true } : {}), ...(room.lastReply ? { reply: room.lastReply } : {}) }).catch(() => { error = 'Remote connection interrupted. Retrying…'; });
     }, 2000); eventTimer.unref();
+  }
+  async function deliver(room, plan) {
+    if (!enabled || !push || !room.push || !rooms.has(room.id) || now() >= room.expiresAt) return false;
+    const subscription = room.push, result = await push.send(subscription, plan.message, { urgency: plan.urgency, ttl: plan.ttl });
+    if (result === 'gone' && room.push === subscription) { room.push = null; persist(); }
+    return result === 'sent';
+  }
+  // An alert for a phone with Codeshi open waits up to HOLD: if the page leaves in that time, unanswered, the alert
+  // goes to the lock screen after all. A page that leaves without saying so stops counting as open on its own.
+  function hold(room, plan) {
+    const held = { plan, until: now() + HOLD }; room.held = held;
+    clearTimeout(room.heldTimer);
+    const check = () => {
+      if (room.held !== held) return;
+      if (!isActiveNow(room)) { release(room); return; }
+      if (now() >= held.until) { room.held = null; return; }
+      room.heldTimer = setTimeout(check, 5000); room.heldTimer.unref?.();
+    };
+    room.heldTimer = setTimeout(check, 5000); room.heldTimer.unref?.();
+  }
+  function release(room) {
+    const held = room.held; room.held = null; clearTimeout(room.heldTimer);
+    if (held && now() < held.until) deliver(room, held.plan).catch(failure => console.error('Codeshi could not notify a phone:', failure.message));
   }
   // One alert, chosen by alertPush, to each approved phone that turned notifications on and isn't looking at Codeshi
   // right now: an open page already shows it and plays its sound. A phone that unsubscribed is forgotten.
   async function alert(plan) {
     if (!enabled || !push || !plan?.message) return 0;
-    const targets = [...rooms.values()].filter(room => room.state === 'active' && room.push && now() < room.expiresAt && !isActiveNow(room));
-    const results = await Promise.all(targets.map(async room => {
-      const subscription = room.push, result = await push.send(subscription, plan.message, { urgency: plan.urgency, ttl: plan.ttl });
-      if (result === 'gone' && room.push === subscription) { room.push = null; persist(); }
-      return result === 'sent';
-    }));
+    const targets = [...rooms.values()].filter(room => room.state === 'active' && room.push && now() < room.expiresAt);
+    for (const room of targets) if (isActiveNow(room)) hold(room, plan);
+    const results = await Promise.all(targets.filter(room => !isActiveNow(room)).map(room => deliver(room, plan)));
     return results.filter(Boolean).length;
   }
   const manage = input => { const next = transition.then(() => action(input)); transition = next.catch(() => {}); return next; };

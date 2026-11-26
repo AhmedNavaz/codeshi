@@ -13,6 +13,7 @@ import { createProjectReviewRoutes } from './project-review.mjs';
 import { cliCommand, createTerminalRoutes } from './terminal.mjs';
 import { createVoiceRoutes } from './voice.mjs';
 import { buildRecap } from './recap.mjs';
+import { buildNeedsYou } from './needs-you.mjs';
 import { createWorkspaceRoutes } from './workspace-routes.mjs';
 import { createGitHubRepoRoutes } from './github-repos.mjs';
 import { createGitHubSignIn } from './github-signin.mjs';
@@ -46,7 +47,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/brief-panel.js': ['brief-panel.js', 'text/javascript; charset=utf-8'], '/tasks-panel.js': ['tasks-panel.js', 'text/javascript; charset=utf-8'], '/smart-results.js': ['smart-results.js', 'text/javascript; charset=utf-8'], '/skills.js': ['skills.js', 'text/javascript; charset=utf-8'], '/memory.js': ['memory.js', 'text/javascript; charset=utf-8'], '/model-picker.js': ['model-picker.js', 'text/javascript; charset=utf-8'], '/routing.js': ['routing.js', 'text/javascript; charset=utf-8'], '/layout.js': ['layout.js', 'text/javascript; charset=utf-8'], '/agents-panel.js': ['agents-panel.js', 'text/javascript; charset=utf-8'], '/model-picker.css': ['model-picker.css', 'text/css; charset=utf-8'],
   '/preview.js': ['preview.js', 'text/javascript; charset=utf-8'], '/sketch-logic.js': ['sketch-logic.js', 'text/javascript; charset=utf-8'], '/sketch.js': ['sketch.js', 'text/javascript; charset=utf-8'], '/sketch.css': ['sketch.css', 'text/css; charset=utf-8'], '/terminal.js': ['terminal.js', 'text/javascript; charset=utf-8'], '/terminal.css': ['terminal.css', 'text/css; charset=utf-8'], '/cli-tab.js': ['cli-tab.js', 'text/javascript; charset=utf-8'], '/cli-tab.css': ['cli-tab.css', 'text/css; charset=utf-8'], '/main-tabs.js': ['main-tabs.js', 'text/javascript; charset=utf-8'], '/sidebar-tools.js': ['sidebar-tools.js', 'text/javascript; charset=utf-8'], '/main-tabs.css': ['main-tabs.css', 'text/css; charset=utf-8'], '/terminal-tabs.css': ['terminal-tabs.css', 'text/css; charset=utf-8'], '/git-tabs.css': ['git-tabs.css', 'text/css; charset=utf-8'],
   '/suggestions.js': ['suggestions.js', 'text/javascript; charset=utf-8'], '/keyboard.js': ['keyboard.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/voice.js': ['voice.js', 'text/javascript; charset=utf-8'], '/voice.css': ['voice.css', 'text/css; charset=utf-8'],
-  '/parallel-tasks.js': ['parallel-tasks.js', 'text/javascript; charset=utf-8'], '/parallel-tasks.css': ['parallel-tasks.css', 'text/css; charset=utf-8'], '/recap.js': ['recap.js', 'text/javascript; charset=utf-8'], '/recap.css': ['recap.css', 'text/css; charset=utf-8'],
+  '/parallel-tasks.js': ['parallel-tasks.js', 'text/javascript; charset=utf-8'], '/parallel-tasks.css': ['parallel-tasks.css', 'text/css; charset=utf-8'], '/recap.js': ['recap.js', 'text/javascript; charset=utf-8'], '/recap.css': ['recap.css', 'text/css; charset=utf-8'], '/companion-lanes.js': ['companion-lanes.js', 'text/javascript; charset=utf-8'], '/companion-lanes.css': ['companion-lanes.css', 'text/css; charset=utf-8'],
   // The terminal renderer, served from the installed package so packaged builds work offline.
   '/vendor/xterm.js': ['../node_modules/@xterm/xterm/lib/xterm.js', 'text/javascript; charset=utf-8'], '/vendor/xterm.css': ['../node_modules/@xterm/xterm/css/xterm.css', 'text/css; charset=utf-8'], '/vendor/addon-fit.js': ['../node_modules/@xterm/addon-fit/lib/addon-fit.js', 'text/javascript; charset=utf-8'], '/vendor/addon-web-links.js': ['../node_modules/@xterm/addon-web-links/lib/addon-web-links.js', 'text/javascript; charset=utf-8'],
   '/updates.js': ['updates.js', 'text/javascript; charset=utf-8'], '/updater.js': ['updater.js', 'text/javascript; charset=utf-8'], '/updates.css': ['updates.css', 'text/css; charset=utf-8'],
@@ -236,7 +237,10 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       if (req.method === 'GET' && url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
       if (req.method === 'GET' && url.pathname === '/api/projects') return json(res, 200, registry.list());
       // What ran, changed and is waiting since a given time, across workspaces (#22).
-      if (req.method === 'GET' && url.pathname === '/api/recap') return json(res, 200, buildRecap({ registry, since: url.searchParams.get('since') }));
+      // The recap leads with what needs you (#202), from the same list the phone shows.
+      if (req.method === 'GET' && url.pathname === '/api/recap') return json(res, 200, { ...buildRecap({ registry, since: url.searchParams.get('since') }), needsYou: buildNeedsYou({ registry }).items });
+      // Everything waiting for you across open workspaces, one line each, for the phone (#201).
+      if (req.method === 'GET' && url.pathname === '/api/needs-you') return json(res, 200, buildNeedsYou({ registry }));
       // The codeshi command's /open (#90): the desktop app brings its window forward on a workspace. The browser build has none.
       if (req.method === 'POST' && url.pathname === '/api/window') {
         if (req.headers['x-ai-relay'] !== '1' || req.phoneClient) return json(res, 403, { error: 'Open the window on the computer.' });

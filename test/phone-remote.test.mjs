@@ -550,3 +550,254 @@ test('away-from-home sessions last a week, survive a Codeshi restart, distinguis
   assert.equal(access.status().enabled, false);
   assert.equal(access.status().devices.length, 0);
 });
+
+// #200: replies that go missing, a page that leaves and comes back, and whether the computer thinks the phone is open.
+const reply = async (f, id) => { let value = null; await wait(() => { const out = f.firebase.values.get(`rooms/${f.room}/out`); if (out) open(f.key, f.room, 'out', out).then(opened => { value = opened; }); return value?.id === id; }); return value; };
+const sendAs = async (f, request) => f.firebase.request(`rooms/${f.room}/request`, 'PUT', { uid: 'phone', box: await seal(f.key, f.room, 'request', request) });
+const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+
+test('a request asked again gets its kept reply without running twice, even after a progress update replaced it or the page paused for minutes (#200)', async t => {
+  let clock = Date.now(); const calls = [];
+  const f = await fixture(t, { now: () => clock, handle: async (req, res) => { for await (const chunk of req) void chunk; calls.push(req.url); res.writeHead(200); res.end(JSON.stringify({ ok: calls.length })); } });
+  await f.send({ kind: 'pair', code: '123456' }); await f.access.manage({ action: 'allow', id: f.room });
+  const stop = { id: token(16), at: clock, kind: 'api', method: 'POST', path: '/api/conversations/c/stop', body: {} };
+  await sendAs(f, stop);
+  assert.deepEqual((await reply(f, stop.id)).body, { ok: 1 });
+  // A progress update replaces the reply in the one mailbox, and names it so the page knows it missed it.
+  const before = f.firebase.values.get(`rooms/${f.room}/out`);
+  f.access.notify(); await wait(() => f.firebase.values.get(`rooms/${f.room}/out`) !== before);
+  const progress = await open(f.key, f.room, 'out', f.firebase.values.get(`rooms/${f.room}/out`));
+  assert.equal(progress.event, 'update'); assert.equal(progress.reply, stop.id, 'A progress update names the last reply.');
+  // Sealed afresh with the same ID, as the page does: answered from the kept reply.
+  await sendAs(f, stop);
+  assert.deepEqual((await reply(f, stop.id)).body, { ok: 1 });
+  // Minutes later, past the 30 seconds a new request is accepted for, the same action is still answered, not run.
+  clock += 3 * 60_000;
+  await sendAs(f, stop);
+  assert.deepEqual((await reply(f, stop.id)).body, { ok: 1 });
+  assert.equal(calls.length, 1, 'Stop ran once.');
+  // A request that never arrived in time is refused, and the page is told so instead of waiting.
+  const late = { id: token(16), at: clock - 60_000, kind: 'api', method: 'POST', path: '/api/conversations/c/messages', body: { text: 'late' } };
+  await sendAs(f, late);
+  const refused = await reply(f, late.id);
+  assert.equal(refused.status, 408); assert.match(refused.body.error, /too long ago/);
+  assert.equal(calls.length, 1, 'A late message is never run.');
+});
+
+test('the page leaving is said without a reply, and only what it sends while in front counts as open (#200)', async t => {
+  let clock = Date.now();
+  const f = await fixture(t, { now: () => clock });
+  await f.send({ kind: 'pair', code: '123456' }); await f.access.manage({ action: 'allow', id: f.room });
+  assert.equal(f.access.status().devices[0].activeNow, true);
+  const writes = f.firebase.writes.length;
+  await sendAs(f, { id: token(16), at: clock, kind: 'session', active: false, quiet: true }); await settle();
+  assert.equal(f.access.status().devices[0].activeNow, false);
+  assert.equal(f.access.status().devices[0].lastSeenAt, clock, 'Last seen is when it left.');
+  assert.equal(f.firebase.writes.slice(writes).some(write => write.key.endsWith('/out')), false, 'Nothing is written for a page that left.');
+  // A read made before it left, or sent while away, arrives late without making the phone look open.
+  await sendAs(f, { id: token(16), at: clock - 500, kind: 'api', method: 'GET', path: '/api/projects' });
+  await sendAs(f, { id: token(16), at: clock + 10, kind: 'api', method: 'GET', path: '/api/projects', hidden: true }); await settle();
+  assert.equal(f.access.status().devices[0].activeNow, false);
+  clock += 1000;
+  await sendAs(f, { id: token(16), at: clock, kind: 'session' }); await settle();
+  assert.equal(f.access.status().devices[0].activeNow, true, 'Coming back counts as open at once.');
+  // Without a word from the phone, open ends 25 seconds after the last request rather than 45.
+  clock += 26_000;
+  assert.equal(f.access.status().devices[0].activeNow, false);
+});
+
+test('an alert held back for an open page reaches the lock screen when the page leaves, unless it was acted on (#200)', async t => {
+  let clock = Date.now(); const sent = [];
+  const push = { publicKey: () => 'key', send: async (subscription, message) => { sent.push(message.title); return 'sent'; } };
+  const f = await fixture(t, { now: () => clock, push });
+  await f.send({ kind: 'pair', code: '123456' }); await f.access.manage({ action: 'allow', id: f.room });
+  const subscription = { endpoint: 'https://web.push.apple.com/phone', keys: { p256dh: Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 7)]).toString('base64url'), auth: Buffer.alloc(16, 3).toString('base64url') } };
+  assert.equal((await f.send({ kind: 'push', action: 'subscribe', subscription })).value.status, 200);
+  const plan = title => ({ urgency: 'high', ttl: 60, message: { title, body: 'Workspace' } });
+  assert.equal(await f.access.alert(plan('Waiting for you')), 0, 'The open page shows it.');
+  clock += 2000;
+  await sendAs(f, { id: token(16), at: clock, kind: 'session', active: false, quiet: true });
+  await wait(() => sent.length === 1);
+  assert.deepEqual(sent, ['Waiting for you']);
+  // Answered from the page before leaving: nothing more to say.
+  clock += 1000; await f.send({ kind: 'session', at: clock });
+  assert.equal(await f.access.alert(plan('Finished')), 0);
+  await f.send({ kind: 'api', method: 'POST', path: '/api/conversations/c/approval', body: { allow: true }, at: clock + 1 });
+  await sendAs(f, { id: token(16), at: clock + 2, kind: 'session', active: false, quiet: true }); await settle();
+  assert.deepEqual(sent, ['Waiting for you']);
+});
+
+test('after a restart, a request the phone asks again is not run a second time (#200)', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-remote-seen-')), storeFile = path.join(dir, 'auth.json');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const firebase = new MemoryFirebase(), calls = [];
+  const make = () => createRemotePhoneAccess({ config, storeFile, clientFactory: () => firebase, local: () => ({ port: 5555 }),
+    handle: async (req, res) => { for await (const chunk of req) void chunk; calls.push(req.url); res.writeHead(200); res.end('{}'); } });
+  let access = make(); t.after(() => access.close());
+  const started = await access.manage({ action: 'start' });
+  const [room, secret] = new URLSearchParams(new URL(started.invite.url).hash.slice(1)).get('remote').split('.'), key = await roomKey(secret);
+  const f = { firebase, room, key };
+  const pair = { id: token(16), at: Date.now(), kind: 'pair', code: '123456' }; await sendAs(f, pair); await reply(f, pair.id);
+  await access.manage({ action: 'allow', id: room });
+  const message = { id: token(16), at: Date.now(), kind: 'api', method: 'POST', path: '/api/conversations/c/messages', body: { text: 'once' } };
+  await sendAs(f, message); await reply(f, message.id);
+  await access.close(); await firebase.request(`rooms/${room}/out`, 'DELETE'); access = make();
+  await wait(() => (firebase.watches.get(`rooms/${room}/request`)?.size || 0) > 0);
+  await sendAs(f, message);
+  const answer = await reply(f, message.id);
+  assert.equal(answer.status, 409); assert.match(answer.body.error, /restarted/);
+  assert.equal(calls.length, 1);
+});
+
+async function remotePage(t, f, secret) {
+  const storage = new Map([[`codeshi:remote-session:${config.projectId}`, JSON.stringify({ room: f.room, secret })]]), window = new EventTarget();
+  const element = () => ({ hidden: false, textContent: '', children: [], classList: { add() {}, remove() {} }, append(...children) { this.children.push(...children); }, prepend() {}, setAttribute() {}, addEventListener() {} });
+  const document = Object.assign(new EventTarget(), { hidden: false, getElementById: () => element(), createElement: element, body: element(), head: element() });
+  const link = { down: false, failPuts: 0, streams: [] };
+  class PhoneClient {
+    async identity() { return { uid: 'phone' }; }
+    async request(key, method, value) {
+      if (method === 'PUT' && key.endsWith('/request') && link.failPuts > 0) { link.failPuts--; throw new TypeError('Load failed'); }
+      return f.firebase.request(key, method, value);
+    }
+    watch(key, changed, failed) {
+      const stream = { changed, failed, live: true }; link.streams.push(stream);
+      const stop = f.firebase.watch(key, box => { if (stream.live && !link.down) changed(box); });
+      queueMicrotask(() => changed(clone(f.firebase.values.get(key))));
+      return () => { stream.live = false; stop(); };
+    }
+  }
+  const source = fs.readFileSync(new URL('../public/phone-remote.mjs', import.meta.url), 'utf8').replace(/^import[^\n]+\n/gm, '');
+  const started = vm.runInNewContext(source, { document, window, crypto, URL, URLSearchParams, EventTarget, Event, MessageEvent, Response, setTimeout, clearTimeout, queueMicrotask,
+    FirebasePhoneClient: PhoneClient, firebaseConfig, token, roomKey, seal, open, TRANSFER_ENCODING, conversationRoute, decodeConversation,
+    localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
+    location: { hash: '', pathname: '/', search: '' }, history: { replaceState() {} }, navigator: { userAgent: 'iPhone' },
+    fetch: async () => new Response(JSON.stringify(config)),
+  });
+  await started; await wait(() => window.relayPhoneTransport);
+  const show = hidden => { document.hidden = hidden; document.dispatchEvent(new Event('visibilitychange')); };
+  t.after(() => show(true));
+  const post = (url, body = {}) => window.relayPhoneTransport.fetch(url, { method: 'POST', body: JSON.stringify(body) });
+  return { window, document, link, show, post };
+}
+const remoteFixture = async (t, handle) => {
+  const f = await fixture(t, { handle });
+  await f.send({ kind: 'pair', code: '123456' }); await f.access.manage({ action: 'allow', id: f.room });
+  return { f, secret: new URLSearchParams(new URL(f.state.invite.url).hash.slice(1)).get('remote').split('.')[1] };
+};
+
+test('coming back to the page picks up a reply that a progress update replaced while it was away, and sends the action once (#200)', async t => {
+  let release; const gate = new Promise(resolve => { release = resolve; }), calls = [];
+  const { f, secret } = await remoteFixture(t, async (req, res) => {
+    for await (const chunk of req) void chunk; calls.push(req.url);
+    if (req.url.includes('/queue')) await gate;
+    res.writeHead(200); res.end(JSON.stringify({ queued: true }));
+  });
+  const page = await remotePage(t, f, secret);
+  const sent = page.post('/api/conversations/c/queue', { action: 'add', text: 'Only once' });
+  await wait(() => calls.some(call => call.includes('/queue')));
+  page.show(true);
+  // Leaving is said at once and nothing waits for it.
+  const left = await Promise.race([page.window.relayPhoneTransport.fetch('/phone/session?active=0', { keepalive: true }), settle().then(() => 'waited')]);
+  assert.equal(left.status, 200);
+  await wait(() => f.access.status().devices[0].activeNow === false);
+  release(); await settle();
+  await f.firebase.request(`rooms/${f.room}/out`, 'PUT', await seal(f.key, f.room, 'out', { event: 'update', at: Date.now() }));
+  const back = Date.now(); page.show(false);
+  const response = await sent;
+  assert.equal(response.status, 200); assert.deepEqual(await response.json(), { queued: true });
+  assert(Date.now() - back < 2000, 'The page is up to date within 2 seconds.');
+  assert.equal(calls.filter(call => call.includes('/queue')).length, 1, 'The prompt was queued once.');
+  const next = await page.post('/api/conversations/c/stop');
+  assert.equal(next.status, 200, 'Later requests go through at once.');
+});
+
+test('a request cut off as the page hides, or answered while the stream reconnects, is asked again instead of waiting 25 seconds (#200)', async t => {
+  const calls = [];
+  const { f, secret } = await remoteFixture(t, async (req, res) => { for await (const chunk of req) void chunk; calls.push(req.url); res.writeHead(200); res.end(JSON.stringify({ n: calls.length })); });
+  const page = await remotePage(t, f, secret);
+  // The phone cuts off the upload as the page hides: nothing failed, it is sent again on return.
+  page.link.failPuts = 1; page.show(true);
+  const approval = page.post('/api/conversations/c/approval', { allow: true });
+  await settle(); page.show(false);
+  const answered = await approval;
+  assert.equal(answered.status, 200); assert.equal(calls.filter(call => call.includes('/approval')).length, 1);
+  // The stream drops; the reply is written while it reconnects; the reconnected stream opens on the mailbox as it is now.
+  page.link.down = true;
+  const stop = page.post('/api/conversations/c/stop');
+  await wait(() => calls.some(call => call.includes('/stop'))); await settle();
+  await f.firebase.request(`rooms/${f.room}/out`, 'PUT', await seal(f.key, f.room, 'out', { event: 'update', at: Date.now() }));
+  const stream = page.link.streams.at(-1);
+  stream.failed(Error('Reconnecting to your computer…')); page.link.down = false;
+  const started = Date.now();
+  stream.changed(clone(f.firebase.values.get(`rooms/${f.room}/out`)));
+  assert.equal((await stop).status, 200);
+  assert(Date.now() - started < 2000);
+  assert.equal(calls.filter(call => call.includes('/stop')).length, 1, 'Stop ran once.');
+});
+
+// An unpaired browser on the same phone, such as a new Home Screen icon (#201). Its elements keep their listeners so
+// the test can tap Paste and submit the code box.
+async function unpairedPage(t, clipboard, uid = 'phone-icon') {
+  const created = [], window = new EventTarget(), storage = new Map();
+  const element = () => {
+    const listeners = new Map(), value = { hidden: false, textContent: '', children: [], disabled: false, value: '', classList: { add() {}, remove() {} }, append(...children) { this.children.push(...children); }, prepend(...children) { this.children.unshift(...children); }, setAttribute() {}, focus() {},
+      addEventListener(type, listener) { listeners.set(type, listener); }, fire(type, event = { preventDefault() {} }) { return listeners.get(type)?.(event); } };
+    created.push(value); return value;
+  };
+  const document = Object.assign(new EventTarget(), { hidden: false, getElementById: () => element(), createElement: element, body: element(), head: element() });
+  class PhoneClient {
+    async identity() { return { uid }; }
+    request(...args) { return this.f.firebase.request(...args); }
+    watch(key, changed) { const stop = this.f.firebase.watch(key, changed); queueMicrotask(() => changed(clone(this.f.firebase.values.get(key)))); return stop; }
+  }
+  const source = fs.readFileSync(new URL('../public/phone-remote.mjs', import.meta.url), 'utf8').replace(/^import[^\n]+\n/gm, '');
+  return (f) => {
+    PhoneClient.prototype.f = f;
+    const started = vm.runInNewContext(source, { document, window, crypto, URL, URLSearchParams, EventTarget, Event, MessageEvent, Response, setTimeout, clearTimeout, queueMicrotask,
+      FirebasePhoneClient: PhoneClient, firebaseConfig, token, roomKey, seal, open, TRANSFER_ENCODING, conversationRoute, decodeConversation, normalizeHandoverCode, handoverMeeting, handoverKeys, handoverShared, REMOTE_BUSY,
+      localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
+      location: { hash: '', pathname: '/', search: '' }, history: { replaceState() {} }, navigator: { userAgent: 'iPhone', clipboard: { readText: async () => clipboard() } },
+      fetch: async () => new Response(JSON.stringify(config)),
+    });
+    t.after(() => { document.hidden = true; document.dispatchEvent(new Event('visibilitychange')); });
+    return { started, window, created, paste: () => created.find(item => item.id === 'phone-handover-paste'), field: () => created.find(item => item.id === 'phone-handover-code'), note: () => document.body.children[0]?.children?.[1] };
+  };
+}
+
+test('a new browser takes over the connection with one tap on Paste, from the link or the code Move to another browser copied (#201)', async t => {
+  const { f } = await remoteFixture(t);
+  // The paired browser copies its link. The new one finds it on the clipboard.
+  const handover = (await f.send({ kind: 'handover' })).value;
+  let clipboard = 'not a connection';
+  const page = (await unpairedPage(t, () => clipboard))(f);
+  await page.started;
+  assert.ok(page.paste(), 'An unpaired page offers Paste.');
+  page.paste().fire('click'); await settle();
+  assert.match(page.note().textContent, /Nothing to paste/, 'Something else on the clipboard is not taken for a connection.');
+  assert.equal(f.access.status().devices.length, 1);
+  clipboard = `Open this: ${handover.body.url}`;
+  page.paste().fire('click');
+  await wait(() => page.window.relayPhoneTransport);
+  const devices = f.access.status().devices;
+  assert.equal(devices.length, 1, 'It moves the connection rather than adding a phone.');
+  assert.equal(devices[0].state, 'active');
+  assert.notEqual(devices[0].id, f.room, 'The browser that copied it is disconnected.');
+});
+
+test('the code under Move to another browser can be pasted too, and the box still takes a typed one (#201)', async t => {
+  const { f } = await remoteFixture(t);
+  const handover = (await f.send({ kind: 'handover' })).value;
+  const page = (await unpairedPage(t, () => ` ${handover.body.code.toLowerCase().replace(/(.{4})/, '$1 ')} `))(f);
+  await page.started;
+  page.paste().fire('click');
+  await wait(() => page.window.relayPhoneTransport);
+  assert.equal(f.access.status().devices[0].state, 'active');
+  // A used code works only once.
+  const again = (await unpairedPage(t, () => '', 'phone-other'))(f);
+  await again.started;
+  const form = again.created.find(item => item.children.includes(again.paste()));
+  again.field().value = handover.body.code; form.fire('submit');
+  await wait(() => /didn’t work/.test(again.note().textContent));
+  assert.equal(again.window.relayPhoneTransport, undefined);
+});

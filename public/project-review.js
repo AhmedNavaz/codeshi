@@ -98,17 +98,17 @@
     catch (failure) { if (scope === projectId) error = failure.message; }
     finally { changed(); if (dialog.open) renderDialog(); refresh(); }
   }
-  function preparationStatus(host) {
+  function preparationStatus(host, cls = 'flow-button') {
     const value = current().preparation;
     if (preparationErrors.get(projectId)) host.append(node('p', 'project-review-error', preparationErrors.get(projectId)));
     if (preparing()) {
-      const indicator = node('p', 'project-review-preparing', value?.status === 'waiting' ? 'Waiting to prepare your project review…' : 'Preparing your project review…');
+      const indicator = node('p', 'project-review-preparing', value?.status === 'waiting' ? 'Waiting to prepare how to run your app…' : 'Preparing how to run your app…');
       indicator.setAttribute('role', 'status'); indicator.setAttribute('aria-live', 'polite'); host.append(indicator);
-      if (value?.id) host.append(button('Stop preparing', stopPreparation));
+      if (value?.id) host.append(button('Stop preparing', stopPreparation, cls));
     } else if (value && ['failed', 'stopped', 'blocked', 'detached', 'lost'].includes(value.status)) {
       host.append(node('p', 'project-review-error', value.error || 'Preparation stopped. Try preparing again.'));
     }
-    if (value?.approvals) host.append(button('Preparation needs your approval', async () => { if (dialog.open) close(); await api.setTask(value.id); }));
+    if (value?.approvals) host.append(button('Preparation needs your approval', async () => { if (dialog.open) close(); await api.setTask(value.id); }, cls));
   }
   const words = { waiting: 'Waiting', starting: 'Starting', ready: 'Ready', adopted: 'Attached', done: 'Completed', stopped: 'Stopped', blocked: 'Blocked', failed: 'Failed', stopping: 'Stopping' };
   function serviceMap(chosen, run, detailed = false) {
@@ -178,59 +178,59 @@
     select.addEventListener('change', () => { choices.set(projectId, select.value); changed(); renderDialog(); });
     label.append(select); return label;
   }
+  // Flow's Your app panel (#194): the launch map's services and how each stands, with Start, Stop and the preview on its
+  // face. The launch map itself, with its commands and output, opens from here.
   function render(card) {
     const value = current(), chosen = profile();
-    const signature = JSON.stringify([projectId, chosen, value.run && { ...value.run, steps: value.run.steps.map(({ session, ...step }) => ({ ...step, session: session && { status: session.status, exitCode: session.exitCode } })) }, value.error, error, pending, value.preparation, preparing(), preparationErrors.get(projectId)]);
+    const signature = JSON.stringify([projectId, chosen, value.run && { ...value.run, steps: value.run.steps.map(({ session, ...step }) => ({ ...step, session: session && { status: session.status, exitCode: session.exitCode } })) }, value.error, error, pending, value.preparation, preparing(), preparationErrors.get(projectId), Boolean(window.relayPreview?.available)]);
     if (card.signature === signature) return; card.signature = signature;
     card.body.replaceChildren(); card.foot.replaceChildren();
-    const runError = (value.run && value.plan && value.run.revision === value.plan.revision) ? value.run.error : null;
-    if (error || value.error || runError) card.body.append(node('p', 'project-review-error', error || value.error || runError));
-    if (!chosen) {
-      card.body.append(node('p', 'flow-empty', projectId ? 'Let your agent map how to run your website, backend, tool or services. Then run your project and review the result here.' : 'Open a workspace to run and review its project.'));
-    } else {
-      card.body.append(profileChooser());
-      const run = value.run, matches = run?.profileId === chosen.id && run.revision === value.plan.revision;
-      const status = matches ? words[run.status] || run.status : 'Ready to start';
-      const summary = node('div', 'project-review-summary'); summary.dataset.status = matches ? run.status : 'idle';
-      summary.append(node('strong', 'project-review-summary-status', status));
-      const count = chosen.services.filter(service => service.kind === 'service').length;
-      summary.append(node('span', 'project-review-hint', `${count} service${count === 1 ? '' : 's'} · starts together`));
-      card.body.append(summary);
-
+    const run = value.run, matches = Boolean(chosen && run && run.profileId === chosen.id && run.revision === value.plan.revision), running = active(run);
+    const problem = error || value.error || (matches ? run.error : null);
+    if (problem) card.body.append(node('p', 'project-review-error', problem));
+    if (chosen) {
+      if (value.plan.profiles.length > 1) card.body.append(profileChooser());
       const serviceList = node('ul', 'project-review-services');
       for (const service of chosen.services) {
-        const step = matches ? run.steps.find(s => s.id === service.id) : null;
-        const item = node('li', 'project-review-service');
+        const step = matches ? run.steps.find(item => item.id === service.id) : null, item = node('li', 'project-review-service');
         item.dataset.status = step ? step.status : 'waiting';
         const dot = node('span', 'project-review-service-dot'); dot.setAttribute('aria-hidden', 'true');
-        const name = node('span', 'project-review-service-name', service.name);
-        const endpoint = service.ready?.url || (service.ready?.port ? ':' + service.ready.port : null);
-        if (endpoint) {
-          const endpointSpan = node('span', 'project-review-service-endpoint', endpoint.replace(/^http:\/\/(?:127\.0\.0\.1|localhost)/, ''));
-          name.append(' ', endpointSpan);
-        }
-        const isPreview = (chosen.previews || []).some(p => p.service === service.id) || chosen.preview?.service === service.id;
-        const tag = node('span', 'project-review-service-tag', step ? (words[step.status] || step.status) : isPreview ? 'Interface' : service.kind === 'task' ? 'Setup' : 'Service');
-        item.append(dot, name, tag);
+        const name = node('span', 'project-review-service-name', service.name), endpoint = service.ready?.url || (service.ready?.port ? ':' + service.ready.port : null);
+        if (endpoint) name.append(' ', node('span', 'project-review-service-endpoint', endpoint.replace(/^https?:\/\/(?:127\.0\.0\.1|localhost)/, '').replace(/\/$/, '')));
+        const isPreview = (chosen.previews || []).some(preview => preview.service === service.id) || chosen.preview?.service === service.id;
+        item.append(dot, name, node('span', 'project-review-service-tag', step ? (words[step.status] || step.status) : isPreview ? 'Interface' : service.kind === 'task' ? 'Setup' : 'Service'));
         serviceList.append(item);
       }
       card.body.append(serviceList);
-
-      if (chosen.prerequisites?.length) {
-        const prereqs = node('div', 'project-review-prereqs');
-        prereqs.append(node('strong', null, 'DB / Prerequisites: '), node('span', null, chosen.prerequisites.join(' · ')));
-        card.body.append(prereqs);
-      }
-
-      if (matches && run.status === 'starting') {
-        const step = run.steps.find(step => step.status === 'starting');
-        card.body.append(node('p', 'project-review-hint', step ? `Starting ${step.name}…` : 'Preparing your services…'));
-      }
-      if (value.run && value.run.revision !== value.plan.revision) card.body.append(node('p', 'project-review-hint', 'Launch map updated. Stop this review to use the new setup.'));
-      else card.body.append(node('p', 'project-review-hint', matches && run.status === 'ready' ? 'Choose what to open below. Point at anything you want changed.' : 'Run your project, then open it here to review.'));
+      if (run && run.revision !== value.plan.revision) card.body.append(node('p', 'project-review-hint', 'The launch map changed. Stop to use the new one.'));
     }
-    preparationStatus(card.body);
-    actions(card.foot);
+    preparationStatus(card.body, 'flow-action');
+    // One thing to do next leads: open what's running, or start it, or have an agent work out how.
+    const destinations = matches && run.previews?.length ? run.previews : matches && run.preview ? [run.preview] : [];
+    for (const destination of destinations) {
+      const name = run.steps.find(step => step.id === destination.service)?.name || 'project';
+      const launch = button(destinations.length > 1 ? `Open ${name}` : 'Open preview', () => preview(destination.url), 'flow-action flow-action-primary');
+      launch.title = !window.relayPreview?.available ? destination.url : `Open ${name} in a preview window and point at what to change`;
+      card.foot.append(launch);
+    }
+    if (chosen && !running) {
+      const start = button(matches && ['stopped', 'failed', 'blocked'].includes(run.status) ? 'Start again' : 'Start', () => perform('start'), `flow-action${destinations.length ? '' : ' flow-action-primary'}`);
+      start.disabled = pending || Boolean(value.error || error); start.title = 'Run the launch map’s commands on this computer';
+      card.foot.append(start);
+    }
+    if (running) { const stop = button('Stop', () => perform('stop'), 'flow-action'); stop.disabled = pending || run.status === 'stopping'; stop.title = 'Stop the services and close their preview windows'; card.foot.append(stop); }
+    if (matches && run.conflicts?.length) {
+      const box = node('div', 'project-review-conflict'), many = run.conflicts.length > 1, row = node('div', 'project-review-conflict-actions');
+      box.append(node('strong', null, many ? 'Ports already in use' : 'Port already in use'));
+      box.append(node('span', null, `${run.conflicts.map(item => `${item.name} (port ${item.port})`).join(', ')} ${many ? 'are' : 'is'} already serving on this computer.`));
+      const adoptable = run.conflicts.filter(item => item.adoptable).map(item => item.service);
+      if (adoptable.length) { const attachButton = button(adoptable.length > 1 ? 'Attach to running services' : 'Attach to the running service', () => attach(adoptable), 'flow-action flow-action-primary'); attachButton.disabled = pending; row.append(attachButton); }
+      const reassign = button('Use another port', () => configure(reassignPrompt), 'flow-action'); reassign.disabled = preparing(); row.append(reassign);
+      box.append(row); card.body.append(box);
+    }
+    if (matches && run.error) { const fix = button('Ask an agent to fix it', () => configure('Investigate the failed launch using the observations below and correct the map or explain missing prerequisites.'), 'flow-action'); fix.disabled = preparing(); card.foot.append(fix); }
+    if (chosen) { const map = button('Launch map', open, 'flow-action'); map.title = 'What runs, in what order, with its output. Ask an agent to change it'; card.foot.append(map); }
+    else if (projectId && !preparing()) { const prepare = button('Set up with an agent', () => configure(), 'flow-action flow-action-primary'); prepare.title = 'An agent reads this project and works out how to run it, in the background'; card.foot.append(prepare); }
   }
   function renderDialog() {
     if (!dialog.open && dialogSignature) return;
@@ -278,6 +278,22 @@
   window.addEventListener('relay-state', sync);
   window.addEventListener('relay-flow', () => { if (!window.relayFlow?.isOn() && dialog.open) close(); refresh(); });
   function poll() { clearTimeout(timer); if (!document.hidden && projectId && (window.relayFlow?.isOn() || dialog.open || active(current().run))) refresh(); timer = setTimeout(poll, 2000); }
-  window.relayProjectReview = { render, open, refresh, label: () => preparing() ? 'Preparing project review…' : current().run?.status === 'ready' ? 'Project ready to review' : 'Run and review your project' };
+  // Flow's Your app card (#194) reads one line from here: whether a launch map exists, how its run stands, and the one
+  // thing to do next. The card's details are render() above.
+  function glance() {
+    if (!projectId) return null;
+    const value = current(), chosen = profile(), run = value.run, matches = Boolean(chosen && run && run.profileId === chosen.id && run.revision === value.plan?.revision);
+    const preparation = value.preparation, destinations = run?.previews?.length ? run.previews : run?.preview ? [run.preview] : [];
+    const failed = Boolean(error || value.error || preparationErrors.get(projectId) || (matches && (run.error || ['failed', 'blocked'].includes(run.status))) || (['failed', 'stopped', 'blocked', 'detached', 'lost'].includes(preparation?.status) && !chosen));
+    const url = destinations[0]?.url || null;
+    return {
+      profile: Boolean(chosen), preparing: preparing(), approvals: preparation?.approvals || 0, failed, busy: pending,
+      starting: matches && ['starting'].includes(run.status), ready: matches && run.status === 'ready',
+      address: url ? url.replace(/^https?:\/\//, '').replace(/\/$/, '') : null,
+      preview: url ? () => preview(url) : null, start: () => perform('start'), prepare: () => configure(),
+      openPreparation: async () => { if (preparation?.id) await api.setTask(preparation.id); },
+    };
+  }
+  window.relayProjectReview = { render, open, refresh, glance, label:() => preparing() ? 'Preparing project review…' : current().run?.status === 'ready' ? 'Project ready to review' : 'Run and review your project' };
   sync(); poll();
 })();

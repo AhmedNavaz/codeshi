@@ -33,7 +33,7 @@
 .sidebar-switch button:hover { background: var(--hover); color: var(--text); }
 .sidebar-switch button[aria-selected="true"] { background: var(--hover); color: var(--text-strong); }
 .sidebar-workspaces { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
-.sidebar-run { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; }
+.sidebar-run { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 .sidebar-run .sidebar-heading { justify-content: space-between; }
 .sidebar-run #run-tools { margin-left: auto; }
 .sidebar-git { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; border: 0; background: none; overflow: hidden; }

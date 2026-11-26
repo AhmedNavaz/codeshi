@@ -98,6 +98,7 @@
     <script src="/flow.js" defer></script>
     <script src="/flow-lounge-puzzles.js" defer></script>
     <script src="/flow-lounge.js" defer></script>
+    <script src="/companion-lanes.js" defer></script>
     <link rel="stylesheet" href="/project-commands.css" />
     <link rel="stylesheet" href="/polish.css" />
     <link rel="stylesheet" href="/files.css" />
@@ -113,6 +114,7 @@
     <link rel="stylesheet" href="/main-tabs.css" />
     <link rel="stylesheet" href="/terminal-tabs.css" />
     <link rel="stylesheet" href="/git-tabs.css" />
+    <link rel="stylesheet" href="/companion-lanes.css" />
   </head>
   <body>
     <div id="launch-screen" class="launch-screen" aria-hidden="true"><img src="/logo.svg" alt="" width="72" height="72" /></div>
@@ -138,8 +140,7 @@
         <span id="workspace-name" class="sr-only">No workspace selected</span>
         </div>
         <section id="sidebar-run" class="sidebar-run" role="tabpanel" aria-labelledby="sidebar-tab-run" hidden>
-          <header class="sidebar-heading"><span>Run</span>            <div id="run-tools" class="bottom-tools" data-tool="run"><button id="command-add" class="toolbar-button command-add" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add command</button></div>
-</header>
+          <header class="sidebar-heading"><span>Run</span><div id="run-tools" class="bottom-tools" data-tool="run"><button id="command-add" class="toolbar-button command-add" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add command</button></div></header>
           <div id="project-commands" class="project-commands" role="tabpanel" aria-label="Saved commands" hidden>
             <nav id="command-list" class="command-list" aria-label="Commands"></nav>
             <div class="run-pane">
@@ -150,18 +151,38 @@
                 <pre id="command-output" class="command-output" tabindex="0" aria-label="Command output"></pre>
               </div>
               <form id="command-form" class="command-form" hidden>
-                <div class="command-form-head"><h3 id="command-form-title">Add a command</h3><button id="command-remove" class="toolbar-button quiet-danger" type="button" hidden>Remove</button><button id="command-cancel" class="toolbar-button" type="button">Cancel</button><button id="command-save" class="pill-button command-save" type="submit">Save</button></div>
-                <div id="command-suggestions" class="command-chips" aria-label="Found in this folder"></div>
-                <p id="command-detection" class="command-note" hidden></p>
-                <div class="command-fields"><label>Name<input id="command-name" maxlength="40" autocomplete="off" spellcheck="false" placeholder="dev" /></label><label id="command-folder-field">Folder<select id="command-folder" aria-label="Command folder"></select></label><label>Subdirectory<input id="command-directory" placeholder=". (folder root)" autocomplete="off" spellcheck="false" maxlength="1024" /></label><label class="command-full">Command<input id="command-text" placeholder="npm run dev" autocomplete="off" spellcheck="false" maxlength="4096" /></label></div>
-                <label class="command-check"><input id="command-test" type="checkbox" /><span>Use for Check with tests<small>Routing runs it after changes when Check with tests is on.</small></span></label>
-                <p class="command-note">Runs in your own shell with your permissions, whatever the agents’ access. Scripts can run other commands, so check them first.</p>
+                <div class="command-form-head">
+                  <button id="command-back" class="icon-button command-back" type="button" aria-label="Back to commands" title="Back to commands"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
+                  <h3 id="command-form-title">Add a command</h3>
+                </div>
+                <div class="command-form-body">
+                  <div class="command-fields command-location-fields">
+                    <label id="command-folder-field">Folder<span class="command-select-wrap"><select id="command-folder" aria-label="Command folder"></select></span></label>
+                    <label>Subdirectory<input id="command-directory" placeholder=". (folder root)" autocomplete="off" spellcheck="false" maxlength="1024" /></label>
+                  </div>
+                  <div id="command-suggestions-wrap" class="command-suggestions-wrap" hidden>
+                    <div class="command-section-head"><span>Detected scripts</span><span id="command-suggestions-count" class="count-badge" hidden></span></div>
+                    <div id="command-suggestions" class="command-chips" aria-label="Found in this folder"></div>
+                    <p id="command-detection" class="command-note" hidden></p>
+                  </div>
+                  <div class="command-fields">
+                    <label>Name<input id="command-name" maxlength="40" autocomplete="off" spellcheck="false" placeholder="dev" /></label>
+                    <label class="command-full">Command<input id="command-text" placeholder="npm run dev" autocomplete="off" spellcheck="false" maxlength="4096" /></label>
+                  </div>
+                  <label class="command-check"><input id="command-test" type="checkbox" /><span>Use for Check with tests<small>Routing runs it after changes when Check with tests is on.</small></span></label>
+                  <p class="command-note command-security-note">Runs in your own shell with your permissions, whatever the agents’ access. Scripts can run other commands, so check them first.</p>
+                </div>
+                <div class="command-form-actions">
+                  <button id="command-remove" class="toolbar-button quiet-danger" type="button" hidden>Remove</button>
+                  <button id="command-cancel" class="secondary-button" type="button">Cancel</button>
+                  <button id="command-save" class="primary-button command-save" type="submit">Save</button>
+                </div>
               </form>
               <div id="command-empty" class="command-empty" hidden>
                 <p class="command-empty-title">Run your project from here</p>
                 <p class="command-note">Your dev server, tests or any script, with live output while agents work.</p>
                 <div id="command-quick" class="command-chips" aria-label="Found in this folder"></div>
-                <button id="command-custom" class="text-link" type="button">Add a custom command</button>
+                <button id="command-custom" class="secondary-button command-custom" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add a custom command</button>
               </div>
             </div>
           </div>
@@ -199,7 +220,7 @@
         </div>
       </section>
 
-      <aside id="flow-left" class="flow-side flow-left" aria-label="What’s next and what’s left" hidden></aside>
+      <aside id="flow-left" class="flow-side flow-left" aria-label="Agents and tasks" hidden></aside>
       <aside id="flow-lounge-left" class="flow-side flow-lounge-side flow-lounge-left" aria-label="Lounge" hidden></aside>
       <main class="main-panel">
         <div id="plan-chat-head" class="plan-chat-head" role="group" aria-label="Chat beside the Plan"><button id="plan-chat-hide" class="layout-toggle" type="button" aria-label="Hide the chat" title="Hide the chat"><svg class="icon layout-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/><rect class="layout-fill" x="16" y="6" width="3" height="12" rx="1"/></svg></button></div>
@@ -252,7 +273,7 @@
         <section id="cli-view" class="cli-view" role="tabpanel" aria-labelledby="main-tab-cli" hidden><div id="cli-views" class="cli-views"></div><p id="cli-message" class="cli-message" role="status" hidden></p></section>
         <div id="main-work-area" class="main-work-area">
         <div id="chat-stage" class="chat-stage" role="tabpanel" aria-labelledby="main-tab-chat">
-        <div id="flow-strip" class="flow-strip" role="group" aria-label="Flow cards" hidden></div>
+        <div id="flow-strip" class="flow-strip" role="group" aria-label="Flow panels" hidden></div>
 
         <label class="sr-only" for="project-select">Current workspace</label>
         <select id="project-select" class="compatibility-control" tabindex="-1" aria-hidden="true" aria-describedby="workspace-breadcrumb"><option value="">Loading workspaces…</option></select>
@@ -338,7 +359,8 @@
         </div>
 
         <section id="file-preview" class="file-preview" aria-label="File preview" hidden>
-          <header><div><strong id="file-preview-name"></strong><span id="file-preview-path"></span></div><span id="preview-count" class="preview-count" aria-live="polite" hidden></span><button id="preview-prev" type="button" class="icon-button" aria-label="Previous image" title="Previous image (←)" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button><button id="preview-next" type="button" class="icon-button" aria-label="Next image" title="Next image (→)" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button><button id="attach-preview" type="button" class="secondary-button">Attach to message</button><button id="close-file-preview" type="button" class="icon-button" aria-label="Back to conversation" title="Back to conversation"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
+          <header><div><span class="file-preview-title"><strong id="file-preview-name"></strong><span id="file-preview-dirty" class="file-preview-dirty" hidden>Unsaved</span></span><span id="file-preview-path"></span></div><span id="preview-count" class="preview-count" aria-live="polite" hidden></span><button id="preview-prev" type="button" class="icon-button" aria-label="Previous image" title="Previous image (←)" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button><button id="preview-next" type="button" class="icon-button" aria-label="Next image" title="Next image (→)" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button><button id="edit-preview" type="button" class="secondary-button" hidden>Edit</button><button id="undo-preview" type="button" class="icon-button" aria-label="Undo" title="Undo" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button><button id="redo-preview" type="button" class="icon-button" aria-label="Redo" title="Redo" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button><button id="revert-preview" type="button" class="secondary-button" hidden>Revert</button><button id="save-preview" type="button" class="primary-button" hidden>Save</button><button id="attach-preview" type="button" class="secondary-button">Attach to message</button><button id="close-file-preview" type="button" class="icon-button" aria-label="Back to conversation" title="Back to conversation"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
+          <div id="file-preview-banner" class="file-preview-banner" role="alert" aria-live="polite" hidden><span id="file-preview-banner-text" class="file-preview-banner-text"></span><div id="file-preview-banner-actions" class="file-preview-banner-actions"></div></div>
           <div id="file-preview-content" class="file-preview-content"></div>
           <footer id="file-preview-meta"></footer>
         </section>
@@ -420,14 +442,14 @@
           </div>
         </div>
       </main>
-      <aside id="flow-right" class="flow-side flow-right" aria-label="How it’s working and files changed" hidden></aside>
-      <section id="flow-peek" class="flow-peek" aria-label="Card" hidden><div class="flow-peek-head"><button id="flow-peek-close" class="icon-button flow-peek-close" type="button" aria-label="Close card" title="Close"></button></div><div id="flow-peek-body" class="flow-peek-body"></div></section>
+      <aside id="flow-right" class="flow-side flow-right" aria-label="Your project" hidden></aside>
+      <section id="flow-peek" class="flow-peek" aria-label="Panel" hidden><div class="flow-peek-head"><h2 id="flow-peek-title" class="flow-peek-title"></h2><button id="flow-peek-close" class="icon-button flow-peek-close" type="button" aria-label="Close panel" title="Close"></button></div><div id="flow-peek-body" class="flow-peek-body"></div></section>
       <div id="flow-veil" class="flow-veil" aria-hidden="true" hidden><div class="flow-veil-stage"><img src="/mark.svg" alt="" width="96" height="96" /><strong class="flow-veil-title">Flow</strong><span class="flow-veil-line">Let it flow. Watch it ship.</span></div></div>
 
       <aside id="timeline-panel" class="side-panel timeline-panel" aria-labelledby="timeline-panel-title" hidden>
         <div class="inspector-heading panel-heading"><h2 id="timeline-panel-title" class="sr-only">Timeline</h2><div class="panel-tabs" role="tablist" aria-label="Side panel"><button class="panel-tab" type="button" role="tab" data-panel="agents" aria-selected="false" aria-label="Agents" title="Agents: who does the work"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg><span class="panel-tab-label">Agents</span></button><button class="panel-tab" type="button" role="tab" data-panel="brief" aria-selected="false" aria-label="Brief" title="Brief: what every agent is told"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 4h11A1.5 1.5 0 0 1 19 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18.5v-13A1.5 1.5 0 0 1 6.5 4z"/><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4"/></svg><span class="panel-tab-label">Brief</span></button><button class="panel-tab" type="button" role="tab" data-panel="timeline" aria-selected="true" aria-label="Timeline" title="Timeline: checkpoints and restore"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2"/></svg><span class="panel-tab-label">Timeline</span></button></div></div>
         <div class="timeline-toolbar"><span>Workspace checkpoints</span><button id="refresh-timeline" class="text-link" type="button">Refresh</button></div>
-        <p class="timeline-hint">Choose a checkpoint to review every file before restoring. The conversation stays.</p>
+        <p class="timeline-hint">One row per message. Undo changes or rewind chat; open Details for checkpoints and commits.</p>
         <div id="timeline-content" class="timeline-content" aria-live="polite"></div>
       </aside>
       <aside id="agents-panel" class="side-panel agents-panel" aria-labelledby="agents-panel-title" hidden>
@@ -579,7 +601,7 @@
 
     <dialog id="diff-dialog" class="diff-dialog" aria-labelledby="diff-title">
       <header class="panel-dialog-head"><div><h2 id="diff-title">Changes</h2><p id="diff-meta"></p></div><button id="close-diff" class="icon-button" type="button" aria-label="Close changes"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
-      <div id="diff-content" class="diff-content"></div>
+      <div class="diff-body"><nav id="diff-files" class="diff-files" aria-label="Changed files" hidden></nav><div id="diff-content" class="diff-content"></div></div>
     </dialog>
 
     <dialog id="local-dialog" class="local-dialog" aria-labelledby="local-title" aria-describedby="local-description">
@@ -739,6 +761,10 @@
         <p id="memory-error" class="project-error" role="alert" hidden></p></div><footer class="panel-dialog-foot"><button id="memory-cancel" class="secondary-button" type="button">Cancel</button><button id="memory-save" class="primary-button" type="submit">Save</button></footer></form>
     </dialog>
 
+    <div id="message-undo-menu" class="header-menu message-undo-menu" popover="auto" role="menu" aria-label="Undo options">
+      <button id="message-undo-changes" class="header-menu-item message-undo-option" role="menuitem" type="button"><span class="message-undo-option-title">Undo changes</span><span class="message-undo-option-detail">Revert only this run’s edits; keep later changes and chat.</span></button>
+      <button id="message-undo-remove" class="header-menu-item message-undo-option" role="menuitem" type="button"><span class="message-undo-option-title">Undo and remove from chat</span><span class="message-undo-option-detail">Restore files to before this message and fold later messages away.</span></button>
+    </div>
     <dialog id="rewind-dialog" class="rewind-dialog" aria-labelledby="rewind-title" aria-describedby="rewind-summary">
       <header class="panel-dialog-head"><div><h2 id="rewind-title">Undo changes?</h2><p id="rewind-meta"></p></div><button id="close-rewind" class="icon-button" type="button" aria-label="Close"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
       <div class="rewind-body"><p id="rewind-summary" class="rewind-summary"></p><div id="rewind-conversation" class="rewind-conversation" hidden><label class="rewind-conversation-choice"><input id="rewind-conversation-check" type="checkbox"><span><strong>Also rewind the conversation</strong><span id="rewind-conversation-detail" class="rewind-conversation-detail"></span></span></label></div><div id="rewind-files" class="rewind-files"></div></div>

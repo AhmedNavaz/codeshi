@@ -13,7 +13,8 @@ const privateIP = address => {
 export const phoneInterfaces = () => Object.entries(os.networkInterfaces()).flatMap(([name, addresses]) =>
   (addresses || []).filter(row => !row.internal && row.family === 'IPv4' && privateIP(row.address)).map(row => ({ name, address: row.address })));
 const same = (a, b) => typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
-const COOKIE = 'codeshi_phone', FIVE_MINUTES = 5 * 60_000, SESSION = 12 * 60 * 60_000, ACTIVE_WINDOW = 45_000;
+// An open page asks for something at least every 15 seconds; one quiet for longer left without saying so.
+const COOKIE = 'codeshi_phone', FIVE_MINUTES = 5 * 60_000, SESSION = 12 * 60 * 60_000, ACTIVE_WINDOW = 25_000;
 const publicDir = new URL('../public/', import.meta.url);
 
 // A separate, explicitly enabled listener. The desktop server remains on loopback. Credentials and device grants
@@ -23,7 +24,9 @@ export function createPhoneAccess({ handle, local, interfaces = phoneInterfaces,
   let server = null, address = null, invite = null, transition = Promise.resolve();
   const devices = new Map(), sockets = new Set(), attempts = new Map();
   const base = () => server?.listening ? `http://${address}:${server.address().port}` : null;
-  const isActiveNow = device => device.state === 'active' && device.activeNow !== false && Boolean(device.streams?.size > 0 || (device.lastSeenAt && now() - device.lastSeenAt < ACTIVE_WINDOW));
+  // Open now means the page has asked for something lately. A live-updates connection alone doesn't count: a phone
+  // can keep one open long after it locked or left the page.
+  const isActiveNow = device => device.state === 'active' && device.activeNow !== false && Boolean(device.lastSeenAt && now() - device.lastSeenAt < ACTIVE_WINDOW);
   function remove(device) {
     devices.delete(device.token);
     for (const socket of device.sockets) socket.destroy();
@@ -129,7 +132,7 @@ export function createPhoneAccess({ handle, local, interfaces = phoneInterfaces,
       const device = credential(req);
       if (req.method === 'GET' && url.pathname === '/phone/session') {
         if (device) {
-          if (url.searchParams.get('active') === '0') device.activeNow = false;
+          if (url.searchParams.get('active') === '0') { if (device.state === 'active' && device.activeNow !== false) device.lastSeenAt = now(); device.activeNow = false; }
           else if (device.state === 'active') { device.lastSeenAt = now(); device.activeNow = true; }
           return json(res, 200, { state: device.state, code: device.code, expiresAt: device.expiresAt });
         }

@@ -33,8 +33,9 @@
     const activeNow = devices.filter(item => item.state === 'active' && item.activeNow).length;
     document.getElementById('connect-phone-label').textContent = state.enabled || state.remote?.enabled ? t('Remote access on') : t('Remote access');
     const count = document.getElementById('connect-phone-count'); count.hidden = !pending; count.textContent = String(pending);
-    entry.dataset.connected = String(active > 0);
-    entry.title = pending ? tn(pending, '1 pairing request waiting for approval', '{count} pairing requests waiting for approval') : activeNow ? tn(activeNow, '1 paired browser active now', '{count} paired browsers active now') : active ? tn(active, '1 paired browser allowed', '{count} paired browsers allowed') : t('Remote access from your phone or tablet, on the same Wi-Fi or away from home');
+    // Green means Codeshi is open on a phone right now. An allowed phone that isn't open stays allowed, but isn't in use.
+    entry.dataset.connected = String(activeNow > 0);
+    entry.title = pending ? tn(pending, '1 pairing request waiting for approval', '{count} pairing requests waiting for approval') : activeNow ? tn(activeNow, '1 paired browser active now', '{count} paired browsers active now') : active ? tn(active, '1 paired browser allowed, not open right now', '{count} paired browsers allowed, none open right now') : t('Remote access from your phone or tablet, on the same Wi-Fi or away from home');
   }
   function revealPhone() { if (focusPhone) { focusPhone = false; requestAnimationFrame(() => target?.isConnected && target.scrollIntoView({ block: 'start' })); } }
   function revealQR(qr, requested) {

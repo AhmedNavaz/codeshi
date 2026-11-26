@@ -48,6 +48,14 @@ const UPDATES = 30, CHUNK = 'A measured streaming reply with Unicode café 🐈.
 const projects = Array.from({ length: 8 }, (_, i) => ({ id: `p${i}`, name: `Example workspace ${i}`, available: true,
   folders: [{ id: `folder${i}`, name: 'Source', displayName: 'Source', path: `/synthetic/workspace-${i}/source`, available: true }],
   conversationId: `conversation${i}`, runningConversationId: i === 0 ? 'c' : null, pendingApprovals: 0 }));
+// Needs you (#201): a busy day's list, five lines across workspaces.
+const needs = { at: new Date(0).toISOString(), total: 5, items: [
+  { id: 'approval:p1:chat', kind: 'approval', projectId: 'p1', workspace: 'Example workspace 1', taskId: null, title: 'Workspace chat', detail: 'Run npm test -- --watch=false', provider: 'codex', count: 1 },
+  { id: 'question:p2:t1', kind: 'question', projectId: 'p2', workspace: 'Example workspace 2', taskId: 't1', title: 'Add search to the docs', detail: 'Which index should it use?', provider: 'claude', count: 1 },
+  { id: 'review:p3:t2', kind: 'review', projectId: 'p3', workspace: 'Example workspace 3', taskId: 't2', title: 'Fix the login redirect', detail: 'Finished. Ready to review and merge', provider: 'codex', at: new Date(0).toISOString() },
+  { id: 'card:p3:t3', kind: 'card', projectId: 'p3', workspace: 'Example workspace 3', taskId: 't3', title: 'Header layout', detail: 'A Plan card is ready for review', provider: 'gemini' },
+  { id: 'schedule:p4:s1', kind: 'schedule', projectId: 'p4', workspace: 'Example workspace 4', taskId: null, title: 'Nightly tests', detail: 'Didn’t start: The computer was asleep', at: new Date(0).toISOString() },
+] };
 
 async function measure(optimized) {
   const makeMemory = memoryClients(optimized);
@@ -56,10 +64,11 @@ async function measure(optimized) {
   const owner = live ? new FirebasePhoneClient(config, options) : makeMemory('computer');
   const phone = live ? new FirebasePhoneClient(config, options) : makeMemory('phone');
   let step = 0, text = CHUNK.repeat(8), first = true, snapshot = null;
-  const calls = { conversation: 0, projects: 0 };
+  const calls = { conversation: 0, projects: 0, needs: 0 };
   const access = createRemotePhoneAccess({ config, clientFactory: () => owner, local: () => ({ port: 1234 }), handle: (req, res) => {
     const path = new URL(req.url, 'https://phone.local'); let body;
     if (path.pathname === '/api/projects') { calls.projects++; body = projects; }
+    else if (path.pathname === '/api/needs-you') { calls.needs++; body = needs; }
     else {
       assert.equal(path.pathname, '/api/conversation'); calls.conversation++;
       body = { id: 'c', status: 'running', provider: 'codex', cursor: step, delta: !first, activeRun: { id: 'run', phase: 'working' },
@@ -94,13 +103,15 @@ async function measure(optimized) {
         assert.equal(body.messages[0].text, text, 'Transferred text must exactly match the original.');
       }
     };
-    await api('/api/projects'); await api('/api/conversation?projectId=p0&tail=40');
+    await api('/api/projects'); if (optimized) await api('/api/needs-you'); await api('/api/conversation?projectId=p0&tail=40');
     for (step = 1; step <= UPDATES; step++) {
       text += CHUNK;
       // Identical progress invalidations in both cases. Only the workspace refresh policy and text encoding differ.
       await owner.request(`rooms/${room}/out`, 'PUT', await seal(key, room, 'out', { event: 'update', at: Date.now() }));
       await api(`/api/conversation?projectId=p0&tail=40&since=${step - 1}`);
       if (!optimized || step === UPDATES) await api('/api/projects');
+      // The page asks for Needs you with each workspace refresh, and on progress at most every 15 seconds (8 updates).
+      if (optimized && (step % 8 === 0 || step === UPDATES)) await api('/api/needs-you');
     }
     const sum = field => owner.traffic[field] + phone.traffic[field];
     return { downloadBytes: sum('downloadBytes'), uploadBytes: sum('uploadBytes'), databaseRequests: sum('requests'), streams: sum('streams'), apiRequests: calls };
@@ -117,7 +128,7 @@ async function measure(optimized) {
 const baseline = await measure(false), optimized = await measure(true);
 console.log(JSON.stringify({ mode: live ? 'live Firebase pilot' : 'local encrypted relay',
   workload: { progressRefreshes: UPDATES, simulatedSeconds: UPDATES * 2, initialTextBytes: bytes(CHUNK.repeat(8)), appendedTextBytes: bytes(CHUNK) * UPDATES,
-    workspaces: projects.length, description: 'One visible phone, streaming reply, workspace metadata refreshed every progress update before and once per minute after. Events run without wall-clock delays.' },
+    workspaces: projects.length, description: 'One visible phone, streaming reply, workspace metadata refreshed every progress update before and once per minute after, plus Needs you (#201) after, at most every 15 seconds. Events run without wall-clock delays.' },
   scope: 'Combined desktop + phone database application bytes, including encrypted JSON, SSE frames and HTTP response bodies. Excludes authentication, Hosting, HTTP headers, TLS and keepalive differences; not Firebase billed usage.',
   baseline, optimized, downloadReductionPercent: Number((100 * (1 - optimized.downloadBytes / baseline.downloadBytes)).toFixed(2)),
 }, null, 2));
