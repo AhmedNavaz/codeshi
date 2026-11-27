@@ -45,7 +45,7 @@ function setup(t, { billing = 'subscription', ask = true } = {}) {
 test('the rater names parts only when asked, and parts that break a rule leave the rating as it is', () => {
   const brief = { workspaceFolders: [], attachments: { select: () => [] } }, c = { messages: [] };
   assert.doesNotMatch(assessmentPrompt(c, { text: request, attachments: [] }, brief), /parts:/);
-  assert.match(assessmentPrompt(c, { text: request, attachments: [] }, brief, [], { split: true }), /parts: almost always \[\]/);
+  assert.match(assessmentPrompt(c, { text: request, attachments: [] }, brief, [], { split: true }), /parts: \[\] unless the request is standard or deep work/);
   assert.deepEqual(parseAssessment(JSON.stringify({ ...rating, parts }), { split: true }).parts, parts);
   assert.deepEqual(parseAssessment(JSON.stringify({ ...rating, parts: [] }), { split: true }), { ...rating, source: 'agent' });
   assert.throws(() => parseAssessment(JSON.stringify({ ...rating, parts })), /assessment/, 'Parts are refused when they weren’t asked for.');
@@ -54,6 +54,10 @@ test('the rater names parts only when asked, and parts that break a rule leave t
     assert.equal(readParts(bad).length, 0);
     assert.equal(parseAssessment(JSON.stringify({ ...rating, parts: bad }), { split: true }).tier, 'standard');
   }
+  // A line of steps of different sizes is kept, so each step goes to a model of its size; light work is never split.
+  const steps = [{ ...parts[0], tier: 'deep' }, { ...parts[1], dependsOn: [1] }, { ...parts[2], dependsOn: [2] }];
+  assert.equal(readParts(steps).length, 3);
+  assert.equal(parseAssessment(JSON.stringify({ ...rating, tier: 'light', effort: 'low', parts }), { split: true }).parts, undefined);
   assert.equal(groupName('Fix the redirect\nand more', new Set(['Fix the redirect'])), 'Fix the redirect (2)');
 });
 
@@ -63,7 +67,7 @@ test('a split is proposed with each part’s agent and billing, and nothing star
   broker.router.worker = async (_broker, _run, config) => { prompts.push(config.prompt); return JSON.stringify({ ...rating, parts }); };
   const answer = await broker.dispatch(c, input);
   assert.equal(answer.split.proposed, true);
-  assert.match(prompts[0], /parts: almost always/);
+  assert.match(prompts[0], /parts: \[\] unless/);
   assert.equal(broker.running, null); assert.equal(c.lastRun, null);
   assert.equal(c.messages.filter(message => message.role === 'user').length, 0, 'The message isn’t in the chat until you choose.');
   const proposal = broker.view(c).splitProposal;

@@ -274,7 +274,7 @@
 .flow-why[data-kind="handoff"] .flow-why-icon { -webkit-mask-image: var(--icon-steer); mask-image: var(--icon-steer); }
 .flow-why:is([data-kind="retry"], [data-kind="refresh"]) .flow-why-icon { -webkit-mask-image: var(--icon-refresh); mask-image: var(--icon-refresh); }
 .flow-why:is([data-kind="review"]) .flow-why-icon { -webkit-mask-image: var(--icon-approval); mask-image: var(--icon-approval); }
-.flow-why-reason { display: -webkit-box; overflow: hidden; padding-left: 19px; color: var(--muted); font-size: 11.5px; line-height: 1.45; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.flow-why-reason { padding-left: 19px; color: var(--muted); font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
 
 /* Tasks: the sidebar's own rows (parallel-tasks.css), with what a row offers at its end. */
 .flow-tasks { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }

@@ -4116,6 +4116,16 @@ test('the Git panel stages changes and commits exactly what is staged, and offer
   assert.equal(ui.findButton('Commit without hooks'), undefined);
 });
 
+test('the Git panel and its Commit button count each file in a new folder, as Flow’s Changes does', async () => {
+  const ui = await browser({ insights: true });
+  const repo = { folderId: 'frontend', name: 'Frontend', available: true, branch: 'main', totalChanges: 3, changes: [{ path: 'app.js', code: ' M', staged: false }, { path: 'shots/', code: '??', staged: false, files: [{ path: 'shots/a.png' }, { path: 'shots/b.png' }, { path: 'shots/c.png' }] }, { path: 'big/', code: '??', staged: false, fileCount: 40 }], stagedPaths: [], commits: [], committer: { name: 'Pat Example', email: 'pat@example.com' } };
+  ui.setIntercept((request, next) => request.path === '/api/git' && request.method === 'GET' ? response({ checkedAt: new Date().toISOString(), repositories: [repo] }) : next());
+  ui.$('open-git').click(); await flush();
+  assert.match(ui.$('git-summary').textContent, /44 changed/);
+  assert.equal(ui.$('git-commit-button').textContent, 'Commit all 44 files');
+  assert.equal(ui.window.relayGit.fileTotal(repo), 44);
+});
+
 test('with nothing staged, Commit commits every change listed: it stages exactly those files, then commits them', async () => {
   const ui = await browser({ insights: true });
   let repo = { folderId: 'frontend', name: 'Frontend', available: true, branch: 'main', totalChanges: 2, changes: [{ path: 'app.js', code: ' M', staged: false }, { path: 'docs/', code: '??', staged: false }], stagedPaths: [], commits: [], committer: { name: 'Pat Example', email: 'pat@example.com' } };
@@ -10810,4 +10820,30 @@ test('a narrow chat column turns lanes into strips that open over the page (#203
   assert.equal(strip.getAttribute('aria-expanded'), 'true');
   assert.equal(lane(ui).dataset.compact, 'true');
   assert(lane(ui).classList.contains('overlay'), 'The lane opens over the page.');
+});
+
+test('Flow has no sidebar, so its workspace menu pins a workspace beside this one or opens it in a new window (#203)', async () => {
+  const ui = await flowBrowser({ moreProjects: true, wide: true, desktop: true, windows: {}, lanesUI: true });
+  laneRoutes(ui);
+  assert.equal(ui.window.relayUI.commands.flow(), true); await flush();
+  const name = ui.$('flow-brand-workspace'), menu = () => ui.$('workspace-switch-menu');
+  const actions = id => { const row = menu().querySelectorAll('.workspace-switch-row').find(item => item.querySelector('.workspace-switch-item').dataset.projectId === id); return row.querySelectorAll('.workspace-switch-action'); };
+  const find = (id, kind) => actions(id).find(button => button.classList.contains(kind));
+  name.click(); await flush();
+  assert.equal(actions('project-one').length, 0, 'The workspace you are in has nothing to pin or open.');
+  assert.equal(find('project-two', 'pin').getAttribute('aria-label'), 'Pin Other workspace beside this workspace');
+  assert.equal(find('project-two', 'window').getAttribute('aria-label'), 'Open Other workspace in a new window');
+  find('project-two', 'pin').click(); await flush();
+  assert.equal(menu().matches(':popover-open'), false, 'The menu closes.');
+  assert.deepEqual(JSON.parse(ui.storage.get('codeshi:lanes:main')), ['project-two']);
+  assert(lane(ui), 'The lane shows beside Flow.');
+  assert.equal(ui.state().projectId, 'project-one', 'Flow stays on this workspace.');
+  name.click(); await flush();
+  assert.equal(find('project-two', 'pin'), undefined);
+  find('project-two', 'pinned').click(); await flush();
+  assert.deepEqual(JSON.parse(ui.storage.get('codeshi:lanes:main')), [], 'Unpinned.');
+  name.click(); await flush();
+  find('project-two', 'window').click(); await flush();
+  assert.deepEqual(ui.windowOpens, ['project-two'], 'It opens in a window of its own.');
+  assert.equal(ui.state().projectId, 'project-one');
 });

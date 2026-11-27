@@ -193,6 +193,18 @@
     return { tier: 'standard', reason: 'a focused change' };
   }
 
+  // A message that rejects the last result or shows the person's frustration with it ("that's wrong", "still broken",
+  // "are you dumb"). It is never light work however short it is: the last attempt missed, so the next one gets care.
+  const rejection = /\b(?:are you (?:dumb|stupid|serious|kidding|even)|you(?:'re| are) (?:dumb|stupid|wrong|useless)|wtf|what the (?:hell|heck|fuck)|(?:that'?s|this is|it'?s|is that) (?:not|wrong|incorrect|bad|broken)|(?:still|again) (?:not|wrong|broken|fail|doesn'?t|isn'?t|the same|clipped|happening)|(?:doesn'?t|does not|didn'?t|did not|isn'?t|is not|not) (?:work|working|fixed|right|correct|what i)|not what i (?:asked|wanted|meant|said)|i (?:don'?t|do not) like|i (?:said|told you|asked)\b|you (?:missed|broke|ignored|forgot|misunderstood)|try again|redo (?:it|this|that))/i;
+  function dissatisfied(text) { return rejection.test(String(text || '')); }
+  // Raises a rating for such a message to at least a standard task at high effort; any other rating is returned as is.
+  function dissatisfiedFloor(assessment, text) {
+    if (!assessment || !dissatisfied(text)) return assessment;
+    const tier = assessment.tier === 'deep' ? 'deep' : 'standard';
+    if (tier === assessment.tier && assessment.effort === 'high') return assessment;
+    return { ...assessment, tier, effort: 'high', reason: 'Your last result missed, so this gets more care', floor: true };
+  }
+
   // What Send can settle without asking an agent. Judging a request takes a model: keyword rules agreed with an agent on
   // barely half of real prompts. So this covers only what needs no judging, a bare go-ahead that carries on work already
   // rated, and anything else returns null. A go-ahead after light work is assessed too: what it approves may be bigger.
@@ -794,5 +806,5 @@
     return results;
   }
 
-  root.relayRouting = { MODES, POLICY_VERSION, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, handoffFit, classify, triage, modelTier, modelRating, takesImages, contextWindowOf, measuredOutcomes, taskNeeds, MODEL_LIST_DATE, route, routeTo, plannedStep, planner, escalate, assessQuota, adaptiveThreshold, quotaText, remainderText, windowApplies, windowSpendability, bindingWindow, replay };
+  root.relayRouting = { MODES, POLICY_VERSION, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, handoffFit, classify, triage, dissatisfied, dissatisfiedFloor, modelTier, modelRating, takesImages, contextWindowOf, measuredOutcomes, taskNeeds, MODEL_LIST_DATE, route, routeTo, plannedStep, planner, escalate, assessQuota, adaptiveThreshold, quotaText, remainderText, windowApplies, windowSpendability, bindingWindow, replay };
 })(typeof window === 'undefined' ? globalThis : window);

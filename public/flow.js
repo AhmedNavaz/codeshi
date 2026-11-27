@@ -491,7 +491,7 @@
     if (reason && view.lead) {
       const why = node('div', 'flow-why'), title = node('span', 'flow-why-title');
       why.dataset.kind = reason.kind; title.append(mark('flow-why-icon'), node('span', undefined, shortDecision(reason))); why.append(title);
-      if (reason.why) { const text = node('span', 'flow-why-reason', clip(reason.why, 200)); text.title = reason.why; why.append(text); }
+      if (reason.why) { why.append(node('span', 'flow-why-reason', reason.why)); }
       body.append(why);
     }
   }
@@ -669,10 +669,12 @@
     const repos = (git?.repositories || []).filter(repo => repo.available), groups = repos.map(repo => ({ repo, files: window.relayGit.files(repo) })).filter(group => group.files.length);
     const files = groups.flatMap(group => group.files.map(file => ({ repo: group.repo, file }))), clipped = repos.some(repo => repo.changesClipped), noGit = Boolean(git) && !repos.length;
     const totals = files.length ? window.relayGit.totals(files.map(entry => entry.file)) : { added: 0, removed: 0 };
+    // The number of files, as the Git panel counts them: a new folder too big to list counts its files, not one row.
+    const changed = groups.reduce((sum, group) => sum + (window.relayGit.fileTotal?.(group.repo) ?? group.files.length), 0);
     const locked = running || !window.relayRewind || Boolean(state.taskId), lockHint = running ? 'Available when the current run finishes' : state.taskId ? 'Open the workspace chat to undo its runs' : '';
     const fallback = !files.length && noGit ? runs.slice(0, 5) : [];
     card.openDirect = files.length ? () => { closePeek(); window.relayGit.review({}); } : null;
-    headline(card, { count: files.length ? `${files.length}${clipped ? '+' : ''}` : '', word: null, quiet: !files.length && !fallback.length, label: files.length ? `${plural(files.length, 'file')} changed` : fallback.length ? `${plural(fallback.filter(row => !row.undone).reduce((sum, row) => sum + row.files, 0), 'file')} changed` : latest?.undone ? 'Changes undone' : 'No changes' });
+    headline(card, { count: files.length ? `${changed}${clipped ? '+' : ''}` : '', word: null, quiet: !files.length && !fallback.length, label: files.length ? `${plural(changed, 'file')} changed` : fallback.length ? `${plural(fallback.filter(row => !row.undone).reduce((sum, row) => sum + row.files, 0), 'file')} changed` : latest?.undone ? 'Changes undone' : 'No changes' });
     const signature = JSON.stringify([state.projectId, state.taskId, running, Boolean(git), noGit, clipped, Boolean(window.relayRewind), groups.map(group => [group.repo.folderId, group.repo.name, group.files.map(file => [file.path, file.code, file.added, file.removed, file.fileCount])]), runs.map(row => [row.runId, row.files, row.undone, row.run?.provider, row.run?.startedAt])]);
     if (signature === card.signature) return;
     card.signature = signature;

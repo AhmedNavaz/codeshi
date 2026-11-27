@@ -729,3 +729,14 @@ test("routing checks context window size, skill/tool capability, active tasks, m
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a message rejecting the last result is never light or low effort', () => {
+  const { dissatisfiedFloor, dissatisfied } = globalThis.relayRouting;
+  const light = { tier: 'light', effort: 'low', reason: 'a quick question', source: 'agent' };
+  for (const text of ['So the screenshot it shows is product facing? Are you dumb?', "that's wrong, still broken", 'This is not what I asked', 'try again']) {
+    assert.ok(dissatisfied(text), text);
+    assert.deepEqual([dissatisfiedFloor(light, text).tier, dissatisfiedFloor(light, text).effort], ['standard', 'high']);
+  }
+  assert.equal(dissatisfiedFloor({ tier: 'deep', effort: 'medium', reason: 'x' }, 'this is wrong').tier, 'deep');
+  for (const text of ['rename the helper to loadFiles', 'what does this function do?', 'Add a stupid-simple retry']) assert.equal(dissatisfiedFloor(light, text), light, text);
+});

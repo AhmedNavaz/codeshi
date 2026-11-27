@@ -1729,6 +1729,17 @@ button.capability strong::after { content: " →"; color: var(--faint); }
 .workspace-switch-menu { position: fixed; inset: auto; min-width: 230px; max-width: 340px; max-height: min(420px, 70vh); margin: 0; padding: 4px; overflow: auto; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay-bg); color: var(--text); box-shadow: 0 16px 40px rgb(0 0 0 / 0.32), 0 2px 6px rgb(0 0 0 / 0.16); }
 .workspace-switch-menu:popover-open { display: grid; gap: 1px; }
 .workspace-switch-item { justify-content: space-between; gap: 14px; }
+/* Pin and Open in New Window sit at the end of each other workspace's row, shown on hover or focus. A pinned one keeps its pin. */
+.workspace-switch-row { display: flex; align-items: center; gap: 1px; }
+.workspace-switch-row > .workspace-switch-item { flex: 1; min-width: 0; }
+.workspace-switch-action { flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--faint); cursor: pointer; opacity: 0; }
+.workspace-switch-action::before { content: ""; display: block; width: 13px; height: 13px; margin: auto; background: currentColor; -webkit-mask: var(--icon-pin) center / contain no-repeat; mask: var(--icon-pin) center / contain no-repeat; }
+.workspace-switch-action.window::before { -webkit-mask-image: var(--icon-window); mask-image: var(--icon-window); }
+.workspace-switch-row:hover .workspace-switch-action, .workspace-switch-row:focus-within .workspace-switch-action, .workspace-switch-action.pinned { opacity: 1; }
+.workspace-switch-action.pinned { color: var(--accent); }
+.workspace-switch-action:hover, .workspace-switch-action:focus-visible { background: var(--hover); color: var(--text); outline: 0; }
+.workspace-switch-action.pinned:hover { color: var(--accent); }
+@media (hover: none) { .workspace-switch-action { opacity: 1; } }
 .workspace-switch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .workspace-switch-item[aria-checked="true"] .workspace-switch-name { color: var(--text-strong); font-weight: 600; }
 .workspace-switch-state { flex: none; color: var(--muted); font-size: 11.5px; }

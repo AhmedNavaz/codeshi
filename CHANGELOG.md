@@ -2,6 +2,19 @@
 
 Notable changes to Codeshi, called Throughline until 0.23; earlier entries use the name each version shipped under. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.64.0] - 2026-11-27
+
+### Added
+- **Pin and Open in New Window from Flow's workspace menu** ([#203](https://github.com/AhmedNavaz/codeshi/issues/203)). Flow has no sidebar, so each other workspace in its workspace menu now has a pin, which docks it beside Flow as a companion lane, and, in the desktop app, a button that opens it in its own window. A pinned workspace shows its pin, and clicking it unpins.
+
+### Changed
+- **Flow splits bigger work** ([#108](https://github.com/AhmedNavaz/codeshi/issues/108)). On Smart and Ultra, a standard or deep Flow message can now be split into up to four parts. The parts can be separate fixes or features, steps that build on one another (such as a server change and then the screen that uses it), or the hard core of a change plus mechanical pieces such as tests, docs, copy or config. Each part is rated on its own, so light pieces go to smaller models and only the hard part to a strong one. A line of steps is kept when the steps differ in size. Light work, a single bug, a question, a follow-up about the last answer and a change to one file or function stay whole.
+
+### Fixed
+- **A message that says the last result missed is never rated light**. A short reply such as "that's wrong", "still broken", "not what I asked", "try again" or a frustrated question is now rated at least a standard task at high effort, so the next attempt gets more care. Before, a short reply like this could go to the smallest model at low effort.
+- **Commit and Flow's Changes count the same files**. The Git panel's count and **Commit all** now count each file inside a new folder, as Flow's **Changes** does, instead of counting the folder as one.
+- **The reason Flow chose an agent is shown in full**. It was cut off after two lines.
+
 ## [0.63.0] - 2026-11-27
 
 ### Added

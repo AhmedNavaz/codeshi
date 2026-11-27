@@ -18,7 +18,9 @@ const clip = (value, limit) => { const flat = String(value || '').trim(); return
 export const partsSchema = { type: 'array', items: { type: 'object', additionalProperties: false,
   properties: { title: { type: 'string' }, instructions: { type: 'string' }, tier: { type: 'string', enum: TIERS }, dependsOn: { type: 'array', items: { type: 'integer' } } },
   required: ['title', 'instructions', 'tier', 'dependsOn'] } };
-export const splitGuidance = `parts: almost always []. List 2 to ${SPLIT_LIMITS.parts} parts only when the request itself asks for separate pieces of work that different agents could do at the same time, each complete and testable on its own, such as unrelated fixes or features in different areas. Never split one change into steps, a single bug, a question, a review, a plan request, or work whose parts would all edit the same code. Each part has title (short), instructions (self-contained: everything from the request that part needs, as its agent sees nothing else; at most ${SPLIT_LIMITS.instructions} characters), tier (light, standard or deep, as above) and dependsOn (the numbers of earlier parts it needs finished first, starting at 1; usually empty).`;
+// Flow splits bigger work (#108): separable pieces, steps that build on one another, and the mechanical pieces of a hard
+// change, each part rated on its own so light pieces go to small models and only the hard part to a strong one.
+export const splitGuidance = `parts: [] unless the request is standard or deep work with pieces that different agents can take. Then list 2 to ${SPLIT_LIMITS.parts} parts, such as: unrelated fixes or features; layers built in turn (for example a server change, then the screen that uses it); or a hard core plus mechanical pieces (tests, docs, copy, config, wiring) a small model can do. Rate each part on its own so light pieces go to small models and only the hard part to a strong one, and use dependsOn when a part needs another's result. Keep [] for light work, a single bug, a question, a review, a plan request, a follow-up about the last answer, or a change to one file or one function, where a handoff costs more than it saves. Each part has title (short), instructions (self-contained: everything from the request that part needs, as its agent sees nothing else; at most ${SPLIT_LIMITS.instructions} characters), tier (light, standard or deep, as above) and dependsOn (the numbers of earlier parts it needs finished first, starting at 1; empty when it can start at once).`;
 
 // The parts as the rater gave them, or none. A rating is still used when its parts aren't: a list that breaks a rule means
 // the request runs as one message, never a split repaired by guessing.
@@ -33,8 +35,9 @@ export function readParts(value) {
     if (dependsOn.some(number => !Number.isSafeInteger(number) || number < 1 || number > index) || new Set(dependsOn).size !== dependsOn.length) return [];
     parts.push({ title, instructions, tier: raw.tier, dependsOn: [...dependsOn] });
   }
-  // Parts that all wait for one another in a line are one change in steps, which one agent does better in order.
-  if (parts.every((part, index) => index === 0 || part.dependsOn.includes(index))) return [];
+  // Parts that all wait for one another in a line, at one size, are one change in steps, which one agent does better in
+  // order. A line of different sizes is kept: each step goes to a model of its size.
+  if (parts.every((part, index) => index === 0 || part.dependsOn.includes(index)) && new Set(parts.map(part => part.tier)).size === 1) return [];
   return parts;
 }
 

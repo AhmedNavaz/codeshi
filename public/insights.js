@@ -221,7 +221,7 @@
     if (!repo) { $('git-content').append(el('p', 'Add a workspace folder to view Git activity.', 'inspector-empty')); return; }
     if (!repo.available) { $('git-content').append(el('p', repo.error || 'Git is not available for this folder.', 'inspector-empty')); return; }
     $('git-summary').dataset.clean = String(repo.totalChanges === 0);
-    $('git-summary').append(el('span', repo.branch, 'git-branch'), el('span', `${repo.totalChanges} changed`, 'git-change-count'));
+    $('git-summary').append(el('span', repo.branch, 'git-branch'), el('span', `${fileTotal(repo)}${repo.changesClipped ? '+' : ''} changed`, 'git-change-count'));
     if (repo.githubURL) $('git-summary').append(action('Open on GitHub ↗', () => external(repo.githubURL), 'text-link'));
     // Pushing is never automatic: this opens a preview of the remote, branch and commits first (#18).
     if (repo.githubURL && repo.branch !== 'Detached HEAD' && window.relayPullRequest) { const open = action('Open pull request', () => window.relayPullRequest.open(repo), 'text-link git-pull-request'); open.disabled = Boolean(gitWriting); $('git-summary').append(open); }
@@ -265,9 +265,11 @@
   // nothing staged it commits every change listed, as the button says. Drafts are kept per folder.
   const commitDrafts = new Map();
   let gitWriting = false, commitOutcome = null;
+  // A change's file count: a new folder counts the files inside it.
+  const filesIn = file => file.files?.length || file.fileCount || 1;
   const stagedFiles = repo => repo.changes.filter(file => !' ?'.includes(file.code[0])), changedFiles = repo => repo.changes.filter(file => file.code[1] !== ' ');
   function renderCommit(repo) {
-    const box = $('git-commit'), message = $('git-commit-message'), staged = stagedFiles(repo).length, all = !staged, count = staged || changedFiles(repo).length, more = repo.changesClipped ? '+' : '';
+    const box = $('git-commit'), message = $('git-commit-message'), staged = stagedFiles(repo).length, all = !staged, count = staged || changedFiles(repo).reduce((sum, file) => sum + filesIn(file), 0), more = repo.changesClipped ? '+' : '';
     if (box.dataset.folder !== repo.folderId) { box.dataset.folder = repo.folderId; message.value = commitDrafts.get(repo.folderId) || ''; if (commitOutcome?.folderId !== repo.folderId) commitOutcome = null; }
     message.placeholder = `Message (${window.relayDesktop?.platform === 'darwin' || /Mac/.test(globalThis.navigator?.platform || '') ? '⌘' : 'Ctrl+'}↵ to commit${repo.branch && repo.branch !== 'Detached HEAD' ? ` on ${repo.branch}` : ''})`;
     message.disabled = Boolean(gitWriting);
@@ -491,6 +493,9 @@
   const kindOf = file => file.code === '??' ? 'untracked' : statusOf(String(file.code || '').trim()[0] || 'M');
   // A new folder's files stand in for the folder when Git listed them.
   const flatChanges = repo => (repo?.changes || []).flatMap(file => file.files?.length ? file.files.map(inner => ({ ...inner, code: '??', staged: false })) : [file]);
+  // How many files a folder has changed, counting each file in a new folder, so the Git panel and Flow's Changes say the
+  // same number. Entries past the first 100 count as one file each.
+  const fileTotal = repo => (repo?.changes || []).reduce((sum, file) => sum + filesIn(file), 0) + Math.max(0, (repo?.totalChanges || 0) - (repo?.changes?.length || 0));
   const reviewEntries = () => (gitData?.repositories || []).filter(repo => repo.available).flatMap(repo => flatChanges(repo).map(file => ({ repo, file })));
   const sameFile = target => entry => entry.repo.folderId === target.folderId && entry.file.path === target.path;
   const lineTotals = files => files.reduce((sum, file) => ({ added: sum.added + (file.added || 0), removed: sum.removed + (file.removed || 0) }), { added: 0, removed: 0 });
@@ -608,7 +613,7 @@
   const updateGit = (data, projectId) => { if (data && api.getState().projectId === projectId) { gitData = data; if (commitOutcome?.kind === 'done') commitOutcome = null; renderGit(); nextSteps(); gitChanged(); } };
   // data() is the Git activity last read for this workspace; files() lists a folder's changed files one by one;
   // changeRow() draws one; review() opens the changes window at a file, or at the first one.
-  window.relayGit = { open: () => setGitPanel(true), close: () => { if (!$('git-panel').hidden) setGitPanel(false, false); }, openDiff, showDiff, openCommit, update: updateGit, refresh: loadGit, data: () => gitScope === api.getState().projectId ? gitData : null, files: flatChanges, totals: lineTotals, changeRow, review: openReview };
+  window.relayGit = { open: () => setGitPanel(true), close: () => { if (!$('git-panel').hidden) setGitPanel(false, false); }, openDiff, showDiff, openCommit, update: updateGit, refresh: loadGit, data: () => gitScope === api.getState().projectId ? gitData : null, files: flatChanges, fileTotal, totals: lineTotals, changeRow, review: openReview };
   // A changed image shows as pictures: before and after side by side, or the one side an added or deleted image has.
   function renderImages(images, target = diffTarget()) {
     const view = el('div', undefined, 'diff-images'), size = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;

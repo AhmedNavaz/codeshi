@@ -191,7 +191,7 @@ Open **Previous chats** from the search bar (⌘K) or the **File** menu, pick co
 
 Codeshi is early and changes quickly. Features covered by automated tests still undergo verification on real setups — see [Final checks](ROADMAP.md#final-checks) in `ROADMAP.md` and open reports under the [`bug` label](https://github.com/AhmedNavaz/codeshi/labels/bug).
 
-- **Toggleable in `Settings › Experimental`**: Five newer surfaces (**Remote access**, **Plan**, **Run and review your project**, **Smart results**, and **Tasks side by side**) are all on by default and can each be turned off cleanly from **Settings › Experimental**.
+- **Toggleable in `Settings › Experimental`**: Five newer surfaces (**Remote access**, **Plan**, **Run and review your project**, **Smart results**, and **Tasks side by side**) can each be turned on or off from **Settings › Experimental**. All are on by default except **Smart results**.
 - **Awaiting real-world verification or relying on experimental upstream APIs**:
   - **Gemini (Antigravity ACP & Gemini CLI)**: personal Google accounts run through the pinned Antigravity ACP runtime; read-only background reviews still use Claude or Codex.
   - **Flow message splits**: automatically splitting a multi-part Smart or Ultra prompt into parallel tasks and merging/reviewing the combined result.

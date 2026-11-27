@@ -3233,7 +3233,19 @@
         if ((/Mac/.test(navigator.platform || "") ? event.metaKey : event.ctrlKey) && !current && openInWindow(project.id)) { workspaceMenu.hidePopover?.(); return; }
         chooseWorkspace(project.id);
       });
-      return item;
+      // Flow and the Plan have no sidebar, so its Pin and Open in New Window (#203) are here, beside each other workspace.
+      const row = element("div", "workspace-switch-row"); row.setAttribute("role", "none"); row.append(item);
+      if (current || project.available === false) return row;
+      const lanes = window.relayLanes, action = (kind, label, run) => {
+        const button = element("button", `workspace-switch-action ${kind}`);
+        button.type = "button"; button.setAttribute("role", "menuitem"); button.setAttribute("aria-label", label); button.title = label;
+        button.addEventListener("click", () => { workspaceMenu.hidePopover?.(); run(); });
+        return button;
+      };
+      if (lanes?.has(project.id)) row.append(action("pinned", `Unpin ${project.name}`, () => lanes.unpin(project.id)));
+      else if (lanes?.canPin(project.id)) row.append(action("pin", `Pin ${project.name} beside this workspace`, () => lanes.pin(project.id)));
+      if (window.relayDesktop?.openWorkspaceWindow) row.append(action("window", state.windowsElsewhere.includes(project.id) ? `Show ${project.name}'s window` : `Open ${project.name} in a new window`, () => openInWindow(project.id)));
+      return row;
     });
     const line = element("div", "workspace-switch-separator"); line.setAttribute("role", "separator");
     const create = element("button", "header-menu-item workspace-switch-new", "New workspace…");
