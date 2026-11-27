@@ -2,13 +2,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { ARTIFACT_KINDS, DESIGN_ROLE_NOTE, SPECIALIST_ROLES, folderRule, invalidatedDownstream, parsePlan, parseSuggest, planLimits, planningMethod, planningRequest, planQuestions, reviewDraft, upstreamLines } from './orchestration.mjs';
+import { ARTIFACT_KINDS, DESIGN_ROLE_NOTE, SPECIALIST_ROLES, folderRule, invalidatedDownstream, parsePlan, parseSuggest, planJson, planLimits, planningMethod, planningRequest, planQuestions, reviewDraft, upstreamLines } from './orchestration.mjs';
 import { attachmentLimits } from './attachments.mjs';
 import { runSteps } from './recap.mjs';
 import { Subtasks, splitCardsRequest, parseSplitCards } from './subtasks.mjs';
 import { FINAL_REVIEW_NOTE, PlanReviews, REVIEW_ROLES, reviewHolds, verdictRequest, withFinalReview } from './plan-review.mjs';
 import { ignoredPaths, ownCheck } from './task-isolation.mjs';
-import { TOOK_OVER } from './task-coordinator.mjs';
+import { TOOK_OVER, taskFilePath } from './task-coordinator.mjs';
 import { noteActivity } from './activity.mjs';
 
 // The task board (#132, first stage): cards you write, sort and run by hand. Cards are records in the workspace chat's
@@ -154,7 +154,7 @@ export function planChanges(reply) {
 function noChanges(reply) {
   try {
     if (typeof reply !== 'string' || Buffer.byteLength(reply) > planLimits.reply) return null;
-    const value = JSON.parse(reply.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, '$1'));
+    const value = planJson(reply);
     const summary = typeof value?.summary === 'string' ? value.summary.trim().slice(0, planLimits.summary) : '';
     if (!summary || !Array.isArray(value.steps) || value.steps.length || (Array.isArray(value.remove) && value.remove.length)) return null;
     return { summary, questions: planQuestions(value.questions) };
@@ -1765,21 +1765,7 @@ export class Board {
       const lane = this.main.tasks.lanes.get(task.id) || this.main.tasks.lane(c, task);
       messages = lane?.c?.messages || [];
     } catch { /* Its conversation can't be read. */ }
-    const roots = [task.worktree, task.scopePath, task.folderPath, task.repoRoot].filter(Boolean).map(p => path.resolve(p));
-    const prefix = task.prefix ? `${task.prefix.replace(/\/+$/, '')}/` : '';
-    const normalize = raw => {
-      const trimmed = String(raw || '').trim();
-      if (!trimmed) return '';
-      if (path.isAbsolute(trimmed)) {
-        const abs = path.resolve(trimmed);
-        for (const root of roots) {
-          const rel = path.relative(root, abs);
-          if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return rel.replace(/\\/g, '/');
-        }
-      }
-      const clean = trimmed.replace(/\\/g, '/').replace(/^\.\//, '');
-      return prefix && clean.startsWith(prefix) ? clean.slice(prefix.length) : clean;
-    };
+    const normalize = raw => taskFilePath(task, raw);
     const fromMessages = messages.length ? runSteps(messages).files : [];
     const rawList = fromMessages.length ? fromMessages : (task.stepResult?.files || []);
     const out = [], seen = new Set();

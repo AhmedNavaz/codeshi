@@ -13,6 +13,7 @@ import { MutationCoordinator } from '../src/mutation-lock.mjs';
 import { createRelayServer } from '../src/server.mjs';
 import { applyPlan, checkCombined, createWorktree, folderIdentity, ignoredPaths, integrationPlan, markerLabels, ownCheck, pathsOverlap, planIsolation, prepareResolution, refreshWorktree, uncommittedCount, unrestricted } from '../src/task-isolation.mjs';
 import { stageChanges, unstageChanges, commitChanges } from '../src/workspace-commit.mjs';
+import { taskFilePath } from '../src/task-coordinator.mjs';
 
 const fixture = fileURLToPath(new URL('./mock-cli.mjs', import.meta.url));
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -94,6 +95,23 @@ test('the plan: direct when nothing is shared, a worktree for a shared repositor
   assert.equal(unrestricted({ provider: 'claude', mode: 'edit', approvalPolicy: 'auto' }), true);
   assert.equal(unrestricted({ provider: 'codex', mode: 'edit', approvalPolicy: 'auto' }), false, 'Codex keeps its sandbox.');
   assert.equal(unrestricted({ provider: 'claude', mode: 'read', approvalPolicy: 'auto' }), false);
+});
+
+test('a file an agent names with its copy’s full path is named as the folder names it (#162)', () => {
+  const root = path.resolve('/work/repo'), worktree = path.resolve('/data/tasks/t1/worktree');
+  const card = { worktree, scopePath: worktree, folderPath: root, repoRoot: root };
+  // Claude's and Codex's edits can name the file with the copy's full path: the cards after it are told the file, not the copy.
+  assert.equal(taskFilePath(card, path.join(worktree, 'src', 'add.js')), 'src/add.js');
+  assert.equal(taskFilePath(card, './src/add.js'), 'src/add.js');
+  assert.equal(taskFilePath(card, path.join(root, 'notes.md')), 'notes.md');
+  // A path outside every folder of the task is kept as it is; an empty one is dropped.
+  assert.equal(taskFilePath(card, path.resolve('/tmp/scratch.txt')), path.resolve('/tmp/scratch.txt'));
+  assert.equal(taskFilePath(card, '  '), '');
+  // In a sub-folder of its repository, both kinds of path lose the sub-folder, as the copy's own list does.
+  const sub = { worktree, scopePath: path.join(worktree, 'app'), folderPath: path.join(root, 'app'), repoRoot: root, prefix: 'app' };
+  assert.equal(taskFilePath(sub, path.join(worktree, 'app', 'src', 'add.js')), 'src/add.js');
+  assert.equal(taskFilePath(sub, 'app/src/add.js'), 'src/add.js');
+  assert.equal(taskFilePath(sub, 'src/add.js'), 'src/add.js');
 });
 
 test('a card that saves files Git ignores waits for its folder, since a copy would lose them', t => {

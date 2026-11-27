@@ -2120,6 +2120,8 @@ test("a worktree card that changes files without edit tool events reports the wo
   assert.equal(finished.result.tests, "unverified", "Changing a file in the worktree copy is not marked no-change.");
   assert.deepEqual(env.task(task.id).stepResult.files, ["shell-output.txt"]);
   assert.equal(env.task(task.id).stepCheck.outcome, "unverified");
+  // What it used is saved on the task, so the Plan still shows its retries and handoffs after a restart (#162).
+  assert.deepEqual([env.task(task.id).budgetUsed?.retries, env.task(task.id).budgetUsed?.handoffs], [0, 0]);
   assert.equal(env.board.answer(env.c, card.id).files.length, 1);
 
   env.release(fs.realpathSync(env.folder("a")));

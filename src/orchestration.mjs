@@ -502,10 +502,45 @@ export function planQuestions(list) {
 }
 export const questionText = item => typeof item === 'string' ? item : item?.question || '';
 
+// The JSON object a planner, Suggest next or a Plan update replied with (#162). Most replies are the object alone, or in
+// one code fence. Some models, Haiku among them, also write a sentence before it or a note after it: the object is found
+// in the text, as a split's subtasks are (src/subtasks.mjs). Only an object with a plan's shape counts, a summary with
+// steps, cards to remove or an answer, so an example or a single card quoted in the prose isn't read as the plan, and a
+// reply with two such objects is refused rather than guessed. Anything else throws, and is read as no plan.
+const planShaped = value => value && typeof value === 'object' && !Array.isArray(value) && (Array.isArray(value.steps) || Array.isArray(value.remove) || typeof value.answer === 'string');
+export function planJson(reply) {
+  const whole = reply.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, '$1');
+  try { return JSON.parse(whole); } catch { /* Text around it: look inside. */ }
+  const found = [];
+  const look = source => {
+    for (let start = source.indexOf('{'); start >= 0; start = source.indexOf('{', start + 1)) {
+      let depth = 0, inString = false, escape = false, end = -1;
+      for (let i = start; i < source.length; i++) {
+        const ch = source[i];
+        if (inString) { if (escape) escape = false; else if (ch === '\\') escape = true; else if (ch === '"') inString = false; continue; }
+        if (ch === '"') inString = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}' && !--depth) { end = i; break; }
+      }
+      // An object that never closes was cut off: nothing after it is a whole plan either.
+      if (end < 0) return;
+      let value; try { value = JSON.parse(source.slice(start, end + 1)); } catch { continue; }
+      if (planShaped(value)) found.push(source.slice(start, end + 1));
+      start = end;
+    }
+  };
+  const fenced = Array.from(reply.matchAll(/```(?:json)?[^\S\n]*\n([\s\S]*?)```/gi), match => match[1]);
+  for (const block of fenced) look(block);
+  if (!found.length) look(reply);
+  const distinct = [...new Set(found.map(item => JSON.stringify(JSON.parse(item))))];
+  if (distinct.length !== 1) throw Error('No single plan in the reply.');
+  return JSON.parse(distinct[0]);
+}
+
 export function parsePlan(reply) {
   try {
     if (typeof reply !== 'string' || Buffer.byteLength(reply) > planLimits.reply) throw Error();
-    const plan = JSON.parse(reply.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, '$1'));
+    const plan = planJson(reply);
     const summary = text(plan?.summary, planLimits.summary);
     // A plan can also change the cards already on the Plan (#162): a step with card changes one, and remove takes cards
     // away. One that only removes cards has no steps.
@@ -557,7 +592,7 @@ const unreadable = error => error?.status ? `The planner's plan broke a rule, so
 export function parseSuggest(reply) {
   try {
     if (typeof reply !== 'string' || Buffer.byteLength(reply) > planLimits.reply) throw Error();
-    const plan = JSON.parse(reply.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, '$1'));
+    const plan = planJson(reply);
     const summary = text(plan?.summary, planLimits.summary);
     if (!summary || !Array.isArray(plan.steps)) throw Error();
     const questions = planQuestions(plan.questions);

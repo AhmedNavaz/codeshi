@@ -21,6 +21,22 @@ const fail = (message, status = 409) => Object.assign(new Error(message), { stat
 const ENDED = new Set(['integrated', 'kept', 'discarded', 'cancelled']);
 // Why a task Flow started never did: you took over from Flow before it started (src/board.mjs flowEnded).
 export const TOOK_OVER = 'Not started: you took over from Flow. Run it again when you’re ready.';
+// A file a task's agent named, as a path in its folder: agents name the files they edit either way, relative or with the
+// full path of the copy they work in, which means nothing once the copy is merged. A path outside every folder of the
+// task is kept as it is, and one in a sub-folder task loses that folder's prefix.
+export function taskFilePath(task, raw) {
+  let named = String(raw || '').trim();
+  if (!named) return '';
+  if (path.isAbsolute(named)) {
+    const absolute = path.resolve(named);
+    for (const root of [task.worktree, task.scopePath, task.folderPath, task.repoRoot].filter(Boolean).map(item => path.resolve(item))) {
+      const relative = path.relative(root, absolute);
+      if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) { named = relative; break; }
+    }
+  }
+  const clean = named.replace(/\\/g, '/').replace(/^\.\//, ''), prefix = task.prefix ? `${task.prefix.replace(/\/+$/, '')}/` : '';
+  return prefix && clean.startsWith(prefix) ? clean.slice(prefix.length) : clean;
+}
 const MAX_INTEGRATION_CHANGES = 200, MAX_INTEGRATION_REST = 5000;
 const integrationChanges = (files = []) => files.slice(0, MAX_INTEGRATION_CHANGES).map(file => ({
   path: file.path,
@@ -519,7 +535,9 @@ export class TaskCoordinator {
     // A plan step that finishes is checked before anything builds on it, so the hold is saved with the status (#89). Working
     // on it again drops the old result; the next finish checks it afresh.
     const finished = tested(task) && status === 'complete' && task.status !== 'complete', check = finished ? { id: randomUUID().slice(0, 8), status: 'running', at: new Date().toISOString() } : null;
-    const spent = (task.parentTaskId || task.batch) && status !== 'running' ? this.budgetUsage(lane.c.taskBudgets?.[task.id], lane.broker.budget) : null;
+    // What it used is saved when it stops working: a split's parts and a run's cards share limits with it, and a Plan card's
+    // retries and handoffs are still shown after a restart, before its task is opened again (usageOf).
+    const spent = (task.parentTaskId || task.batch || task.board) && status !== 'running' ? this.budgetUsage(lane.c.taskBudgets?.[task.id], lane.broker.budget) : null;
     // A run that was resolving ends: resolving is finished once no file it was given still has its markers. How the run
     // ended is kept until the task works again, so a Plan card whose resolving stopped stays in Review (board placement).
     const resolve = resolving && status !== 'running' ? { ...task.resolve, open: unfinishedFiles(task.worktree, task.resolve).length > 0, ended: status, endedAt: new Date().toISOString() } : status === 'running' && task.resolve?.ended && !resolving ? { ...task.resolve, ended: null } : null;
@@ -635,7 +653,10 @@ export class TaskCoordinator {
       const strip = file => task.prefix && file.startsWith(`${task.prefix}/`) ? file.slice(task.prefix.length + 1) : file;
       let copyFiles = null, copyPaths = [];
       if ((task.board || task.plan) && task.mode === 'worktree' && task.worktree && fs.existsSync(task.worktree)) { try { copyPaths = this.planFor(c, task).plan.files.map(file => strip(file.path)); copyFiles = copyPaths.length; } catch { /* Counted again when it's accepted. */ } }
-      const result = { summary: clip(step.artifact === 'design' ? designSection(reply) || reply : reply, 3000), files: [...new Set([...copyPaths, ...runSteps(messages).files])].slice(0, 20), runId: run?.id || null, at: new Date().toISOString() };
+      // What the agent says it edited is named as the copy names it, so a file isn't listed twice, once with the copy's own
+      // path, and the cards after it aren't told paths in a copy that is gone once it is merged.
+      const said = runSteps(messages).files.map(file => taskFilePath(task, file)).filter(Boolean);
+      const result = { summary: clip(step.artifact === 'design' ? designSection(reply) || reply : reply, 3000), files: [...new Set([...copyPaths, ...said])].slice(0, 20), runId: run?.id || null, at: new Date().toISOString() };
       this.update(c, task, { stepResult: result, ...(copyFiles !== null ? { copyFiles } : {}) });
       if (plan && step.artifact) this.main.record(c, { type: 'orchestration_artifact', id: plan.id, stepId: step.id, kind: step.artifact, content: result.summary, revision: result.runId || id, role: step.role || null });
       if (task.board && step.artifact) this.main.record(c, { type: 'board_card_artifact', cardId: step.id, taskId: task.id, kind: step.artifact, content: result.summary, revision: result.runId || id, role: step.role || null });

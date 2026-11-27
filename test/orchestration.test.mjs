@@ -149,6 +149,33 @@ test('a reply that is not a valid plan is reported, never guessed at', () => {
   assert.match(parsePlan('Not JSON').summary, /could not be read as a plan\. Try again/);
 });
 
+test('a plan with a sentence before it or a note after it is read, but an unclear one still is not (#162)', () => {
+  const json = JSON.stringify(reply), pretty = JSON.stringify(reply, null, 2);
+  const read = [
+    `Here is the plan:\n\n${json}`,
+    `${pretty}\n\nLet me know if you want the page split further.`,
+    `I looked at the project first.\n\n\`\`\`json\n${pretty}\n\`\`\`\n\nThe API card can run on its own.`,
+    // A brace in the prose or inside a string doesn't throw the search off.
+    `The handler returns {status}. Plan: ${JSON.stringify({ ...reply, summary: `${reply.summary} Uses {id} and "}" in routes.` })}`,
+  ];
+  for (const text of read) assert.equal(parsePlan(text).status, 'draft', text.slice(0, 60));
+  assert.deepEqual(parsePlan(read[0]), parsePlan(json));
+  // Suggest next and questions before drafting are found the same way.
+  assert.equal(parseSuggest(`Two cards follow from this.\n${JSON.stringify({ summary: 'Next.', steps: [reply.steps[0]] })}`).status, 'draft');
+  assert.equal(parsePlan(`Before I draft:\n${JSON.stringify({ summary: 'Two questions.', steps: [], questions: ['Which database?'] })}`).status, 'questions');
+  const unclear = [
+    // Two different plans: neither is picked.
+    `First idea: ${json}\nOr instead: ${JSON.stringify({ ...reply, summary: 'Another plan.' })}`,
+    // Only a card quoted in the prose, not a plan.
+    `The first card would be ${JSON.stringify(reply.steps[0])}.`,
+    // A plan cut off before its end.
+    `Here it is: ${json.slice(0, -20)}`,
+  ];
+  for (const text of unclear) assert.equal(parsePlan(text).status, 'unstructured', text.slice(0, 60));
+  // The same plan said twice, as in a fence and again in the prose, is one plan.
+  assert.equal(parsePlan(`${json}\n\nAs JSON:\n\`\`\`json\n${pretty}\n\`\`\``).status, 'draft');
+});
+
 test('a planner that lists too many files loses the extra ones, with a note on the card, not the whole plan', () => {
   const files = Array.from({ length: 14 }, (_, index) => `file${index}.js`);
   const result = parsePlan(JSON.stringify({ summary: 'Many files.', steps: [{ title: 'Rename', instructions: 'Rename the owner everywhere.', tier: 'standard', files }] }));
