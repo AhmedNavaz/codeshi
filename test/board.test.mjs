@@ -770,6 +770,24 @@ test('a card on Auto runs with the agent the Plan shows, and a schedule needs an
   assert.throws(() => env.board.stopMany(env.c, { ids: [card.id] }), /None of these cards is running/);
 });
 
+test('Normal never puts a card on Auto by itself: a card you write starts without it, and runs exactly the agent it names (#162)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  const written = env.add({ title: 'Written by hand', column: 'ready', agent: null });
+  assert.equal(written.auto, false, 'A card you write never defaults to Auto.');
+  assert.equal(env.board.edit(env.c, written.id, { title: 'Still by hand', revision: written.revision }).auto, false, 'Editing it doesn’t turn Auto on.');
+  assert.throws(() => env.board.run(env.c, { ids: [written.id], assignments: { [written.id]: { provider: 'claude', auto: true } } }), /Choose an agent for “Still by hand”/, 'An Auto pick sent for it is refused, not taken.');
+  // Choosing an agent on a card that was on Auto turns Auto off.
+  const was = env.add({ title: 'Was on Auto', column: 'ready', agent: null, auto: true });
+  assert.deepEqual((({ auto, agent }) => [auto, agent.provider])(env.board.edit(env.c, was.id, { agent: { provider: 'codex' }, revision: was.revision })), [false, 'codex']);
+  // A card naming an agent runs with that agent, unrouted, whatever the run is sent.
+  const pinned = env.add({ title: 'Pinned', column: 'ready', agent: { provider: 'codex' }, tier: 'light' });
+  env.script(pinned, 'hold');
+  const { tasks } = env.board.run(env.c, { ids: [pinned.id], assignments: { [pinned.id]: { provider: 'claude', auto: true } } }), task = env.task(tasks[pinned.id]);
+  assert.deepEqual([task.provider, task.routing, env.card(pinned.id).auto, env.card(pinned.id).attempts[0].auto], ['codex', undefined, false, undefined]);
+  env.board.stopMany(env.c, { ids: [pinned.id] });
+  await until(() => column(env, pinned) === 'ready', 'it to stop');
+});
+
 // Flow's Run Ready (#132): you choose the cards and one limit; Flow picks agents for the cards without one.
 const flowOn = env => env.broker.setRouting(env.c, { mode: 'smart', executionRevision: env.broker.execution.defaults(env.c).revision });
 test('Flow’s Run Ready runs only the cards ticked, gives a card with no agent Auto for that run, and keeps a chosen agent', { skip: scriptCLIs }, async t => {
@@ -2322,4 +2340,25 @@ test('a Design card hands design notes to the frontend, and a card carries its s
   env.board.edit(env.c, card.id, { attachments: [shot.id] });
   const { tasks } = env.board.run(env.c, { ids: [card.id] });
   assert.deepEqual(env.task(tasks[card.id]).attachments, [shot.id]);
+});
+
+test('a message sent while tasks hold every slot joins the queue and starts when one frees', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  env.broker.budget.setPolicy(env.c, { maxConcurrent: 1 });
+  const card = env.add({ title: 'Build checkout', column: 'backlog', split: true, notes: 'A cart and a receipt.' });
+  scriptMatch(env, 'into subtasks, before any work', { behavior: 'hold', text: JSON.stringify({ cards: [{ card: 1, subtasks: [{ title: 'Do it', instructions: 'All of it.', tier: 'light' }] }] }) });
+  env.board.split(env.c, { ids: [card.id], provider: 'codex' });
+  assert.equal(env.broker.tasks.full(env.c), true);
+  const input = { text: 'Tidy the readme', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', requestId: 'full-1', executionRevision: env.broker.execution.defaults(env.c).revision };
+  const sent = await env.broker.send(env.c, input);
+  assert.equal(sent.queued, true, 'It is queued instead of refused.');
+  assert.deepEqual(env.c.queue.map(item => item.text), ['Tidy the readme']);
+  assert.equal(env.broker.view(env.c).queueWaitsForSlot, true, 'The queue says it waits for a slot.');
+  await env.broker.send(env.c, input);
+  assert.equal(env.c.queue.length, 1, 'A retry with the same request ID is not queued twice.');
+  assert.equal(env.c.queuePaused, null, 'The queue waits rather than pausing.');
+  env.release(fs.realpathSync(env.folder('a')));
+  await until(() => !env.c.queue.length && env.c.messages.some(message => message.role === 'user' && message.text === 'Tidy the readme'), 'the queued message to start');
+  assert.equal(env.c.queuePaused, null);
+  if (env.broker.running) await env.broker.running.done;
 });

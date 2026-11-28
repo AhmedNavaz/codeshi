@@ -36,7 +36,7 @@ Switch agents mid-task, hand off at usage limits, run tasks side by side in Git 
 curl -fsSL https://raw.githubusercontent.com/AhmedNavaz/codeshi/main/install.sh | sh
 ```
 
-macOS builds are signed ad hoc and not notarized yet ([#1](https://github.com/AhmedNavaz/codeshi/issues/1)), so macOS doesn't show **Needs you** system banners for them. Until signed builds ship, choose **Panel under the menu bar** as the banner style in **Settings › Alerts**.
+macOS builds are signed with a Developer ID certificate and notarized by Apple ([#1](https://github.com/AhmedNavaz/codeshi/issues/1)).
 
 **Windows** (64-bit), in PowerShell:
 ```powershell
@@ -45,9 +45,7 @@ irm https://raw.githubusercontent.com/AhmedNavaz/codeshi/main/install.ps1 | iex
 
 Both commands check the release's published SHA-256 checksum before installing. Running the Windows command again also updates an existing installation. Or download zipped builds directly from [Releases](https://github.com/AhmedNavaz/codeshi/releases/latest).
 
-> **The first time you open a browser download:** Codeshi isn't notarized by Apple or signed for Windows yet, so each OS warns once on a browser download (the install commands above do not trigger this).
-> - **macOS** says it cannot verify the developer: open **System Settings › Privacy & Security** and click **Open Anyway**. If macOS says the app is damaged, run `xattr -cr /Applications/Codeshi.app`.
-> - **Windows** SmartScreen may say it protected your PC: click **More info**, then **Run anyway**.
+> **The first time you open a Windows browser download:** Codeshi isn't signed for Windows yet, so SmartScreen may say it protected your PC: click **More info**, then **Run anyway** (the PowerShell install command above does not trigger this).
 
 Once installed, Codeshi checks GitHub Releases for updates and updates in place on macOS and Windows after verifying checksums.
 
@@ -170,8 +168,8 @@ Codeshi is free and open source under the MIT license. You pay only for the agen
 ### How do I install it on macOS or Windows, and is there a Linux version?
 On macOS or Windows, run the one-line install command in [Install Pre-built App](#install-pre-built-app). There is no pre-built Linux package yet; native Linux packaging is help wanted ([#5](https://github.com/AhmedNavaz/codeshi/issues/5)), and the test suite already runs on Linux in CI. See [Contributing](#contributing).
 
-### Why does macOS or Windows warn me when I open it, and is it safe?
-Codeshi isn't notarized by Apple or signed for Windows yet, so each system warns you once when you open a browser download. The install commands don't trigger the warning. See the first-open steps in [Install Pre-built App](#install-pre-built-app) and [Limitations](docs/guide.md#limitations) in the guide.
+### Why does Windows warn me when I open it, and is it safe?
+macOS builds are signed and notarized by Apple. Windows builds aren't signed yet, so SmartScreen asks you to confirm a browser download once (the PowerShell install command doesn't trigger the warning). See the first-open steps in [Install Pre-built App](#install-pre-built-app) and [Limitations](docs/guide.md#limitations) in the guide.
 
 ### Can one agent review another agent's code?
 Yes. Request a read-only review from another provider against selected file snapshots, then send chosen findings back as a fix prompt. See [Parallel Work, Review & Preview](#parallel-work-review--preview) and the [guide](docs/guide.md#cross-agent-review).

@@ -7,7 +7,7 @@ import test from 'node:test';
 import { Broker } from '../src/broker.mjs';
 import { MutationCoordinator } from '../src/mutation-lock.mjs';
 import { assessmentPrompt, parseAssessment } from '../src/routing-assessment.mjs';
-import { groupName, readParts } from '../src/flow-split.mjs';
+import { groupName, readParts, splitShape } from '../src/flow-split.mjs';
 import { TaskBudgets } from '../src/task-budget.mjs';
 import { TOOK_OVER } from '../src/task-coordinator.mjs';
 import { scriptCLIs } from './platform.mjs';
@@ -19,6 +19,14 @@ const parts = [
   { title: 'Add CSV export to reports', instructions: 'Add an Export CSV button to the reports page that downloads the visible rows.', tier: 'standard', dependsOn: [] },
   { title: 'Document the export', instructions: 'Describe the CSV export in the README.', tier: 'light', dependsOn: [2] },
 ];
+test('the split says how its parts run: side by side, one after another, or in steps', () => {
+  const part = dependsOn => ({ dependsOn });
+  assert.equal(splitShape([part([]), part([])]), '2 parts that run side by side');
+  assert.equal(splitShape([part([]), part([1]), part([2])]), '3 steps that run one after another');
+  assert.equal(splitShape([part([]), part([]), part([1, 2])]), '3 parts in 2 steps: first 2 side by side, then one');
+  assert.equal(splitShape([part([]), part([1]), part([1]), part([2, 3])]), '4 parts in 3 steps: first one, then 2 side by side, then one');
+});
+
 const rating = { tier: 'standard', effort: 'medium', reason: 'Two unrelated changes and a note.' };
 const request = 'Fix the login redirect so people land where they were going, add a CSV export to the reports page, and document the export in the README.';
 
@@ -120,7 +128,9 @@ test('running the parts makes hidden cards in one group, with a review after the
   const shared = broker.tasks.sharedUsage(c, tasks[0]);
   assert(shared.tokens >= 500); assert.equal(shared.retries, 1);
   assert.equal(c.messages.filter(message => message.role === 'user' && message.splitId === split.id).length, 1);
-  assert.match(c.messages.at(-1).text, /3 parts that run side by side.*answers here/);
+  assert.match(c.messages.at(-1).text, /3 parts in 2 steps: first 2 side by side, then one, each on a model sized to it\..*answers here/);
+  // The split saves how its parts run, so the page can show its steps.
+  assert.deepEqual(c.splitRuns.at(-1).shape, parts.map(part => ({ tier: part.tier, dependsOn: part.dependsOn })));
   assert.equal(c.splitProposal, null);
   // One review of the combined result waits for every part, and Flow finishes them out of sight.
   const run = c.splitRuns.at(-1), review = broker.board.find(c, run.reviewCardId);

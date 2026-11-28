@@ -469,7 +469,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           }
           if (match[2] === 'retry') return json(res, input.accept === false ? 200 : 202, input.accept === false ? broker.dismissRetry(c, input.offerId) : broker.acceptRetry(c, input));
           if (match[2] === 'handoff') return json(res, input.accept === false ? 200 : 202, input.accept === false ? broker.dismissHandoff(c, input.offerId) : await broker.acceptHandoff(c, input));
-          if (match[2] === 'messages') { const result = await broker.dispatch(c, input); noteActivity('prompts'); return json(res, 202, result); }
+          if (match[2] === 'messages') { const result = await broker.send(c, input); noteActivity('prompts'); return json(res, 202, result); }
           if (match[2] === 'continue') return json(res, 202, await broker.continueTask(c, input));
         }
       }

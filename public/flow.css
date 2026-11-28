@@ -186,7 +186,8 @@
 .flow-panel-foot > .flow-fold { margin: -3px -2px; }
 .flow-panel-foot:empty { display: none; }
 .flow-empty { margin: 0; padding: 0 6px; color: var(--muted); font-size: 12px; }
-.flow-subhead { margin: 0; padding: 6px 8px 2px; color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.flow-subhead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0; padding: 6px 8px 2px; color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.flow-subhead-count { font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: 0; }
 /* What the Lounge's own cards share with these. */
 .flow-card-body { display: grid; gap: 8px; min-width: 0; }
 .flow-card-body:empty { display: none; }
@@ -283,6 +284,39 @@
 div.flow-task-row { cursor: default; }
 button.flow-task-row { cursor: pointer; }
 button.flow-task-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+/* A split Flow is finishing by itself: a group row with its parts under it (flow.js splitGroup). */
+.flow-split { flex-direction: column; align-items: stretch; }
+.flow-split > .flow-split-head { flex: none; align-items: flex-start; }
+.flow-split-head .task-row-body { display: grid; gap: 2px; }
+.flow-split-bar { margin-top: 4px; }
+.flow-split-chevron { flex: none; width: 12px; height: 12px; margin: 3px 0 0 4px; background: var(--faint); -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; mask: var(--icon-chevron-right) center / contain no-repeat; transition: transform .12s; }
+.flow-split-head[aria-expanded="true"] .flow-split-chevron { transform: rotate(90deg); }
+.flow-split-parts { position: relative; display: grid; gap: 1px; margin: 1px 0 2px 15px; padding: 0 0 0 8px; list-style: none; border-left: 1px solid var(--border); }
+.flow-split-part > .flow-task-row { width: 100%; border-radius: 7px; font-size: 12.5px; }
+.flow-split-part .task-row-meta { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.flow-split-part .task-row-meta .agent-icon { flex: none; width: 11px; height: 11px; }
+.flow-split-part .task-row-meta .agent-icon.codex { color: var(--codex); }
+.flow-split-part .task-row-meta .agent-icon.claude { color: var(--claude); }
+.flow-split-part .task-row-meta .agent-icon.gemini { color: var(--gemini); }
+.flow-split-agent { flex: 1 1 0; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-split-part .task-row-state { flex: 0 1 auto; max-width: 72%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-split-part .task-row-meta .task-row-sub { flex: none; }
+.flow-split-part [data-kind="review"] .task-row-title { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .flow-split-chevron { transition: none; } }
+/* A split's steps are told apart by a small heading when some of them hold parts that run side by side. */
+.flow-split-step { display: flex; align-items: center; gap: 6px; margin: 6px 0 1px; padding: 0 8px; color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.flow-split-step:first-child { margin-top: 2px; }
+.flow-split-step-note { color: var(--faint); font-weight: 500; letter-spacing: 0; text-transform: none; }
+.flow-split-step-note::before { content: "·"; margin-right: 6px; }
+.flow-split-parts.flow-split-stepped > .flow-split-part { margin-left: 0; }
+.flow-split-size { flex: none; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--muted); font-size: 10.5px; line-height: 16px; }
+.flow-split-size[data-size="Small"] { color: var(--success, var(--muted)); }
+.flow-split-size[data-size="Complex"] { color: var(--accent, var(--muted)); }
+.flow-split-num { flex: none; min-width: 14px; color: var(--faint); font-variant-numeric: tabular-nums; }
+/* With the side panel showing, Tasks lists the parts, so the line above the message box keeps to one line. */
+@media (min-width: 1181px) {
+  #app-shell.flow:not(.flow-lounge) :is(#split-progress-toggle, #split-progress-list) { display: none !important; }
+}
 .flow-task-note { flex-basis: 100%; margin: 0; padding: 0 8px 5px 30px; color: var(--muted); font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
 .flow-task-actions { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; padding: 0 8px 6px 30px; }
 .flow-row-remove { color: var(--faint); }

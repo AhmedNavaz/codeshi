@@ -53,8 +53,8 @@ Codeshi is free and open source under the MIT license. You pay only for the agen
 ### How do I install it on macOS or Windows, and is there a Linux version?
 On macOS or Windows, run the one-line install command in [Install Pre-built App](../README.md#install-pre-built-app). There is no pre-built Linux package yet; native Linux packaging is help wanted ([#5](https://github.com/AhmedNavaz/codeshi/issues/5)), and the test suite already runs on Linux in CI. See [Contributing](../README.md#contributing).
 
-### Why does macOS or Windows warn me when I open it, and is it safe?
-Codeshi isn't notarized by Apple or signed for Windows yet, so each system warns you once when you open a browser download. The install commands don't trigger the warning. See the first-open steps in [Install Pre-built App](../README.md#install-pre-built-app) and [Limitations](#limitations) in the guide.
+### Why does Windows warn me when I open it, and is it safe?
+macOS builds are signed and notarized by Apple. Windows builds aren't signed yet, so SmartScreen asks you to confirm a browser download once (the PowerShell install command doesn't trigger the warning). See the first-open steps in [Install Pre-built App](../README.md#install-pre-built-app) and [Limitations](#limitations) in the guide.
 
 ### Can one agent review another agent's code?
 Yes. Request a read-only review from another provider against selected file snapshots, then send chosen findings back as a fix prompt. See [Cross-Agent Code Review](../README.md#parallel-work-review--preview) and the section [below](#cross-agent-review).
@@ -689,7 +689,7 @@ The development launcher clears an inherited `ELECTRON_RUN_AS_NODE` flag before 
 
 To replay onboarding from the welcome screen, run `npm run start:fresh` or `npm start -- --fresh`. Each launch uses an empty temporary profile and skips legacy-data migration. Setup changes and imported chats in that session are discarded when the window closes; existing saved workspaces stay intact. Installed agent sign-ins are still detected. To preview a new user with no agents installed, run `npm run start:fresh -- --no-agents`; this hides the agents only for that temporary session and leaves their installations and sign-ins unchanged.
 
-If package installation disabled lifecycle scripts, run `node node_modules/electron/install.js` once to install Electron's official runtime. Build a fresh app for the current OS/architecture with `npm run package`; output goes to `dist/`. `AI_RELAY_SIGN_IDENTITY` can supply an installed macOS signing identity. Notarization requires separate Apple credentials/configuration.
+If package installation disabled lifecycle scripts, run `node node_modules/electron/install.js` once to install Electron's official runtime. Build a fresh app for the current OS/architecture with `npm run package`; output goes to `dist/`. `AI_RELAY_SIGN_IDENTITY` (and optional `AI_RELAY_SIGN_KEYCHAIN`) can supply an installed macOS Developer ID signing identity; `APPLE_API_KEY`, `APPLE_API_KEY_ID` and optional `APPLE_API_ISSUER` supply App Store Connect API credentials for notarization.
 
 ## Measuring performance and battery use
 
@@ -701,7 +701,7 @@ Some things to know:
 
 ## Limitations
 
-- macOS builds are signed ad hoc and not notarized yet ([#1](https://github.com/AhmedNavaz/codeshi/issues/1)). An app downloaded from Releases in a browser is blocked the first time you open it: open **System Settings › Privacy & Security**, scroll to the message about Codeshi and choose **Open Anyway**, once. The install command in the README doesn't trigger the prompt, because `curl` doesn't mark what it downloads as coming from a browser. macOS also doesn't show **Needs you** banners for builds without a Developer ID signature, so until signed builds ship, choose **Panel under the menu bar** as the banner style in **Settings › Alerts**. Windows builds are not signed, so SmartScreen asks you to confirm a browser download once (**More info**, then **Run anyway**). Linux builds are not provided yet.
+- macOS release builds are signed with a Developer ID certificate and notarized by Apple ([#1](https://github.com/AhmedNavaz/codeshi/issues/1)); local source/ad-hoc builds without a Developer ID signature still don't show macOS **Needs you** system banners (choose **Panel under the menu bar** in **Settings › Alerts** when running unsigned builds). Windows builds are not signed yet, so SmartScreen asks you to confirm a browser download once (**More info**, then **Run anyway**). Linux builds are not provided yet.
 - The private-link sharing service is not hosted for you. Run the container image yourself with HTTPS and persistent storage, for example with one of the templates in `sharing/deploy` (see `sharing/README.md`), before sharing remote links.
 - Returned patches support text files up to 256 KiB and binary files up to 1 MiB, within 2 MiB in all; symlinks are rejected, and stale baselines need a new solution. A binary change is described, not diffed.
 - Built-in verification covers reviewed JavaScript syntax and `git diff --check`, not arbitrary test scripts.

@@ -785,7 +785,7 @@ export class Broker extends EventEmitter {
       }
     }
 
-    return { ...visible, execution: this.execution.view(c), contextControl: contextFor(c.activeRun?.provider || c.provider), usageWatch: c.lastRun?.provider ? usageWatch(c, contextFor(c.lastRun.provider)) : null, cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(messageCount !== undefined ? { messageCount } : {}), ...(earlier !== undefined ? { earlier } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), ...(c.boardSuggest ? { boardSuggest: { id: c.boardSuggest.id, kind: c.boardSuggest.kind || 'suggest', cardId: c.boardSuggest.cardId, status: c.boardSuggest.status, phase: c.boardSuggest.phase, toolCount: c.boardSuggest.toolCount } } : {}), pendingApprovals: this.pendingApprovals(c), canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: messages.map(({ seq, ...m }) => m) };
+    return { ...visible, execution: this.execution.view(c), contextControl: contextFor(c.activeRun?.provider || c.provider), usageWatch: c.lastRun?.provider ? usageWatch(c, contextFor(c.lastRun.provider)) : null, cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(messageCount !== undefined ? { messageCount } : {}), ...(earlier !== undefined ? { earlier } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, ...(c.queue.length && !c.queuePaused && this.tasks?.full?.(c) ? { queueWaitsForSlot: true } : {}), reviews: reviews.map(publicReview), ...(c.boardSuggest ? { boardSuggest: { id: c.boardSuggest.id, kind: c.boardSuggest.kind || 'suggest', cardId: c.boardSuggest.cardId, status: c.boardSuggest.status, phase: c.boardSuggest.phase, toolCount: c.boardSuggest.toolCount } } : {}), pendingApprovals: this.pendingApprovals(c), canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: messages.map(({ seq, ...m }) => m) };
   }
 
   pendingApprovals(c) {
@@ -994,6 +994,18 @@ export class Broker extends EventEmitter {
   prompt(c, text, fresh = false) { return prepareContext(c, text, { verification: verificationForRun(this.verificationCadence()), workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: fresh || c.sessions[c.provider]?.workspaceSignature !== this.workspaceSignature }).prompt; }
 
   dispatch(c, input, options = {}) { return this.router.start(c, input, options); }
+  // A message sent while tasks hold every slot the workspace's limits allow joins the queue instead of being refused, and
+  // starts when a slot frees (src/prompt-queue.mjs). Planning, Build then review and a split's own parts still say why
+  // they can't start, since the queue doesn't carry them. A retry with the same request ID isn't queued twice.
+  async send(c, input = {}) {
+    const plain = !input.orchestrate && !input.automaticReview && !input.replaces;
+    if (plain && typeof input.requestId === 'string' && c.queue.some(item => item.requestId === input.requestId)) return { queued: true, waitsForSlot: true, conversation: this.view(c) };
+    if (plain && !this.running && !c.requests[input.requestId] && this.tasks?.full?.(c)) {
+      const conversation = this.queueAction(c, { ...input, action: 'add' });
+      return { queued: true, waitsForSlot: true, conversation };
+    }
+    return this.dispatch(c, input);
+  }
 
   async findRoutingFallback(c, run, { failedProvider, failedModel, failedQuota, usage = null } = {}) {
     if (!run?.routing) return null;

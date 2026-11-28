@@ -81,7 +81,15 @@ export class TaskCoordinator {
     // Tasks whose copy is still being prepared. They hold a slot, and the queue leaves them alone until they start.
     this.preparing = new Map();
     // Waiting tasks look again when the main conversation's run begins or ends.
-    main.on('update', () => { const busy = this.activeWorkers; if (busy !== this.mainBusy) { this.mainBusy = busy; this.tickAll(); } });
+    // A message queued because tasks took every slot (src/prompt-queue.mjs) starts as soon as one of them frees one. The
+    // main run's own end isn't counted: the queue decides then whether to carry on or pause.
+    this.taskWorkers = 0;
+    main.on('update', () => {
+      const busy = this.activeWorkers, tasks = busy - (main.running ? 1 : 0), freed = tasks < this.taskWorkers;
+      this.taskWorkers = tasks;
+      if (busy !== this.mainBusy) { this.mainBusy = busy; this.tickAll(); }
+      if (freed && main.queue && !main.running) for (const c of main.conversations.values()) if (c.queue?.length) main.queue.tick(c);
+    });
     main.admit = c => this.admit(c, null);
   }
   all() { return [...this.main.conversations.values()].flatMap(c => (c.parallelTasks || []).map(task => ({ c, task }))); }
@@ -109,6 +117,8 @@ export class TaskCoordinator {
     if (others >= limit) throw fail(`${others} ${others === 1 ? 'task is' : 'tasks are'} already running, the most this workspace's task limits allow at once.`);
     if (task) this.syncPolicy(home, task);
   }
+  // Whether the workspace chat's next message would be refused for want of a slot: it waits in the queue instead.
+  full(c) { return !this.main.running && this.activeWorkers >= this.main.budget.policy(c).maxConcurrent; }
   available(task) { return task.purpose === 'plan-chat' ? this.main.workspaceFolders.some(folder => folder.id === task.folderId) : task.purpose === 'project-review' ? JSON.stringify(task.workspaceFolders.map(({ id, path }) => ({ id, path }))) === JSON.stringify(this.main.workspaceFolders.map(({ id, path }) => ({ id, path }))) : this.main.workspaceFolders.some(folder => folder.id === task.folderId); }
   syncPolicy(c, task) {
     const lane = this.lanes.get(task.id); if (!lane) return;

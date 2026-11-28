@@ -2,6 +2,19 @@
 
 Notable changes to Codeshi, called Throughline until 0.23; earlier entries use the name each version shipped under. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.65.0] - 2026-11-28
+
+### Added
+- **Signed and notarized macOS builds** ([#1](https://github.com/AhmedNavaz/codeshi/issues/1)). The macOS apps are signed with a Developer ID certificate and notarized by Apple, with the ticket stapled, so a browser download opens without **Open Anyway** or `xattr`, and **Needs you** system banners work with any banner style. The first launch after updating may ask again for permissions such as the microphone, because the app's signature changed.
+- **A message waits for a free task slot instead of being refused**. When tasks, such as a split's parts, hold every slot the workspace's limits allow, a message you send joins the queue, says **Starts when a task finishes**, and starts as soon as one frees.
+
+### Changed
+- **Flow shows how a split runs** ([#108](https://github.com/AhmedNavaz/codeshi/issues/108)). A split says whether its parts run side by side, one after another, or in steps, and Flow's Tasks list shows it as one group with each part under it: its step, where it stands, its agent and model, and its size, which is why it got that model. A part that needs you opens the group and offers **Answer**.
+- **Every Git view counts files the same way**. The Git panel's sections and folder picker, the changes window, the line under the chat and companion lanes count each file inside a new folder, and opening a new folder's change opens its first file.
+
+### Fixed
+- **Stop pressed from the keyboard leaves the focus in the message box**, and a screen reader no longer hears an unchanged Plan status line or usage meter again on every update while agents work ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)).
+
 ## [0.64.0] - 2026-11-27
 
 ### Added

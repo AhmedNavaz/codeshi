@@ -4119,11 +4119,30 @@ test('the Git panel stages changes and commits exactly what is staged, and offer
 test('the Git panel and its Commit button count each file in a new folder, as Flow’s Changes does', async () => {
   const ui = await browser({ insights: true });
   const repo = { folderId: 'frontend', name: 'Frontend', available: true, branch: 'main', totalChanges: 3, changes: [{ path: 'app.js', code: ' M', staged: false }, { path: 'shots/', code: '??', staged: false, files: [{ path: 'shots/a.png' }, { path: 'shots/b.png' }, { path: 'shots/c.png' }] }, { path: 'big/', code: '??', staged: false, fileCount: 40 }], stagedPaths: [], commits: [], committer: { name: 'Pat Example', email: 'pat@example.com' } };
-  ui.setIntercept((request, next) => request.path === '/api/git' && request.method === 'GET' ? response({ checkedAt: new Date().toISOString(), repositories: [repo] }) : next());
+  const other = { folderId: 'web', name: 'Web', available: true, branch: 'main', totalChanges: 1, changes: [{ path: 'launch-video/', code: '??', staged: false, fileCount: 68 }], stagedPaths: [], commits: [], committer: { name: 'Pat Example', email: 'pat@example.com' } };
+  ui.setIntercept((request, next) => request.path === '/api/git' && request.method === 'GET' ? response({ checkedAt: new Date().toISOString(), repositories: [repo, other] }) : next());
   ui.$('open-git').click(); await flush();
   assert.match(ui.$('git-summary').textContent, /44 changed/);
   assert.equal(ui.$('git-commit-button').textContent, 'Commit all 44 files');
+  assert.equal(ui.document.querySelector('.git-section-count').textContent, '44');
+  assert.match(ui.$('git-content').textContent, /New · 3 files/);
+  assert.match(ui.$('git-content').textContent, /New · 40 files/);
+  assert.deepEqual(ui.$('git-repository').children.map(option => option.textContent), ['Frontend (44 changed)', 'Web (68 changed)']);
   assert.equal(ui.window.relayGit.fileTotal(repo), 44);
+});
+
+test('Flow Changes card shares rows across changed folders and counts collapsed folders accurately in its more button', async () => {
+  const ui = await flowBrowser();
+  const primary = { folderId: 'frontend', name: 'throughline', available: true, branch: 'main', totalChanges: 10, changes: Array.from({ length: 10 }, (_, i) => ({ path: `file-${i + 1}.js`, code: ' M', staged: false, added: 1 })), stagedPaths: [], commits: [] };
+  const secondary = { folderId: 'web', name: 'codeshi-web', available: true, branch: 'main', totalChanges: 1, changes: [{ path: 'launch-video/', code: '??', staged: false, fileCount: 68 }], stagedPaths: [], commits: [] };
+  ui.setIntercept((request, next) => request.path === '/api/git' && request.method === 'GET' ? response({ checkedAt: new Date().toISOString(), repositories: [primary, secondary] }) : next());
+  ui.window.relayFlow.enter(); await flush();
+  await ui.window.relayGit.refresh(); await flush();
+  const card = ui.$('flow-card-changes');
+  assert.equal(card.querySelector('.flow-panel-count').textContent, '78');
+  assert.deepEqual(card.querySelectorAll('.flow-subhead').map(node => node.textContent), ['throughline10', 'codeshi-web68']);
+  assert.deepEqual(card.querySelectorAll('.flow-fold').map(node => node.textContent), ['3 more']);
+  assert.match(card.textContent, /launch-video\/.*68 files/);
 });
 
 test('with nothing staged, Commit commits every change listed: it stages exactly those files, then commits them', async () => {
@@ -10059,7 +10078,7 @@ test('Flow split-into-parts managed tasks stay out of Plan row, Task lanes, and 
   planChatBrowserRoutes(ui);
   const chat = ui.canonical.get('project-one');
   const folder = ui.state().projects[0].folders[0];
-  chat.splitRuns = [{ id: 'split-1', status: 'working', cards: ['c-1', 'c-2'], reviewCardId: 'c-rev' }];
+  chat.splitRuns = [{ id: 'split-1', status: 'working', cards: ['c-1', 'c-2'], reviewCardId: 'c-rev', shape: [{ tier: 'deep', dependsOn: [] }, { tier: 'light', dependsOn: [] }] }];
   chat.splitProposal = { id: 'prop-1', request: { text: 'Do both' }, parts: [{ title: 'Part 1', instructions: 'One' }, { title: 'Part 2', instructions: 'Two' }] };
   await ui.window.relayUI.refresh(); await flush();
 
@@ -10089,11 +10108,49 @@ test('Flow split-into-parts managed tasks stay out of Plan row, Task lanes, and 
   assert.equal(ui.window.relayFlow.view(), 'flow');
   assert.equal(ui.$('split-progress').hidden, false);
   assert.equal(ui.$('split-offer').hidden, false);
-  assert.match(ui.$('flow-status-text').textContent, /Working in 2 parts side by side/);
+  assert.match(ui.$('flow-status-text').textContent, /2 parts side by side/);
   assert.doesNotMatch(ui.$('flow-status-text').textContent, /Task lane/);
   assert.equal(ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(el => el.dataset.taskId === 'plan'), undefined);
   assert.equal(ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(el => el.dataset.taskId === 'split-t1'), undefined);
   assert.doesNotMatch(flowText(ui, 'activity'), /task working/, 'Flow’s own parts are not counted as tasks beside the chat.');
+  // Tasks shows the parts as one group, each part with its agent and state, and Activity says how far they are.
+  const group = ui.$('flow-card-tasks').querySelectorAll('.flow-split');
+  assert.equal(group.length, 1);
+  assert.match(group[0].textContent, /2 parts side by side/);
+  assert.match(group[0].textContent, /2 working/);
+  const parts = ui.$('flow-card-tasks').querySelectorAll('.flow-split-part');
+  assert.deepEqual(parts.map(el => el.querySelector('.task-row-title').textContent), ['Promo helper', 'Checkout UI', 'Review of the combined result']);
+  assert.match(parts[0].textContent, /Claude/);
+  // Each part shows its size, which is why it got its model; parts side by side get no step headings.
+  assert.deepEqual(parts.map(el => el.querySelector('.flow-split-size')?.textContent || ''), ['Complex', 'Small', '']);
+  assert.equal(ui.$('flow-card-tasks').querySelectorAll('.flow-split-step').length, 0);
+  assert.match(parts[2].textContent, /After every part/);
+  assert.match(flowText(ui, 'activity'), /2 parts side by side/);
+  assert.doesNotMatch(flowText(ui, 'activity'), /above the message box/);
+  parts[1].querySelector('button').click(); await flush();
+  assert.equal(ui.state().taskId, 'split-t2', 'A part in Tasks opens its conversation to watch it.');
+  ui.window.relayUI.setTask(null); await flush(); await flush();
+
+  // Parts that wait for one another are steps, numbered in order, each waiting for the step before it.
+  chat.splitRuns[0].shape = [{ tier: 'deep', dependsOn: [] }, { tier: 'standard', dependsOn: [1] }];
+  splitTasks[1].status = 'waiting'; splitTasks[1].reason = 'Waiting for “Promo helper”.';
+  await ui.window.relayUI.refresh(); await flush();
+  const chained = ui.$('flow-card-tasks').querySelectorAll('.flow-split-part');
+  assert.match(ui.$('flow-card-tasks').querySelectorAll('.flow-split')[0].textContent, /2 steps, one after another.*Step 1 of 2/);
+  assert.deepEqual(chained.map(el => el.querySelector('.flow-split-num')?.textContent || ''), ['1', '2', '']);
+  assert.match(chained[1].textContent, /After step 1/);
+  assert.match(flowText(ui, 'activity'), /2 steps, one after another/);
+  assert.match(ui.$('split-progress-summary').textContent, /Step 1 of 2/);
+  // Two parts side by side, then one: the steps get headings.
+  chat.splitRuns[0].cards = ['c-1', 'c-2', 'c-3'];
+  chat.splitRuns[0].shape = [{ tier: 'standard', dependsOn: [] }, { tier: 'standard', dependsOn: [] }, { tier: 'light', dependsOn: [1, 2] }];
+  splitTasks[1].status = 'running'; delete splitTasks[1].reason;
+  splitTasks.splice(2, 0, { id: 'split-t3', title: 'Docs', folderName: folder.name, folderId: folder.id, status: 'waiting', reason: 'Waiting for “Checkout UI”.', provider: 'claude', managed: true, splitId: 'split-1', board: { boardId: 'b1', cardId: 'c-3' }, cardColumn: 'ready', conversationId: 'conv-s3', approvals: 0 });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.deepEqual(ui.$('flow-card-tasks').querySelectorAll('.flow-split-step').map(el => el.textContent), ['Step 12 side by side', 'Step 2', 'Thenchecked together']);
+  assert.match(ui.$('flow-card-tasks').querySelectorAll('.flow-split')[0].textContent, /3 parts in 2 steps/);
+  splitTasks.splice(2, 1); chat.splitRuns[0].cards = ['c-1', 'c-2']; chat.splitRuns[0].shape = [{ tier: 'deep', dependsOn: [] }, { tier: 'light', dependsOn: [] }];
+  await ui.window.relayUI.refresh(); await flush();
 
   // Opening a managed split part inside Flow, then switching to Plan or Normal, hides split UI and exits the managed part.
   ui.$('split-progress-toggle').click(); await flush();
@@ -10202,7 +10259,7 @@ test('Tasks side by side is experimental: marked in Normal and Flow, and turning
   assert.equal(ui.$('flow-card-tasks').hidden, true);
 });
 
-test("approving a pending request keeps focus on Stop, Escape closes an open Plan card from outside #board-view, and worktree file counts override stale no-change chips (#162)", async () => {
+test("approving a pending request keeps focus on Stop, Stop leaves it in the message box, an unchanged Plan status line isn’t read out again, Escape closes an open Plan card from outside #board-view, and worktree file counts override stale no-change chips (#162)", async () => {
   const ui = await browser({ boardUI: true, workbench: true, wide: true });
   const conversation = ui.canonical.get("project-one");
   const ids = { running: "c0000000-0000-4000-8000-000000000021", review: "c0000000-0000-4000-8000-000000000022" };
@@ -10259,6 +10316,23 @@ test("approving a pending request keeps focus on Stop, Escape closes an open Pla
   ui.document.dispatchEvent(new UIEvent("keydown", { key: "Escape" })); await flush();
   assert.equal(ui.$("board-drawer").hidden, true, "Escape closes the card drawer even when focus was in the chat pane.");
   assert.equal(ui.document.activeElement?.dataset?.card, ids.running, "Closing the drawer returns focus to the card on the Plan.");
+
+  // The Plan's status line is read out when it's rebuilt: a reload that changes nothing it says leaves the same nodes.
+  const said = ui.$("board-progress").firstElementChild;
+  ui.window.relayBoard.reload?.(); await flush(); await flush();
+  assert.ok(ui.$("board-progress").firstElementChild === said, "An unchanged status line isn’t rebuilt.");
+
+  // Stop pressed from the keyboard: it is disabled while stopping and then hidden, and the focus goes on to the message box.
+  ui.setIntercept((request, next) => {
+    if (request.path === "/api/board") return response(board);
+    if (request.path.endsWith("/stop")) { conversation.status = "idle"; conversation.activeRun = null; return response({ stopped: true }); }
+    return next();
+  });
+  ui.$("stop-button").focus();
+  ui.$("stop-button").click(); await flush(); await flush();
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$("stop-button").hidden, true);
+  assert.equal(ui.document.activeElement?.id, "message-input", "Focus goes to the message box, not the page, once Stop is gone.");
 });
 
 test("sidebar task list sorts Needs you → Working → Finished, shows two lines while active, scopes folder chips, and folds older finished tasks (#192)", async () => {

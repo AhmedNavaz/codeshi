@@ -1,23 +1,24 @@
-// A split message Flow is finishing by itself (src/split-finish.mjs). Its parts aren't on the Plan or in Tasks, so this one
-// line above the message box says how far it is, and only while Flow is shown. Details lists each part, the review and any
-// repair, with its agent and state, and opens a part's conversation to watch it. A part that needs your approval opens the
-// details by itself. Stop stops every part, and the parts then go to the Plan for you to finish.
+// A split message Flow is finishing by itself (src/split-finish.mjs). Its parts aren't on the Plan while Flow finishes them.
+// They show in three places, all described here so they say the same thing:
+// - Tasks (flow.js): one group row with every part under it, which opens a part's conversation to watch it.
+// - Activity (flow.js): how far the split is, as the card's lead.
+// - The chat, above the message box: one line with a bar of the parts and Stop, which stops every part (they then go to
+//   the Plan for you to finish). Only when the side panel is hidden, in a narrow window, can it list the parts too.
+// A part's step comes from the parts it waits for: parts in one step run side by side, and steps run one after another.
+// Each part also has its size, which is why it got a small or a strong model.
 (() => {
   const $ = id => document.getElementById(id), api = window.relayUI, section = $('split-progress');
-  if (!section || !api) return;
+  if (!api) return;
   const NAMES = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
   const node = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text !== undefined) el.textContent = text; return el; };
   const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+  // A part's size, as the rater gave it: a small part goes to a small model, and only a complex one to a strong one.
+  const SIZE = { light: 'Small', standard: 'Medium', deep: 'Complex' };
+  const SIZE_WHY = { light: 'Rated a small part, so it went to a small model', standard: 'Rated a medium part', deep: 'Rated a complex part, so it went to a strong model' };
   const ENDED = { stopped: 'Stopped', failed: 'Didn’t finish', cancelled: 'Cancelled', discarded: 'Discarded', blocked: 'Blocked', lost: 'Its copy is gone', detached: 'Its folder was removed' };
   let open = false, shownRun = null, stopping = false;
 
-  const current = () => {
-    if (window.relayFlow && !window.relayFlow.isOn()) return null;
-    const state = api.getState(), c = state.conversation;
-    if (state.taskId || state.taskDraft || !c) return null;
-    return (c.splitRuns || []).findLast(run => run.status === 'working') || null;
-  };
-  const tasksOf = run => (api.getState().conversation?.parallelTasks || []).filter(task => task.splitId === run.id);
+  const working = c => (c?.splitRuns || []).findLast(run => run.status === 'working') || null;
   const who = task => {
     const provider = task?.runningProvider || task?.provider;
     if (!provider) return '';
@@ -26,7 +27,7 @@
   };
   // Where one part stands, as [kind, words]. kind is done, running, waiting or attention.
   function stateOf(task, { review = false } = {}) {
-    if (!task) return ['waiting', 'Waiting to start'];
+    if (!task) return ['waiting', review ? 'Waits for the parts' : 'Waiting to start'];
     if (task.approvals) return ['attention', task.approvals === 1 ? 'Needs your approval' : `Needs ${task.approvals} approvals`];
     if (review && task.review?.status === 'repairing') return ['running', `Repairing ${plural((task.review.repairs || []).filter(item => item.status !== 'skipped').length, 'part')}`];
     if (review && task.review?.status === 'reviewing') return ['running', 'Checking the repairs'];
@@ -38,61 +39,107 @@
     return ['attention', ENDED[task.status] || task.status];
   }
 
-  function row(label, task, options) {
-    const [kind, words] = stateOf(task, options), item = node('li', `split-progress-row ${kind}`);
+  // The working split of a conversation, described once: its rows (parts, repairs, then the review), counts and summary.
+  function describe(c) {
+    const run = working(c);
+    if (!run) return null;
+    const tasks = (c.parallelTasks || []).filter(task => task.splitId === run.id), forCard = id => tasks.filter(task => task.board?.cardId === id).at(-1) || null;
+    const parts = run.cards.map(id => forCard(id)), review = run.reviewCardId ? forCard(run.reviewCardId) : null;
+    const make = (label, task, kind, options = {}) => { const [state, words] = stateOf(task, options); return { key: task?.id || `${run.id}:${label}`, label, task, kind, state, words, agent: who(task), provider: task?.runningProvider || task?.provider || '' }; };
+    // Which step each part is in: one after the latest step of the parts it waits for (src/flow-split.mjs splitShape).
+    // A split saved before its shape was kept has no steps, and its parts are listed as they are.
+    const shape = Array.isArray(run.shape) && run.shape.length === run.cards.length ? run.shape : null, stepOf = [];
+    if (shape) for (const part of shape) stepOf.push(Math.max(0, ...(part.dependsOn || []).map(number => (stepOf[number - 1] ?? -1) + 1)));
+    const stepCount = shape ? Math.max(...stepOf) + 1 : 1;
+    const layout = !shape ? 'unknown' : stepCount === 1 ? 'parallel' : stepCount === run.cards.length ? 'chain' : 'mixed';
+    // Card titles come from the tasks, which carry them.
+    const rows = parts.map((task, index) => {
+      const row = make(task?.title || `Part ${index + 1}`, task, 'part');
+      if (!shape) return row;
+      const step = stepOf[index], tier = shape[index].tier, after = (shape[index].dependsOn || []).map(number => stepOf[number - 1]);
+      Object.assign(row, { step, size: SIZE[tier] || '', sizeWhy: SIZE_WHY[tier] || '' });
+      // Waiting for the step before reads plainer than the card's own reason, which quotes the part's whole title.
+      const blocked = (shape[index].dependsOn || []).some(number => stateOf(parts[number - 1])[0] !== 'done');
+      if (row.state === 'waiting' && blocked && (!task || task.status === 'waiting')) row.words = `After step ${Math.max(...after) + 1}`;
+      return row;
+    });
+    for (const task of tasks.filter(item => item.splitRepair)) rows.push(make(task.title, task, 'repair'));
+    if (run.reviewCardId) rows.push(make('Review of the combined result', review, 'review', { review: true }));
+    const partRows = rows.filter(row => row.kind === 'part'), count = kind => partRows.filter(row => row.state === kind).length;
+    const done = count('done'), running = count('running'), waiting = partRows.length - done - running - count('attention');
+    const asking = tasks.reduce((sum, task) => sum + (task.approvals || 0), 0);
+    const reviewRow = rows.find(row => row.kind === 'review');
+    const summary = asking ? `${asking === 1 ? 'One part needs' : `${asking} parts need`} your approval`
+      : done === partRows.length ? (reviewRow?.task && (reviewRow.task.status === 'running' || reviewRow.task.review?.status) ? reviewRow.words : 'Reviewing the combined result')
+        : [done ? `${done} done` : '', running ? `${running} working` : '', waiting > 0 ? `${waiting} waiting` : ''].filter(Boolean).join(' · ');
+    // The step being worked on: the first with a part not done yet.
+    const current = shape ? Math.min(stepCount - 1, ...partRows.filter(row => row.state !== 'done').map(row => row.step)) : 0;
+    const shapeWords = { parallel: `${plural(partRows.length, 'part')} side by side`, chain: `${partRows.length} steps, one after another`, mixed: `${plural(partRows.length, 'part')} in ${stepCount} steps`, unknown: plural(partRows.length, 'part') }[layout];
+    const where = layout === 'chain' || layout === 'mixed' ? (done === partRows.length ? '' : `Step ${current + 1} of ${stepCount}`) : '';
+    // The steps in order, each with its parts, for drawing them grouped. A step with several parts runs them side by side.
+    const steps = shape ? Array.from({ length: stepCount }, (_, step) => ({ step, rows: partRows.filter(row => row.step === step) })) : [];
+    return { run, rows, steps, layout, stepCount, current, parts: partRows.length, done, running, waiting, asking, summary, where, shape: shapeWords, title: `Working in ${layout === 'chain' ? `${partRows.length} steps` : plural(partRows.length, 'part')}`, allDone: done === partRows.length };
+  }
+
+  // A bar with one segment per row, coloured by where it stands. Fills `into` when given, or a new element.
+  function bar(model, className = '', into = null) {
+    const el = into || node('span', `split-bar ${className}`.trim());
+    el.setAttribute('role', 'img');
+    el.setAttribute('aria-label', `${model.done} of ${plural(model.parts, 'part')} done`);
+    el.replaceChildren(...model.rows.map(row => { const seg = node('span', `split-bar-seg ${row.state}`); seg.title = `${row.label}: ${row.words}`; return seg; }));
+    return el;
+  }
+
+  const watch = task => api.setTask(task.id).catch(error => api.showNotice?.(error.message));
+
+  function row(item) {
+    const { label, task, state, words, agent, provider } = item, li = node('li', `split-progress-row ${state}`);
     const mark = node('span', 'split-progress-mark'); mark.setAttribute('aria-hidden', 'true');
-    const main = node('span', 'split-progress-name', label), detail = node('span', 'split-progress-state', words), agent = who(task);
-    item.append(mark, main);
-    if (agent) { const icon = node('i', `agent-icon ${task.runningProvider || task.provider}`); icon.setAttribute('aria-hidden', 'true'); const by = node('span', 'split-progress-agent'); by.append(icon, node('span', '', agent)); item.append(by); }
-    item.append(detail);
+    li.append(mark, node('span', 'split-progress-name', item.step !== undefined ? `${item.step + 1}. ${label}` : label));
+    if (agent) { const icon = node('i', `agent-icon ${provider}`); icon.setAttribute('aria-hidden', 'true'); const by = node('span', 'split-progress-agent'); by.append(icon, node('span', '', agent)); li.append(by); }
+    li.append(node('span', 'split-progress-state', words));
     if (task?.conversationId) {
-      const watch = node('button', 'text-link split-progress-open', task.approvals ? 'Answer' : 'Open'); watch.type = 'button';
-      watch.title = `Open “${label}” to watch it work`;
-      watch.addEventListener('click', () => api.setTask(task.id).catch(error => api.showNotice?.(error.message)));
-      item.append(watch);
+      const button = node('button', 'text-link split-progress-open', task.approvals ? 'Answer' : 'Open'); button.type = 'button';
+      button.title = `Open “${label}” to watch it work`;
+      button.addEventListener('click', () => watch(task));
+      li.append(button);
     }
-    return item;
+    return li;
   }
 
   function draw() {
-    const run = current();
-    section.hidden = !run;
-    if (!run) { shownRun = null; return; }
-    if (shownRun !== run.id) { shownRun = run.id; open = false; }
-    const tasks = tasksOf(run), forCard = id => tasks.filter(task => task.board?.cardId === id).at(-1) || null;
-    const parts = run.cards.map(id => forCard(id)), review = run.reviewCardId ? forCard(run.reviewCardId) : null, repairs = tasks.filter(task => task.splitRepair);
-    const states = parts.map(task => stateOf(task)[0]), done = states.filter(kind => kind === 'done').length, working = states.filter(kind => kind === 'running').length;
-    const asking = tasks.reduce((sum, task) => sum + (task.approvals || 0), 0);
-    if (asking) open = true;
-    const summary = done === parts.length
-      ? (review?.status === 'running' || review?.review?.status ? stateOf(review, { review: true })[1] : 'Reviewing the combined result')
-      : [done ? `${done} done` : '', working ? `${working} working` : '', parts.length - done - working ? `${parts.length - done - working} waiting` : ''].filter(Boolean).join(' · ');
-    $('split-progress-title').textContent = `Flow is working on this in ${plural(parts.length, 'part')}`;
-    $('split-progress-summary').textContent = asking ? `${asking === 1 ? 'One part needs' : `${asking} parts need`} your approval` : summary;
-    section.dataset.attention = String(Boolean(asking));
+    if (!section) return;
+    const state = api.getState(), on = !window.relayFlow || window.relayFlow.isOn();
+    const model = on && !state.taskId && !state.taskDraft && state.conversation ? describe(state.conversation) : null;
+    section.hidden = !model;
+    if (!model) { shownRun = null; return; }
+    if (shownRun !== model.run.id) { shownRun = model.run.id; open = false; }
+    if (model.asking) open = true;
+    $('split-progress-title').textContent = model.title.replace(/^Working/, 'Flow is working on this');
+    $('split-progress-summary').textContent = [model.where, model.summary].filter(Boolean).join(' · ');
+    section.dataset.attention = String(Boolean(model.asking));
+    bar(model, '', $('split-progress-bar'));
     const toggle = $('split-progress-toggle');
     toggle.setAttribute('aria-expanded', String(open)); toggle.textContent = open ? 'Hide parts' : 'Show parts';
     const list = $('split-progress-list');
     list.hidden = !open;
-    if (open) {
-      // Card titles come from the tasks, which carry them.
-      const rows = parts.map((task, index) => row(task?.title || `Part ${index + 1}`, task));
-      for (const task of repairs) rows.push(row(task.title, task));
-      if (run.reviewCardId) rows.push(row('Review of the combined result', review, { review: true }));
-      list.replaceChildren(...rows);
-    }
+    if (open) list.replaceChildren(...model.rows.map(row));
     $('split-progress-stop').disabled = stopping;
   }
 
-  $('split-progress-toggle').addEventListener('click', () => { open = !open; draw(); });
-  $('split-progress-stop').addEventListener('click', async () => {
-    const run = current();
-    if (!run || stopping || !window.confirm('Stop every part? What Flow already merged stays in your folder, and the parts go to the Plan for you to finish.')) return;
+  async function stop() {
+    const model = describe(api.getState().conversation);
+    if (!model || stopping || !window.confirm('Stop every part? What Flow already merged stays in your folder, and the parts go to the Plan for you to finish.')) return;
     stopping = true; draw();
-    try { await api.post('/api/board/stop', { ids: [...run.cards, ...(run.reviewCardId ? [run.reviewCardId] : [])] }); api.announce?.('Stopped the parts.'); }
+    try { await api.post('/api/board/stop', { ids: [...model.run.cards, ...(model.run.reviewCardId ? [model.run.reviewCardId] : [])] }); api.announce?.('Stopped the parts.'); }
     catch (error) { api.showNotice?.(error.message); }
     finally { stopping = false; await api.refresh?.(); draw(); }
-  });
+  }
+
+  window.relaySplitProgress = { describe, bar, watch, stop, stopping: () => stopping };
+  if (!section) return;
+  $('split-progress-toggle').addEventListener('click', () => { open = !open; draw(); });
+  $('split-progress-stop').addEventListener('click', stop);
   window.addEventListener('relay-state', draw);
   window.addEventListener('relay-flow', draw);
   draw();

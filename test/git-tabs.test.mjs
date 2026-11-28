@@ -130,3 +130,16 @@ test('Flow ignores late diff reads after changing files or closing the changes w
   await ui.window.relayGit.refresh(); ui.nodes.get('diff-dialog').close(); late.resolve(diff('second.js', 'after closing')); await flush();
   assert.equal(ui.nodes.get('diff-dialog').open, false); assert.doesNotMatch(ui.nodes.get('diff-content').textContent, /after closing/);
 });
+
+test('Flow changes window counts collapsed folders as their files, labels each folder count, and opens expanded folders on their first file', async () => {
+  const ui = fixture(); ui.window.relayFlow = { view: () => 'flow' }; ui.choose('one');
+  const firstRepo = { folderId: 'frontend', name: 'throughline', available: true, totalChanges: 2, commits: [], changes: [{ path: 'app.js', code: ' M', added: 5 }, { path: '.codeshi/', code: '??', files: [{ path: '.codeshi/a.json', added: 1 }, { path: '.codeshi/b.json', added: 2 }] }] };
+  const secondRepo = { folderId: 'backend', name: 'codeshi-web', available: true, totalChanges: 1, commits: [], changes: [{ path: 'launch-video/', code: '??', fileCount: 68 }] };
+  ui.respond(async request => request === '/api/git' ? { repositories: [firstRepo, secondRepo] } : diff(decodeURIComponent(request.split('path=')[1]), 'ok'));
+  await ui.window.relayGit.openDiff(firstRepo, firstRepo.changes[1]); await flush();
+  assert.equal(ui.nodes.get('diff-title').textContent, '.codeshi/a.json');
+  const listText = ui.nodes.get('diff-files').textContent;
+  assert.match(listText, /71 changed files/);
+  assert.match(listText, /throughline3/);
+  assert.match(listText, /codeshi-web68/);
+});

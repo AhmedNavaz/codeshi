@@ -22,17 +22,23 @@ test('the Windows installer is valid PowerShell and verifies checksums before in
 });
 
 const packaged=(platform,arch,file)=>ignoredPackagePaths({platform,arch}).some(rule=>rule.test(file));
-test('packaging options pick the icon for each platform and sign only on macOS with an identity',()=>{
+test('packaging options pick the icon for each platform and sign or notarize only on macOS with credentials',()=>{
   const root=path.resolve('app-root');
   for(const [platform,icon] of [['darwin','icon.icns'],['win32','icon.ico'],['linux','icon.png']]){
-    const options=packageOptions({root,platform,arch:'x64'});
+    const options=packageOptions({root,platform,arch:'x64',notarize:{appleApiKey:'/tmp/AuthKey.p8',appleApiKeyId:'KEY1',appleApiIssuer:'ISSUER1'}});
     assert.equal(options.icon,path.join(root,'assets',icon));
     assert.equal(options.dir,root);assert.equal(options.out,path.join(root,'dist'));
     assert.equal('osxSign' in options,false);
+    assert.equal('osxNotarize' in options,false);
     assert.equal(Boolean(options.afterCopy),platform==='darwin','Only macOS copies Assets.car into the app.');
     assert.equal(options.extendInfo.CFBundleIconName,platform==='darwin'?'AppIcon':undefined);
   }
-  assert.deepEqual(packageOptions({root,platform:'darwin',arch:'arm64',identity:'Dev ID'}).osxSign,{identity:'Dev ID'});
+  const signed=packageOptions({root,platform:'darwin',arch:'arm64',identity:'Dev ID',keychain:'/tmp/build.keychain-db'});
+  assert.deepEqual(signed.osxSign,{identity:'Dev ID',continueOnError:false,keychain:'/tmp/build.keychain-db'});
+  assert.equal('osxNotarize' in signed,false);
+  const notarized=packageOptions({root,platform:'darwin',arch:'arm64',identity:'Dev ID',notarize:{appleApiKey:'/tmp/AuthKey.p8',appleApiKeyId:'KEY1',appleApiIssuer:'ISSUER1'}});
+  assert.deepEqual(notarized.osxSign,{identity:'Dev ID',continueOnError:false});
+  assert.deepEqual(notarized.osxNotarize,{appleApiKey:'/tmp/AuthKey.p8',appleApiKeyId:'KEY1',appleApiIssuer:'ISSUER1'});
 });
 test('packaged apps keep only the node-pty prebuild for their own platform and architecture',()=>{
   for(const [platform,arch] of [['darwin','x64'],['darwin','arm64'],['win32','x64'],['win32','arm64'],['linux','x64'],['linux','arm64']]){

@@ -12,13 +12,20 @@
   let modelSignature = '', lastProject = null, inspectedRun = null;
   const dismissedSteps = new Set();
   const nextStepsKey = () => { const state = api.getState(); return state.projectId + ':' + state.conversation?.lastRun?.id; };
+  // A change's file count: a new folder counts the files inside it.
+  const filesIn = file => file.files?.length || file.fileCount || 1;
+  // How many files a folder has changed, counting each file in a new folder, so every Git view says the same number.
+  // Entries past the first 100 count as one file each.
+  const fileTotal = repo => (repo?.changes || []).reduce((sum, file) => sum + filesIn(file), 0) + Math.max(0, (repo?.totalChanges || 0) - (repo?.changes?.length || 0));
+  const gitFileTotal = data => data?.repositories?.length ? data.repositories.filter(repo => repo.available).reduce((sum, repo) => sum + fileTotal(repo), 0) : data?.totalChanges || 0;
   function nextSteps() {
     const state = api.getState(), run = state.conversation?.lastRun;
-    const count = gitScope === state.projectId ? gitData?.totalChanges || 0 : 0;
+    const count = gitScope === state.projectId ? gitFileTotal(gitData) : 0;
+    const clipped = gitScope === state.projectId && Boolean(gitData?.repositories?.some(repo => repo.available && repo.changesClipped));
     const blocked = ['incomplete','interrupted'].includes(run?.status);
     // A task's changes come back through its own review, so the usual next steps aren't offered there.
     $('next-actions').hidden = !state.projectId || Boolean(state.taskId) || api.isRunning() || (!blocked && (run?.status !== 'complete' || !count)) || run?.purpose === 'review' || !run || dismissedSteps.has(nextStepsKey());
-    $('next-actions-text').textContent = blocked ? 'The run stopped' : `${count} changed file${count === 1 ? '' : 's'}`;
+    $('next-actions-text').textContent = blocked ? 'The run stopped' : `${count}${clipped ? '+' : ''} changed file${count === 1 && !clipped ? '' : 's'}`;
     $('next-review').hidden = !count;
   }
   $('next-review').addEventListener('click', () => window.relayReviews?.suggest());
@@ -211,7 +218,7 @@
   function renderGit() {
     const repositories = gitData?.repositories || [], select = $('git-repository');
     const selectedId = select.value;
-    select.replaceChildren(...repositories.map(row => { const option = el('option', row.name); option.value = row.folderId; return option; }));
+    select.replaceChildren(...repositories.map(row => { const count = repositories.length > 1 && row.available ? fileTotal(row) : 0, option = el('option', count ? `${row.name} (${count}${row.changesClipped ? '+' : ''} changed)` : row.name); option.value = row.folderId; return option; }));
     const folderId = api.selectedFolderId?.();
     if (repositories.some(row => row.folderId === folderId)) select.value = folderId; else if (repositories.some(row => row.folderId === selectedId)) select.value = selectedId;
     const repo = repositories.find(row => row.folderId === select.value) || repositories[0];
@@ -233,7 +240,7 @@
       // Staged changes are exactly what the next commit holds; a file changed again after staging shows in both lists.
       const staged = repo.changes.filter(file => !' ?'.includes(file.code[0])), unstaged = repo.changes.filter(file => file.code[1] !== ' ');
       if (staged.length) gitSection(repo, 'Staged changes', staged, 'unstage');
-      if (unstaged.length) gitSection(repo, 'Changes', unstaged, 'stage');
+      if (unstaged.length) gitSection(repo, 'Changes', unstaged, 'stage', !staged.length ? fileTotal(repo) : null);
       if (repo.changesClipped) $('git-content').append(el('p', 'Showing the first 100 changed files.', 'muted'));
     } else {
       if (!repo.commits.length) $('git-content').append(el('p', 'No commits yet. Your commits will appear here.', 'inspector-empty'));
@@ -247,15 +254,17 @@
   const codeNames = { M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', C: 'Copied', T: 'Type changed', U: 'Conflict', '?': 'New' };
   const statusOf = code => code === 'D' ? 'deleted' : code === '?' || code === 'A' ? 'added' : code === 'R' ? 'renamed' : 'modified';
   // One list of changes with a stage or unstage button on each file and for the whole list.
-  function gitSection(repo, title, files, act) {
+  function gitSection(repo, title, files, act, fullCount = null) {
     const section = el('section', undefined, 'git-section'), head = el('div', undefined, 'git-section-head');
-    head.append(el('h3', title), el('span', String(files.length), 'git-section-count'));
+    const count = fullCount ?? files.reduce((sum, file) => sum + filesIn(file), 0);
+    head.append(el('h3', title), el('span', `${count}${repo.changesClipped ? '+' : ''}`, 'git-section-count'));
     const all = action('', () => gitWrite(act, repo, { all: true }), `icon-button git-stage-button ${act}`); all.title = act === 'stage' ? 'Stage all changes' : 'Unstage all changes'; all.setAttribute('aria-label', all.title); all.disabled = gitWriting;
     head.append(all); section.append(head);
     for (const file of files) {
       const code = act === 'stage' ? file.code[1] : file.code[0], status = statusOf(code), row = el('div', undefined, 'git-file-row');
       const open = action('', () => openDiff(repo, file), 'git-file'); open.dataset.status = status; open.title = 'Show changes';
-      open.append(el('span', code === '?' ? 'U' : code, 'git-file-code'), el('span', file.path, 'git-file-name'), el('span', codeNames[code] || 'Changed', 'git-file-status'));
+      const folderFiles = file.files?.length || file.fileCount || 0, statusText = `${codeNames[code] || 'Changed'}${folderFiles ? ` · ${folderFiles} file${folderFiles === 1 ? '' : 's'}` : ''}`;
+      open.append(el('span', code === '?' ? 'U' : code, 'git-file-code'), el('span', file.path, 'git-file-name'), el('span', statusText, 'git-file-status'));
       const toggle = action('', () => gitWrite(act, repo, { paths: [file.path] }), `icon-button git-stage-button ${act}`); toggle.title = act === 'stage' ? 'Stage' : 'Unstage'; toggle.setAttribute('aria-label', `${toggle.title} ${file.path}`); toggle.disabled = gitWriting;
       row.append(open, toggle); section.append(row);
     }
@@ -265,11 +274,9 @@
   // nothing staged it commits every change listed, as the button says. Drafts are kept per folder.
   const commitDrafts = new Map();
   let gitWriting = false, commitOutcome = null;
-  // A change's file count: a new folder counts the files inside it.
-  const filesIn = file => file.files?.length || file.fileCount || 1;
   const stagedFiles = repo => repo.changes.filter(file => !' ?'.includes(file.code[0])), changedFiles = repo => repo.changes.filter(file => file.code[1] !== ' ');
   function renderCommit(repo) {
-    const box = $('git-commit'), message = $('git-commit-message'), staged = stagedFiles(repo).length, all = !staged, count = staged || changedFiles(repo).reduce((sum, file) => sum + filesIn(file), 0), more = repo.changesClipped ? '+' : '';
+    const box = $('git-commit'), message = $('git-commit-message'), staged = stagedFiles(repo).reduce((sum, file) => sum + filesIn(file), 0), all = !staged, count = staged || fileTotal(repo), more = repo.changesClipped ? '+' : '';
     if (box.dataset.folder !== repo.folderId) { box.dataset.folder = repo.folderId; message.value = commitDrafts.get(repo.folderId) || ''; if (commitOutcome?.folderId !== repo.folderId) commitOutcome = null; }
     message.placeholder = `Message (${window.relayDesktop?.platform === 'darwin' || /Mac/.test(globalThis.navigator?.platform || '') ? '⌘' : 'Ctrl+'}↵ to commit${repo.branch && repo.branch !== 'Detached HEAD' ? ` on ${repo.branch}` : ''})`;
     message.disabled = Boolean(gitWriting);
@@ -472,7 +479,7 @@
       const entry = makeDiffTab(projectId, { type: 'file', folderId: repo.folderId, folderName: repo.name, path: file.path });
       window.relayTabs.select(entry.id); if (!entry.loading) await loadDiffTab(entry); return;
     }
-    return openReview({ folderId: repo.folderId, path: file.path });
+    return openReview({ folderId: repo.folderId, path: file.files?.[0]?.path || file.path });
   }
   // The changes window (#194): every changed file in one place. The list is on the left and the chosen file's lines are
   // on the right, so nothing is closed to see the next file, and Up and Down move through the list. Flow and the Plan,
@@ -493,9 +500,7 @@
   const kindOf = file => file.code === '??' ? 'untracked' : statusOf(String(file.code || '').trim()[0] || 'M');
   // A new folder's files stand in for the folder when Git listed them.
   const flatChanges = repo => (repo?.changes || []).flatMap(file => file.files?.length ? file.files.map(inner => ({ ...inner, code: '??', staged: false })) : [file]);
-  // How many files a folder has changed, counting each file in a new folder, so the Git panel and Flow's Changes say the
-  // same number. Entries past the first 100 count as one file each.
-  const fileTotal = repo => (repo?.changes || []).reduce((sum, file) => sum + filesIn(file), 0) + Math.max(0, (repo?.totalChanges || 0) - (repo?.changes?.length || 0));
+
   const reviewEntries = () => (gitData?.repositories || []).filter(repo => repo.available).flatMap(repo => flatChanges(repo).map(file => ({ repo, file })));
   const sameFile = target => entry => entry.repo.folderId === target.folderId && entry.file.path === target.path;
   const lineTotals = files => files.reduce((sum, file) => ({ added: sum.added + (file.added || 0), removed: sum.removed + (file.removed || 0) }), { added: 0, removed: 0 });
@@ -522,13 +527,21 @@
     diffFiles.hidden = !entries.length;
     if (!entries.length) { diffFiles.replaceChildren(); return; }
     const focused = diffFiles.contains(document.activeElement), several = new Set(entries.map(entry => entry.repo.folderId)).size > 1;
-    const totals = lineTotals(entries.map(entry => entry.file)), head = el('p', undefined, 'diff-files-head'), rows = [], clipped = (gitData?.repositories || []).some(repo => repo.available && repo.changesClipped);
-    head.append(el('span', `${entries.length}${clipped ? '+' : ''} changed file${entries.length === 1 && !clipped ? '' : 's'}`, 'diff-files-count'));
+    const seenRepos = [];
+    for (const entry of entries) if (!seenRepos.some(repo => repo.folderId === entry.repo.folderId)) seenRepos.push(entry.repo);
+    const totalFiles = seenRepos.reduce((sum, repo) => sum + fileTotal(repo), 0);
+    const totals = lineTotals(entries.map(entry => entry.file)), head = el('p', undefined, 'diff-files-head'), rows = [], clipped = seenRepos.some(repo => repo.changesClipped);
+    head.append(el('span', `${totalFiles}${clipped ? '+' : ''} changed file${totalFiles === 1 && !clipped ? '' : 's'}`, 'diff-files-count'));
     if (totals.added) head.append(el('span', `+${totals.added}`, 'diff-added'));
     if (totals.removed) head.append(el('span', `−${totals.removed}`, 'diff-removed'));
     let folder = null;
     entries.forEach((entry, index) => {
-      if (several && entry.repo.folderId !== folder) { folder = entry.repo.folderId; rows.push(el('h3', entry.repo.name, 'diff-files-folder')); }
+      if (several && entry.repo.folderId !== folder) {
+        folder = entry.repo.folderId;
+        const heading = el('h3', undefined, 'diff-files-folder');
+        heading.append(el('span', entry.repo.name), el('span', `${fileTotal(entry.repo)}${entry.repo.changesClipped ? '+' : ''}`, 'diff-files-folder-count'));
+        rows.push(heading);
+      }
       const row = changeRow(entry.repo, entry.file, () => showReviewFile(index));
       if (index === reviewing.index) row.setAttribute('aria-current', 'true');
       rows.push(row);
@@ -613,7 +626,7 @@
   const updateGit = (data, projectId) => { if (data && api.getState().projectId === projectId) { gitData = data; if (commitOutcome?.kind === 'done') commitOutcome = null; renderGit(); nextSteps(); gitChanged(); } };
   // data() is the Git activity last read for this workspace; files() lists a folder's changed files one by one;
   // changeRow() draws one; review() opens the changes window at a file, or at the first one.
-  window.relayGit = { open: () => setGitPanel(true), close: () => { if (!$('git-panel').hidden) setGitPanel(false, false); }, openDiff, showDiff, openCommit, update: updateGit, refresh: loadGit, data: () => gitScope === api.getState().projectId ? gitData : null, files: flatChanges, fileTotal, totals: lineTotals, changeRow, review: openReview };
+  window.relayGit = { open: () => setGitPanel(true), close: () => { if (!$('git-panel').hidden) setGitPanel(false, false); }, openDiff, showDiff, openCommit, update: updateGit, refresh: loadGit, data: () => gitScope === api.getState().projectId ? gitData : null, files: flatChanges, filesIn, fileTotal, totals: lineTotals, changeRow, review: openReview };
   // A changed image shows as pictures: before and after side by side, or the one side an added or deleted image has.
   function renderImages(images, target = diffTarget()) {
     const view = el('div', undefined, 'diff-images'), size = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -691,10 +704,14 @@
       const meter = $(`${provider}-usage`), { rows, primary, secondary } = usageSummary(provider);
       if ($(`${provider}-working`)) $(`${provider}-working`).hidden = workingOn !== provider;
       meter.closest('.provider-status')?.classList.toggle('selected', state.provider === provider);
-      meter.hidden = !primary; meter.replaceChildren();
-      if (primary) {
+      // Redrawn only when what it says changes: this runs on every update while agents work.
+      const reset = primary ? resetLabel(primary.resetsAt) : '';
+      const drawn = JSON.stringify(primary ? [remaining(primary), primary.label, reset, secondary ? [secondary.label, remaining(secondary), resetLabel(secondary.resetsAt)] : null] : null);
+      if (meter.hidden !== !primary) meter.hidden = !primary;
+      const redraw = meter.dataset.drawn !== drawn;
+      if (redraw) { meter.dataset.drawn = drawn; meter.replaceChildren(); }
+      if (redraw && primary) {
         const bar = el('i', undefined, 'usage-bar'); bar.style.setProperty('--left', `${remaining(primary)}%`);
-        const reset = resetLabel(primary.resetsAt);
         meter.dataset.level = usageLevel(remaining(primary)); meter.append(el('span', `${remaining(primary)}% left`, 'usage-value'), bar, el('span', `${limitName(primary.label)}${reset ? ` · ${reset}` : ''}`, 'usage-caption'));
         if (secondary) {
           const other = el('span', `${secondary.label} · ${remaining(secondary)}% left${resetLabel(secondary.resetsAt) ? ` · ${resetLabel(secondary.resetsAt)}` : ''}`, 'usage-secondary');
@@ -702,7 +719,8 @@
         }
       }
       const row = $(`${provider}-status`), connected = api.getState().accounts?.[provider]?.authenticated === true;
-      row.title = rows.length ? `${name(provider)}: ${rows.map(describeWindow).join('. ')}. Select for all its limits.` : connected ? `${name(provider)}: select for its plan usage` : `Set up ${name(provider)} in Settings`;
+      const title = rows.length ? `${name(provider)}: ${rows.map(describeWindow).join('. ')}. Select for all its limits.` : connected ? `${name(provider)}: select for its plan usage` : `Set up ${name(provider)} in Settings`;
+      if (row.title !== title) row.title = title;
     }
   }
   async function loadUsage(provider, refresh = false) {

@@ -76,7 +76,8 @@ export class PromptQueue {
       const execution = broker.execution.token(c, taskId);
       // A routed item has no agent or model yet; they are checked against the task's limits once routing chooses them.
       broker.execution.assert(c, execution, routing ? { action: 'routing' } : { action: 'manual', provider, model, effort });
-      broker.record(c, { type: 'queue_add', item: { id: randomUUID(), execution, text, provider, model, effort, mode, approvalPolicy, attachments, billingConfirmed: input.billingConfirmed === true, ...(routing ? { routing } : {}), ...(author ? { author } : {}), createdAt: new Date().toISOString() } });
+      const requestId = typeof input.requestId === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(input.requestId) ? input.requestId : null;
+      broker.record(c, { type: 'queue_add', item: { id: randomUUID(), ...(requestId ? { requestId } : {}), execution, text, provider, model, effort, mode, approvalPolicy, attachments, billingConfirmed: input.billingConfirmed === true, ...(routing ? { routing } : {}), ...(author ? { author } : {}), createdAt: new Date().toISOString() } });
     } else if (action === 'update') {
       const item = this.item(c, input.id);
       const text = typeof input.text === 'string' ? input.text.trim() : item.text;
@@ -129,7 +130,8 @@ export class PromptQueue {
   async tick(c) {
     const broker = this.broker;
     // An open plan holds the queue until it is approved or put away (#12); a message sent by hand still goes ahead.
-    if (this.closed || !c.queue.length || c.queuePaused || broker.running || c.resume || this.held.has(c.id) || openPlan(c) || c.runs.some(run => ['building', 'reviewing'].includes(run.automaticReview?.status))) return;
+    // Every task slot taken (by a split's parts, say) holds the queue too; src/task-coordinator.mjs ticks it when one frees.
+    if (this.closed || !c.queue.length || c.queuePaused || broker.running || broker.tasks?.full?.(c) || c.resume || this.held.has(c.id) || openPlan(c) || c.runs.some(run => ['building', 'reviewing'].includes(run.automaticReview?.status))) return;
     const item = c.queue[0];
     const digest = queueDigest(item);
     this.held.add(c.id);

@@ -8,6 +8,11 @@ import {packageOptions} from './package-options.mjs';
 import {createElectronDownloader,electronChecksums} from '../scripts/electron-download.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const identity=process.env.AI_RELAY_SIGN_IDENTITY;
+const keychain=process.env.AI_RELAY_SIGN_KEYCHAIN;
+const appleApiKey=process.env.APPLE_API_KEY;
+const appleApiKeyId=process.env.APPLE_API_KEY_ID;
+const appleApiIssuer=process.env.APPLE_API_ISSUER;
+const notarize=appleApiKey&&appleApiKeyId?{appleApiKey,appleApiKeyId,...(appleApiIssuer?{appleApiIssuer}:{})}:undefined;
 // npm installs node-pty's macOS helper without its execute bit; the terminal's shell cannot start without it.
 for(const arch of ['arm64','x64']){const helper=path.join(root,'node_modules','node-pty','prebuilds',`darwin-${arch}`,'spawn-helper');if(fs.existsSync(helper))fs.chmodSync(helper,0o755);}
 // Voice input's speech helper is built for this architecture and ships inside the app (macOS and Windows).
@@ -16,7 +21,7 @@ if(process.platform==='darwin'||process.platform==='win32')console.log('Built '+
 // Electron comes from GitHub's releases, verified against the checksums the electron package ships rather than a fetched
 // SHASUMS256.txt, with retries and a mirror for when GitHub's downloads fail (#138).
 const download={checksums:electronChecksums(root),downloader:createElectronDownloader()};
-const builds=await packager(packageOptions({root,platform:process.platform,arch:process.arch,identity,download}));
+const builds=await packager(packageOptions({root,platform:process.platform,arch:process.arch,identity,keychain,notarize,download}));
 // Packaging invalidates Electron's signature. Without an identity, sign ad hoc so Apple Silicon will launch the app (it is still not notarized).
 if(process.platform==='darwin'&&!identity) for(const build of builds) execFileSync('codesign',['--force','--deep','--sign','-',path.join(build,'Codeshi.app')],{stdio:'inherit'});
 console.log('Packaged Codeshi: '+builds.join(', '));

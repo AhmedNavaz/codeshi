@@ -240,7 +240,8 @@
       const listing = await api.api('/api/files?folderId=' + encodeURIComponent(folder.id),{},projectId).catch(() => null);
       const names = new Set((listing?.entries || []).map(entry => entry.name)), extra = (listing?.entries || []).some(entry => /\.(csproj|sln)$/.test(entry.name)) ? ['.NET'] : [];
       const kinds = [...new Set([...KINDS.filter(([file]) => names.has(file)).map(([,kind]) => kind), ...extra])];
-      return { name: folder.displayName || folder.name, path: folder.path, available: folder.available !== false && Boolean(listing), git: repo?.available ? `Git · ${repo.branch}${repo.totalChanges ? ` · ${repo.totalChanges} change${repo.totalChanges === 1 ? '' : 's'}` : ' · no changes'}` : 'Not a Git repository', tracked: Boolean(repo?.available), kinds };
+      const count = repo?.available ? (window.relayGit?.fileTotal ? window.relayGit.fileTotal(repo) : (repo.changes || []).reduce((sum, file) => sum + (file.files?.length || file.fileCount || 1), 0) + Math.max(0, (repo.totalChanges || 0) - (repo.changes?.length || 0))) : 0;
+      return { name: folder.displayName || folder.name, path: folder.path, available: folder.available !== false && Boolean(listing), git: repo?.available ? `Git · ${repo.branch}${count ? ` · ${count}${repo.changesClipped ? '+' : ''} change${count === 1 && !repo.changesClipped ? '' : 's'}` : ' · no changes'}` : 'Not a Git repository', tracked: Boolean(repo?.available), kinds };
     }));
     if (createdId === projectId && revision === version) { readiness = rows; render(); say(rows.map(row => [row.name,row.available ? row.git : 'Folder not found',...row.kinds].join(', ')).join('. ')); }
   }

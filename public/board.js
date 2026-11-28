@@ -40,8 +40,10 @@
   // While the chat is hidden, a dot on its button says an agent there waits for an approval or an answer.
   function chatAttention() {
     const dot = $('board-chat-attention'), waiting = api.getState().conversation?.pendingApprovals?.length || 0, toggle = $('board-chat');
-    if (dot) dot.hidden = !(chatHidden() && waiting);
-    if (toggle) toggle.setAttribute('aria-label', chatHidden() && waiting ? `Chat: ${plural(waiting, 'approval')} waiting` : 'Chat');
+    // Written only when they change: this runs on every update while a Plan works (#162).
+    const show = chatHidden() && waiting > 0, label = show ? `Chat: ${plural(waiting, 'approval')} waiting` : 'Chat';
+    if (dot && dot.hidden === show) dot.hidden = !show;
+    if (toggle && toggle.getAttribute('aria-label') !== label) toggle.setAttribute('aria-label', label);
   }
   // Something that happens in the chat, such as an attached card or a card's task, shows the chat.
   const showChat = () => { if (chatHidden()) setChat(true); };
@@ -2357,7 +2359,8 @@
     const splits = needingSplit().map(card => card.id);
     const splitsShown = (board?.splits || []).filter(item => ['running', 'failed', 'interrupted'].includes(item.status));
     const key = JSON.stringify([...batches].map(([id, list]) => [id, list.map(card => [card.id, card.draft.notes?.length || 0])]).concat([busy, planning?.id || null, failed ? [failed.id, failed.status, failed.summary] : null, suggestShown, asking ? [asking.id, asking.questions] : null, sent ? [sent.id, draftingNow()] : null, draftNotice?.text || null, splits, splitsShown, splitAsk ? [splitAsk.ids, splitAsk.who] : null, cannotDraft()]));
-    box.hidden = !batches.size && !planning && !failed && !suggestShown && !asking && !draftNotice && !splits.length && !splitsShown.length;
+    const none = !batches.size && !planning && !failed && !suggestShown && !asking && !draftNotice && !splits.length && !splitsShown.length;
+    if (box.hidden !== none) box.hidden = none;
     if (box.dataset.drawn === key) return;
     box.dataset.drawn = key;
     // While the planner or Suggest next works, a line says so, with Stop; failed/interrupted offers Dismiss.
@@ -2688,7 +2691,7 @@
   function drawEarlier() {
     const note = $('board-earlier'); if (!note) return;
     const plan = api.getState().conversation?.orchestrations?.[0], open = plan && ['running', 'stopped'].includes(plan.status);
-    note.hidden = !open;
+    if (note.hidden === Boolean(open)) note.hidden = !open;
   }
 
   // ---- The outline (#162)
@@ -3318,6 +3321,11 @@
     const needs = live.filter(needsSubtasks).length, drafts = all.length - live.length;
     const parts = live.length ? [`${count('done')} of ${plural(live.length, 'card')} done`, count('doing') ? `${count('doing')} working` : '', count('review') ? `${count('review')} to review` : '', needs ? `${needs} need subtasks` : '', count('ready') - live.filter(card => card.column === 'ready' && needsSubtasks(card)).length > 0 ? `${count('ready') - live.filter(card => card.column === 'ready' && needsSubtasks(card)).length} ready` : ''].filter(Boolean) : [];
     if (drafts) parts.push(plural(drafts, 'draft'));
+    // A status line is read out when it's rebuilt, so it's rebuilt only when what it says changes, not on every update of
+    // a long run. The time and tokens after it are kept up to date by paintTotals, and aren't read out.
+    const drawn = JSON.stringify([parts, live.length ? Math.round(count('done') / live.length * 100) : null]);
+    if (line.dataset.drawn === drawn && line.querySelector('.board-progress-used')) { paintTotals(); tick(); return; }
+    line.dataset.drawn = drawn;
     line.replaceChildren();
     if (live.length) { const bar = node('span', 'board-progress-bar'), fill = node('span', 'board-progress-fill'); fill.style.width = `${Math.round(count('done') / live.length * 100)}%`; bar.append(fill); bar.setAttribute('aria-hidden', 'true'); line.append(bar); }
     // What the cards' tasks have used so far follows, kept up to date by paintTotals.

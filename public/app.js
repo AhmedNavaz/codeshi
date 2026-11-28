@@ -22,6 +22,8 @@
     folderPanel: $("folder-panel"), folderForm: $("folder-form"), folderPath: $("folder-path"), folderSave: $("save-folder"), folderClose: $("close-folder"), folderError: $("folder-error"),
     removeDialog: $("remove-workspace-dialog"), removeName: $("remove-workspace-name"), removeConfirm: $("confirm-remove-workspace"), removeCancel: $("cancel-remove-workspace"), removeError: $("remove-workspace-error"),
   };
+  // Whether Stop had the focus when it was pressed (see render).
+  let stopFocus = false;
   const state = {
     localSelections: {}, accounts: {}, accountsChecking: {}, accountChecks: {}, accountCheck: 0, accountsCheckedAt: 0, accountRefresh: null, connectionAction: null, model: "", effort: null, workspaceFilter: "", streamConnected: null, retrySubmission: null, status: null, conversation: null, provider: "codex", mode: "edit", approvalPolicy: "ask",
     pending: null, loading: false, selectionVersion: 0, refreshPromise: null, refreshAgain: false, shownRewinds: new Set(),
@@ -1837,12 +1839,12 @@
   function renderQueue() {
     const c = state.conversation, queue = c?.queue || [], section = $("prompt-queue");
     section.hidden = !queue.length;
-    const signature = JSON.stringify([c?.id, queue, c?.queuePaused, state.queueEditing, state.queueTasking, Boolean(state.pending), state.taskId, Boolean(state.taskDraft), selectedFolderId(), sidebarLevelFor()]);
+    const signature = JSON.stringify([c?.id, queue, c?.queuePaused, c?.queueWaitsForSlot, state.queueEditing, state.queueTasking, Boolean(state.pending), state.taskId, Boolean(state.taskDraft), selectedFolderId(), sidebarLevelFor()]);
     if (!queue.length || signature === state.queueSignature) return;
     state.queueSignature = signature;
     $("prompt-queue-title").textContent = `Up next · ${queue.length}`;
-    $("prompt-queue-paused").hidden = !c.queuePaused;
-    const pausedReason = c.queuePaused ? `Paused: ${c.queuePaused.reason}` : "";
+    $("prompt-queue-paused").hidden = !c.queuePaused && !c.queueWaitsForSlot;
+    const pausedReason = c.queuePaused ? `Paused: ${c.queuePaused.reason}` : c.queueWaitsForSlot ? "Starts when a task finishes" : "";
     $("prompt-queue-paused").textContent = pausedReason;
     $("prompt-queue-paused").title = pausedReason;
     $("prompt-queue-toggle").textContent = c.queuePaused ? "Resume queue" : "Pause";
@@ -2270,6 +2272,13 @@
     ui.stop.hidden = !running;
     ui.stop.disabled = Boolean(state.routingStopPending) || busy && state.conversation?.activeRun?.purpose !== 'routing';
     ui.stop.lastChild.textContent = " " + (state.pending === "stop" ? t("Stopping…") : t("Stop"));
+    // Stop pressed from the keyboard is disabled while stopping and then hidden, which drops the focus: it goes on to
+    // the message box, unless the person has moved it somewhere else since.
+    if (stopFocus) {
+      const at = document.activeElement;
+      if (at && at !== document.body && at !== ui.stop) stopFocus = false;
+      else if (ui.stop.hidden) { stopFocus = false; ui.input.focus({ preventScroll: true }); }
+    }
     ui.otherRunning.hidden = !otherRunning;
     // A narrow composer shows these pickers as icons, so each names its current choice on hover.
     for (const select of [$("effort-select"), ui.mode, ui.approval]) {
@@ -2751,7 +2760,19 @@
         await refresh();
         render(true);
         const parts = state.conversation?.splitHistory?.findLast?.(item => item.id === accepted.split.id)?.cards?.length || state.conversation?.splitProposal?.parts?.length || 0;
-        announce(accepted.split.automatic ? `Flow split this into ${parts} parts that run side by side. It answers here when they’re done.` : `Flow suggests splitting this into ${parts} tasks. Choose above the message box.`);
+        announce(accepted.split.automatic ? `Flow split this into ${parts} parts. It answers here when they’re done.` : `Flow suggests splitting this into ${parts} tasks. Choose above the message box.`);
+        return true;
+      }
+      // Every task slot was taken, so the message joined the queue and starts when one frees.
+      if (accepted?.queued) {
+        window.relayFiles?.accepted(projectId, attachments);
+        asking?.sent();
+        accepting = true;
+        if (taken) draftAccepted();
+        state.sending = null;
+        await refresh();
+        render(true);
+        announce("Every task slot is taken, so your message is next in the queue. It starts when a task finishes.");
         return true;
       }
       window.relayAutomaticReview?.accepted(projectId, automaticReview);
@@ -2809,6 +2830,7 @@
       return;
     }
     if (!isRunning() || state.pending || state.projectSaving) return;
+    stopFocus = document.activeElement === ui.stop;
     state.pending = "stop";
     const projectId = state.projectId;
     render();

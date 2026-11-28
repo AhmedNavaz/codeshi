@@ -16,6 +16,8 @@ jobs:
     name: macOS ${{ matrix.label }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    outputs:
+      notarized: ${{ steps.signing.outputs.notarized }}
     strategy:
       # One Mac's failure shouldn't hide the other's result.
       fail-fast: false
@@ -37,13 +39,68 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
       - run: npm ci
+      - name: Import Apple signing certificate and notarization key
+        id: signing
+        env:
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          if [ -z "$MAC_CERT_P12_BASE64" ] || [ -z "$MAC_CERT_PASSWORD" ]; then
+            echo "notarized=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cert_path="$RUNNER_TEMP/mac-cert.p12"
+          keychain_path="$RUNNER_TEMP/build.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          printf '%s' "$MAC_CERT_P12_BASE64" | tr -d '[:space:]' | base64 --decode > "$cert_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$cert_path" -P "$MAC_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain_path"
+          existing=$(security list-keychains -d user | tr -d '"' | sed 's/^[[:space:]]*//')
+          keychains=("$keychain_path")
+          while IFS= read -r kc; do [ -n "$kc" ] && keychains+=("$kc"); done <<< "$existing"
+          security list-keychains -d user -s "${keychains[@]}"
+          rm -f "$cert_path"
+          identity=$(security find-identity -v -p codesigning "$keychain_path" | sed -n 's/^[[:space:]]*[0-9]*) [0-9A-F]* "\(.*\)"/\1/p' | grep '^Developer ID Application:' | head -n 1)
+          test -n "$identity"
+          echo "AI_RELAY_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "AI_RELAY_SIGN_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
+          if [ -n "$APPLE_API_KEY_BASE64" ] && [ -n "$APPLE_API_KEY_ID" ]; then
+            api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            printf '%s' "$APPLE_API_KEY_BASE64" | tr -d '[:space:]' | base64 --decode > "$api_key_path"
+            chmod 600 "$api_key_path"
+            echo "APPLE_API_KEY=$api_key_path" >> "$GITHUB_ENV"
+            echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID" >> "$GITHUB_ENV"
+            if [ -n "$APPLE_API_ISSUER" ]; then
+              echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
+            fi
+            echo "notarized=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "notarized=false" >> "$GITHUB_OUTPUT"
+          fi
       - run: npm run package
       - name: Smoke test the packaged app
         run: |
           app="dist/Codeshi-darwin-${{ matrix.arch }}/Codeshi.app"
           codesign --verify --deep --strict "$app"
+          if [ -n "${AI_RELAY_SIGN_IDENTITY:-}" ] && [ -n "${APPLE_API_KEY:-}" ]; then
+            xcrun stapler validate "$app"
+            spctl --assess -vvv --type execute "$app"
+          fi
           AI_RELAY_DESKTOP_DATA="$RUNNER_TEMP/profile" AI_RELAY_LEGACY_DATA_DIR="$RUNNER_TEMP/none" "$app/Contents/MacOS/Codeshi" --smoke-test | tee "$RUNNER_TEMP/smoke.log"
           grep -q AI_RELAY_DESKTOP_SMOKE "$RUNNER_TEMP/smoke.log"
+      - name: Clean up Apple signing credentials
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/mac-cert.p12" "$RUNNER_TEMP"/AuthKey_*.p8
+          if [ -n "${AI_RELAY_SIGN_KEYCHAIN:-}" ]; then
+            security delete-keychain "$AI_RELAY_SIGN_KEYCHAIN" || true
+          fi
       - name: Zip the app
         run: |
           version="${GITHUB_REF_NAME#v}" app="dist/Codeshi-darwin-${{ matrix.arch }}/Codeshi.app"
@@ -168,6 +225,7 @@ jobs:
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
+          MAC_NOTARIZED: ${{ needs.desktop.outputs.notarized }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           (cd release-files && sha256sum Codeshi-*.zip > SHA256SUMS.txt)
@@ -194,8 +252,10 @@ jobs:
             echo "| Intel | \`Codeshi-$version-mac-intel.zip\` |"
             echo
             echo "Unzip, move **Codeshi** to Applications and open it. Use your own configured Claude Code or Codex CLI connection, or connect Gemini through Google Antigravity in Settings (Install Google connection, then Connect account). Local continuation needs Codex CLI, Ollama and a downloaded tool-capable model. See the setup guide in the repository for authentication and billing details."
-            echo
-            echo "The app is not notarized by Apple yet, so the first time you open a browser download macOS says it cannot verify the developer. Open **System Settings › Privacy & Security** and click **Open Anyway**. You only need to do this once. If macOS instead says the app is damaged, run \`xattr -cr /Applications/Codeshi.app\` and open it again."
+            if [ "${MAC_NOTARIZED:-false}" != "true" ]; then
+              echo
+              echo "The app is not notarized by Apple yet, so the first time you open a browser download macOS says it cannot verify the developer. Open **System Settings › Privacy & Security** and click **Open Anyway**. You only need to do this once. If macOS instead says the app is damaged, run \`xattr -cr /Applications/Codeshi.app\` and open it again."
+            fi
             echo
             echo "### Windows"
             echo
@@ -222,3 +282,65 @@ jobs:
             prerelease=(--prerelease)
           fi
           gh release create "$GITHUB_REF_NAME" release-files/* --title "Codeshi $version" --notes-file notes.md --verify-tag "${prerelease[@]}"
+
+  homebrew:
+    name: Update the Homebrew cask
+    # Pre-releases stay out of the cask, so `brew upgrade` only offers regular releases.
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
+    needs: [release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # HOMEBREW_TAP_TOKEN: a fine-grained token with Contents read and write on AhmedNavaz/homebrew-codeshi only.
+      - name: Check the tap token exists
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: test -n "$TAP_TOKEN" || { echo "::error::The HOMEBREW_TAP_TOKEN repository secret is not set."; exit 1; }
+      - name: Download the published macOS zips and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir assets
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir assets \
+            --pattern SHA256SUMS.txt --pattern "Codeshi-$version-mac-apple-silicon.zip" --pattern "Codeshi-$version-mac-intel.zip"
+      - name: Read and verify the checksums
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cd assets
+          test -s SHA256SUMS.txt || { echo "::error::SHA256SUMS.txt is missing or empty."; exit 1; }
+          for label in apple-silicon intel; do
+            file="Codeshi-$version-mac-$label.zip"
+            listed="$(awk -v f="$file" '$2 == f || $2 == "*" f { print $1 }' SHA256SUMS.txt)"
+            [[ "$listed" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::SHA256SUMS.txt has no single valid checksum for $file."; exit 1; }
+            actual="$(sha256sum "$file" | awk '{ print $1 }')"
+            [ "$listed" = "$actual" ] || { echo "::error::$file does not match SHA256SUMS.txt (listed $listed, downloaded $actual)."; exit 1; }
+            echo "${label//-/_}=$actual" >> "$GITHUB_ENV"
+          done
+      - name: Update the cask in the tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${GITHUB_REPOSITORY_OWNER}/homebrew-codeshi.git" tap
+          cask=tap/Casks/codeshi.rb
+          test -f "$cask" || { echo "::error::Casks/codeshi.rb is missing in the tap."; exit 1; }
+          awk -v version="$version" -v arm="$apple_silicon" -v intel="$intel" '
+            /^  version "/ { print "  version \"" version "\""; next }
+            /^  on_arm do/ { block = "arm" }
+            /^  on_intel do/ { block = "intel" }
+            /^  end/ { block = "" }
+            block != "" && /^    sha256 "/ { print "    sha256 \"" (block == "arm" ? arm : intel) "\""; next }
+            { print }
+          ' "$cask" > cask.new
+          mv cask.new "$cask"
+          grep -qF "version \"$version\"" "$cask" && grep -qF "sha256 \"$apple_silicon\"" "$cask" && grep -qF "sha256 \"$intel\"" "$cask" \
+            || { echo "::error::The cask did not take the new version and checksums; check its on_arm and on_intel blocks."; exit 1; }
+          cd tap
+          if git diff --quiet; then echo "The cask is already at $version."; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "codeshi $version"
+          git push origin HEAD

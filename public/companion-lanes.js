@@ -132,7 +132,8 @@
     lane.gitAt = Date.now();
     try {
       const data = await api.api('/api/git', {}, lane.id), repos = (data.repositories || []).filter(repo => repo.available);
-      lane.git = repos.length ? { branch: repos[0].branch || '', changes: repos.reduce((sum, repo) => sum + (repo.totalChanges || 0), 0), folders: repos.length, names: repos.map(repo => `${repo.name || repo.folderName || 'Folder'}: ${repo.branch || '—'}`) } : null;
+      const countFiles = repo => window.relayGit?.fileTotal ? window.relayGit.fileTotal(repo) : (repo.changes || []).reduce((sum, file) => sum + (file.files?.length || file.fileCount || 1), 0) + Math.max(0, (repo.totalChanges || 0) - (repo.changes?.length || 0));
+      lane.git = repos.length ? { branch: repos[0].branch || '', changes: repos.reduce((sum, repo) => sum + countFiles(repo), 0), folders: repos.length, names: repos.map(repo => `${repo.name || repo.folderName || 'Folder'}: ${repo.branch || '—'}`) } : null;
     } catch { lane.git = null; }
     if (lanes.has(lane.id)) renderHead(lane);
   }

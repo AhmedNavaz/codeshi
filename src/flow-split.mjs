@@ -41,6 +41,18 @@ export function readParts(value) {
   return parts;
 }
 
+// How the parts run, in words: side by side, one after another, or in steps where some run side by side. A part's step is
+// one after the latest step of the parts it waits for. split-progress.js says the same on the page.
+export function splitShape(parts) {
+  const steps = [];
+  for (const part of parts) steps.push(Math.max(0, ...(part.dependsOn || []).map(number => (steps[number - 1] ?? -1) + 1)));
+  const sizes = []; for (const step of steps) sizes[step] = (sizes[step] || 0) + 1;
+  if (sizes.length === 1) return `${parts.length} parts that run side by side`;
+  if (sizes.every(size => size === 1)) return `${parts.length} steps that run one after another`;
+  const piece = size => size === 1 ? 'one' : `${size} side by side`;
+  return `${parts.length} parts in ${sizes.length} steps: ${sizes.map((size, index) => `${index ? 'then ' : 'first '}${piece(size)}`).join(', ')}`;
+}
+
 // The group the parts share on the Plan: the message's first line, made unique among the Plan's open groups.
 export function groupName(text, taken = new Set()) {
   const first = String(text || '').trim().split('\n')[0].replace(/\s+/g, ' ');
@@ -149,7 +161,7 @@ export class FlowSplits {
     // No folder question: the parts work in the folder you're in, or the primary one. The agent finds its way from there.
     if (!folder ||!folders.some(item => item.id === folder)) throw Object.assign(fail('Choose the folder these parts work in.', 400), { details: { folderChoice: true } });
     const taken = new Set(board.cards(c).filter(card => card.group).map(card => card.group)), group = groupName(proposal.request.text, taken);
-    const source = { kind: 'flow-split', splitId: proposal.id, goal: clip(proposal.request.text, 4000), summary: `Split from one message into ${parts.length} parts that run side by side, then one review of the combined result.` };
+    const source = { kind: 'flow-split', splitId: proposal.id, goal: clip(proposal.request.text, 4000), summary: `Split from one message into ${splitShape(parts)}, then one review of the combined result.` };
     const managed = { splitId: proposal.id }, ids = [];
     let reviewId = null;
     try {
@@ -170,7 +182,9 @@ export class FlowSplits {
     broker.record(c, { type: 'split_proposal_end', id: proposal.id, outcome: 'tasks', cards: ids, group });
     // The message you sent is saved with the split, not when it was rated, so doing it as one never shows it twice.
     broker.record(c, { type: 'message', message: { id: randomUUID(), role: 'user', text: proposal.request.text, splitId: proposal.id, status: 'complete', createdAt: new Date().toISOString() } });
-    broker.message(c, 'system', `${by === 'flow' ? 'Flow split this' : 'Split this'} into ${parts.length} parts that run side by side${parts.some(part => part.dependsOn.length) ? ', each after the parts it needs' : ''}. Flow merges each one when it’s safe, reviews the combined result, and answers here.`);
+    // Sizes differ when the split saves something: a small part goes to a small model.
+    const sized = new Set(parts.map(part => part.tier)).size > 1 ? ', each on a model sized to it' : '';
+    broker.message(c, 'system', `${by === 'flow' ? 'Flow split this' : 'Split this'} into ${splitShape(parts)}${sized}. Flow merges each one when it’s safe, reviews the combined result, and answers here.`);
     broker.emit('update', { conversationId: c.id });
     return { view: broker.view(c), cards: ids, group };
   }

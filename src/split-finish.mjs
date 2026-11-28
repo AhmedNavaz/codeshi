@@ -62,7 +62,10 @@ export class SplitFinish {
 
   // Saved once the parts have started.
   begin(c, { proposal, group, cards, reviewCardId, folderId, by }) {
-    this.broker.record(c, { type: 'split_run', run: { id: proposal.id, group, cards, reviewCardId, folderId, parentTaskId: proposal.taskId, execution: proposal.execution, automatic: by === 'flow', status: 'working' } });
+    // Each part's size and the parts it waits for, in the parts' order, so the page can show which run side by side and
+    // which one after another, and why each got the model it did.
+    const shape = (proposal.parts || []).map(part => ({ tier: part.tier || null, dependsOn: [...(part.dependsOn || [])] }));
+    this.broker.record(c, { type: 'split_run', run: { id: proposal.id, group, cards, reviewCardId, folderId, parentTaskId: proposal.taskId, execution: proposal.execution, automatic: by === 'flow', status: 'working', ...(shape.length === cards.length ? { shape } : {}) } });
   }
 
   // Moves every split on after any of its tasks changes. One pass at a time per conversation; a change during a pass asks
