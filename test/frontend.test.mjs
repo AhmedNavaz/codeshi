@@ -10111,45 +10111,49 @@ test('Flow split-into-parts managed tasks stay out of Plan row, Task lanes, and 
   assert.match(ui.$('flow-status-text').textContent, /2 parts side by side/);
   assert.doesNotMatch(ui.$('flow-status-text').textContent, /Task lane/);
   assert.equal(ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(el => el.dataset.taskId === 'plan'), undefined);
-  assert.equal(ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(el => el.dataset.taskId === 'split-t1'), undefined);
   assert.doesNotMatch(flowText(ui, 'activity'), /task working/, 'Flow’s own parts are not counted as tasks beside the chat.');
-  // Tasks shows the parts as one group, each part with its agent and state, and Activity says how far they are.
-  const group = ui.$('flow-card-tasks').querySelectorAll('.flow-split');
-  assert.equal(group.length, 1);
-  assert.match(group[0].textContent, /2 parts side by side/);
-  assert.match(group[0].textContent, /2 working/);
-  const parts = ui.$('flow-card-tasks').querySelectorAll('.flow-split-part');
-  assert.deepEqual(parts.map(el => el.querySelector('.task-row-title').textContent), ['Promo helper', 'Checkout UI', 'Review of the combined result']);
-  assert.match(parts[0].textContent, /Claude/);
-  // Each part shows its size, which is why it got its model; parts side by side get no step headings.
-  assert.deepEqual(parts.map(el => el.querySelector('.flow-split-size')?.textContent || ''), ['Complex', 'Small', '']);
-  assert.equal(ui.$('flow-card-tasks').querySelectorAll('.flow-split-step').length, 0);
-  assert.match(parts[2].textContent, /After every part/);
+  // Activity carries the steps (what and how each part is being done, plus Stop); Tasks lists only openable part chats.
+  assert.equal(ui.$('flow-card-tasks').querySelectorAll('.flow-split').length, 0);
+  const taskRows = ui.$('flow-card-tasks').querySelectorAll('.flow-task');
+  assert.deepEqual(taskRows.map(el => el.dataset.taskId || el.dataset.role), ['main', 'split-t1', 'split-t2'], 'Tasks lists only openable chats, not waiting parts without a conversation.');
+  assert.match(taskRows[1].textContent, /Promo helper.*Working.*Claude/);
+  const activityParts = ui.$('flow-card-activity').querySelectorAll('.flow-split-step-item');
+  assert.deepEqual(activityParts.map(el => el.querySelector('.flow-split-step-title').textContent), ['Promo helper', 'Checkout UI', 'Review of the combined result']);
+  assert.match(activityParts[0].textContent, /Claude/);
+  // Each part in Activity shows its size, which is why it got its model; parts side by side get no step headings.
+  assert.deepEqual(activityParts.map(el => el.querySelector('.flow-split-size')?.textContent || ''), ['Complex', 'Small', '']);
+  assert.equal(ui.$('flow-card-activity').querySelectorAll('.flow-split-step').length, 0);
+  assert.match(activityParts[2].textContent, /After every part/);
   assert.match(flowText(ui, 'activity'), /2 parts side by side/);
   assert.doesNotMatch(flowText(ui, 'activity'), /above the message box/);
-  parts[1].querySelector('button').click(); await flush();
-  assert.equal(ui.state().taskId, 'split-t2', 'A part in Tasks opens its conversation to watch it.');
+  assert.match(ui.$('flow-card-activity').querySelector('.flow-panel-foot').textContent, /Stop/);
+  taskRows[2].querySelector('button').click(); await flush();
+  assert.equal(ui.state().taskId, 'split-t2', 'A part in Tasks opens its chat to watch it.');
+  assert.deepEqual(ui.$('flow-card-tasks').querySelectorAll('.flow-task').map(el => el.dataset.taskId || el.dataset.role), ['main', 'split-t1', 'split-t2'], 'Tasks keeps all openable part chats listed so you can switch between them.');
   ui.window.relayUI.setTask(null); await flush(); await flush();
 
-  // Parts that wait for one another are steps, numbered in order, each waiting for the step before it.
+  // Parts that wait for one another are steps in Activity, numbered in order, each waiting for the step before it.
   chat.splitRuns[0].shape = [{ tier: 'deep', dependsOn: [] }, { tier: 'standard', dependsOn: [1] }];
-  splitTasks[1].status = 'waiting'; splitTasks[1].reason = 'Waiting for “Promo helper”.';
+  splitTasks[1].status = 'waiting'; splitTasks[1].reason = 'Waiting for “Promo helper”.'; delete splitTasks[1].conversationId;
+  splitTasks[0].runningStep = 'Writing helper tests';
   await ui.window.relayUI.refresh(); await flush();
-  const chained = ui.$('flow-card-tasks').querySelectorAll('.flow-split-part');
-  assert.match(ui.$('flow-card-tasks').querySelectorAll('.flow-split')[0].textContent, /2 steps, one after another.*Step 1 of 2/);
+  const chained = ui.$('flow-card-activity').querySelectorAll('.flow-split-step-item');
+  assert.match(flowText(ui, 'activity'), /2 steps, one after another.*Step 1 of 2/);
+  assert.match(chained[0].textContent, /Writing helper tests/);
   assert.deepEqual(chained.map(el => el.querySelector('.flow-split-num')?.textContent || ''), ['1', '2', '']);
   assert.match(chained[1].textContent, /After step 1/);
-  assert.match(flowText(ui, 'activity'), /2 steps, one after another/);
+  assert.deepEqual(ui.$('flow-card-tasks').querySelectorAll('.flow-task').map(el => el.dataset.taskId || el.dataset.role), ['main', 'split-t1']);
   assert.match(ui.$('split-progress-summary').textContent, /Step 1 of 2/);
-  // Two parts side by side, then one: the steps get headings.
+  // Two parts side by side, then one: the steps get headings in Activity.
   chat.splitRuns[0].cards = ['c-1', 'c-2', 'c-3'];
   chat.splitRuns[0].shape = [{ tier: 'standard', dependsOn: [] }, { tier: 'standard', dependsOn: [] }, { tier: 'light', dependsOn: [1, 2] }];
-  splitTasks[1].status = 'running'; delete splitTasks[1].reason;
+  splitTasks[1].status = 'running'; splitTasks[1].conversationId = 'conv-s2'; delete splitTasks[1].reason;
   splitTasks.splice(2, 0, { id: 'split-t3', title: 'Docs', folderName: folder.name, folderId: folder.id, status: 'waiting', reason: 'Waiting for “Checkout UI”.', provider: 'claude', managed: true, splitId: 'split-1', board: { boardId: 'b1', cardId: 'c-3' }, cardColumn: 'ready', conversationId: 'conv-s3', approvals: 0 });
   await ui.window.relayUI.refresh(); await flush();
-  assert.deepEqual(ui.$('flow-card-tasks').querySelectorAll('.flow-split-step').map(el => el.textContent), ['Step 12 side by side', 'Step 2', 'Thenchecked together']);
-  assert.match(ui.$('flow-card-tasks').querySelectorAll('.flow-split')[0].textContent, /3 parts in 2 steps/);
+  assert.deepEqual(ui.$('flow-card-activity').querySelectorAll('.flow-split-step').map(el => el.textContent), ['Step 12 side by side', 'Step 2', 'Thenchecked together']);
+  assert.match(flowText(ui, 'activity'), /3 parts in 2 steps/);
   splitTasks.splice(2, 1); chat.splitRuns[0].cards = ['c-1', 'c-2']; chat.splitRuns[0].shape = [{ tier: 'deep', dependsOn: [] }, { tier: 'light', dependsOn: [] }];
+  delete splitTasks[0].runningStep;
   await ui.window.relayUI.refresh(); await flush();
 
   // Opening a managed split part inside Flow, then switching to Plan or Normal, hides split UI and exits the managed part.

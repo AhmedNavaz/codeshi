@@ -1,15 +1,14 @@
 // A split message Flow is finishing by itself (src/split-finish.mjs). Its parts aren't on the Plan while Flow finishes them.
-// They show in three places, all described here so they say the same thing:
-// - Tasks (flow.js): one group row with every part under it, which opens a part's conversation to watch it.
-// - Activity (flow.js): how far the split is, as the card's lead.
-// - The chat, above the message box: one line with a bar of the parts and Stop, which stops every part (they then go to
-//   the Plan for you to finish). Only when the side panel is hidden, in a narrow window, can it list the parts too.
+// On desktop Flow, Activity carries the steps (what and how each part is being done, plus Stop), Tasks lists only the
+// openable part chats so you can switch into each one, and #split-progress steps aside. On narrow windows or in the
+// Lounge, #split-progress above the message box provides the bar, expandable part list, and Stop.
 // A part's step comes from the parts it waits for: parts in one step run side by side, and steps run one after another.
 // Each part also has its size, which is why it got a small or a strong model.
 (() => {
   const $ = id => document.getElementById(id), api = window.relayUI, section = $('split-progress');
   if (!api) return;
   const NAMES = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
+  const PHASE_WORDS = { starting: 'Starting', probing: 'Checking usage', reasoning: 'Thinking', responding: 'Writing', tool: 'Running tools', compacting: 'Organizing context', approval: 'Waiting for you' };
   const node = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text !== undefined) el.textContent = text; return el; };
   const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
   // A part's size, as the rater gave it: a small part goes to a small model, and only a complex one to a strong one.
@@ -38,6 +37,12 @@
     if (task.status === 'complete') return review ? ['done', 'Reviewed'] : task.mode === 'worktree' ? ['running', 'Merging'] : ['done', 'Done'];
     return ['attention', ENDED[task.status] || task.status];
   }
+  const doingOf = task => {
+    if (!task) return '';
+    if (task.status === 'running') return task.runningStep || PHASE_WORDS[task.runningPhase] || '';
+    if (task.testing || task.stepCheck?.status === 'running') return task.stepCheck?.label || '';
+    return '';
+  };
 
   // The working split of a conversation, described once: its rows (parts, repairs, then the review), counts and summary.
   function describe(c) {
@@ -45,7 +50,7 @@
     if (!run) return null;
     const tasks = (c.parallelTasks || []).filter(task => task.splitId === run.id), forCard = id => tasks.filter(task => task.board?.cardId === id).at(-1) || null;
     const parts = run.cards.map(id => forCard(id)), review = run.reviewCardId ? forCard(run.reviewCardId) : null;
-    const make = (label, task, kind, options = {}) => { const [state, words] = stateOf(task, options); return { key: task?.id || `${run.id}:${label}`, label, task, kind, state, words, agent: who(task), provider: task?.runningProvider || task?.provider || '' }; };
+    const make = (label, task, kind, options = {}) => { const [state, words] = stateOf(task, options); return { key: task?.id || `${run.id}:${label}`, label, task, kind, state, words, doing: doingOf(task), agent: who(task), provider: task?.runningProvider || task?.provider || '' }; };
     // Which step each part is in: one after the latest step of the parts it waits for (src/flow-split.mjs splitShape).
     // A split saved before its shape was kept has no steps, and its parts are listed as they are.
     const shape = Array.isArray(run.shape) && run.shape.length === run.cards.length ? run.shape : null, stepOf = [];
@@ -130,10 +135,10 @@
   async function stop() {
     const model = describe(api.getState().conversation);
     if (!model || stopping || !window.confirm('Stop every part? What Flow already merged stays in your folder, and the parts go to the Plan for you to finish.')) return;
-    stopping = true; draw();
+    stopping = true; draw(); window.dispatchEvent(new CustomEvent('relay-state'));
     try { await api.post('/api/board/stop', { ids: [...model.run.cards, ...(model.run.reviewCardId ? [model.run.reviewCardId] : [])] }); api.announce?.('Stopped the parts.'); }
     catch (error) { api.showNotice?.(error.message); }
-    finally { stopping = false; await api.refresh?.(); draw(); }
+    finally { stopping = false; await api.refresh?.(); draw(); window.dispatchEvent(new CustomEvent('relay-state')); }
   }
 
   window.relaySplitProgress = { describe, bar, watch, stop, stopping: () => stopping };

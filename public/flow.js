@@ -405,7 +405,7 @@
       view.word = plan.chip === 'Planning' ? 'Planning' : plan.chip === 'Plan waiting' ? 'Needs you' : '';
       if (plan.chip === 'Planning') view.lead = { icon: '', title: 'Drafting a plan', detail: 'Its cards show on the Plan when they’re ready' };
     } else if (split) {
-      // The parts are listed in Tasks; this says how far they are, and brings a part that needs you into view.
+      // Activity carries the split's steps (what and how each part is being done) and Stop; Tasks lists openable chats.
       const model = window.relaySplitProgress?.describe?.(c), asking = model?.rows.find(row => row.task?.approvals);
       view.tone = asking ? 'attention' : 'live'; view.word = asking ? 'Needs you' : 'Working'; view.split = true;
       // The title says how the parts run, and the detail which step it's on, so one glance tells side by side from in turn.
@@ -457,12 +457,57 @@
     if (to < steps.length) list.append(more(steps.slice(to).every(step => step.status === 'done') ? 'done' : 'pending', `${plural(steps.length - to, 'more step')}`));
     return list;
   }
+  // The steps of a split Flow is finishing by itself: grouped by step when some run side by side, numbered when in turn,
+  // showing what each part is doing, its agent/model, its size, and an Answer button if it needs your approval.
+  function splitStepList(split) {
+    const stepped = split.layout === 'mixed', numbered = split.layout === 'chain';
+    const list = node('ol', `flow-split-steps${stepped ? ' flow-split-stepped' : ''}`);
+    list.setAttribute('aria-label', `The steps of “${split.run.group || 'this message'}”`);
+    const heading = (label, note) => { const li = node('li', 'flow-split-step'); li.setAttribute('role', 'presentation'); li.append(node('span', '', label)); if (note) li.append(node('span', 'flow-split-step-note', note)); return li; };
+    const stepItem = row => {
+      const li = node('li', 'flow-split-step-item');
+      li.dataset.state = row.state;
+      if (row.kind !== 'part') li.dataset.kind = row.kind;
+      const tick = node('span', 'flow-step-mark'); tick.setAttribute('aria-hidden', 'true');
+      const main = node('div', 'flow-split-step-main'), head = node('div', 'flow-split-step-head'), sub = node('div', 'flow-split-step-sub');
+      if (numbered && row.step !== undefined) { const num = node('span', 'flow-split-num', `${row.step + 1}`); num.setAttribute('aria-hidden', 'true'); head.append(num); }
+      const title = node('span', 'flow-split-step-title', row.label); title.title = row.label; head.append(title);
+      if (row.size) { const size = node('span', 'flow-split-size', row.size); size.dataset.size = row.size; size.title = row.sizeWhy; head.append(size); }
+      const words = row.kind === 'review' && row.state === 'waiting' ? 'After every part' : row.doing ? `${row.words} · ${clip(row.doing, 56)}` : row.words;
+      const statusEl = node('span', 'flow-split-step-status', words); statusEl.title = row.doing ? `${row.words} · ${row.doing}` : words; sub.append(statusEl);
+      if (row.agent) {
+        const icon = node('i', `agent-icon ${row.provider}`), agent = node('span', 'flow-split-agent', row.agent);
+        icon.setAttribute('aria-hidden', 'true'); agent.title = row.agent;
+        sub.append(node('span', 'task-row-sub', '·'), icon, agent);
+      }
+      main.append(head, sub); li.append(tick, main);
+      if (row.task?.approvals) {
+        const act = button('flow-row-action', 'Answer', () => window.relaySplitProgress.watch(row.task));
+        act.title = `Open “${row.label}” to answer`;
+        li.append(act);
+      }
+      return li;
+    };
+    if (stepped) {
+      for (const step of split.steps) {
+        list.append(heading(`Step ${step.step + 1}`, step.rows.length > 1 ? `${step.rows.length} side by side` : ''));
+        for (const row of step.rows) list.append(stepItem(row));
+      }
+    } else for (const row of split.rows.filter(row => row.kind === 'part')) list.append(stepItem(row));
+    const extra = split.rows.filter(row => row.kind !== 'part');
+    if (extra.length && stepped) list.append(heading('Then', 'checked together'));
+    for (const row of extra) list.append(stepItem(row));
+    return list;
+  }
   function renderActivity(card) {
     const state = api.getState(), nextScope = scope();
     if (nextScope !== activityScope) { activityScope = nextScope; }
     const view = activityView(state), row = happening(), reason = row && row.kind !== 'manual' ? row : null;
+    const splitModel = view.split ? window.relaySplitProgress?.describe?.(state.conversation) : null;
+    const splitStopping = view.split ? Boolean(window.relaySplitProgress?.stopping?.()) : false;
+    const splitSig = splitModel ? [splitModel.run.id, splitModel.shape, splitModel.where, splitModel.summary, splitModel.done, splitModel.parts, splitStopping, splitModel.rows.map(item => [item.key, item.label, item.state, item.words, item.doing, item.agent, item.size, item.step, item.task?.approvals || 0, Boolean(item.task?.conversationId)])] : null;
     headline(card, { word: view.word, live: view.tone === 'live', attention: view.tone === 'attention', quiet: !view.lead && !view.notices.length && !view.queue, label: view.label });
-    const signature = JSON.stringify([state.projectId, state.taskId, view, reason ? [reason.run.id, reason.kind, reason.title, reason.why] : null]);
+    const signature = JSON.stringify([state.projectId, state.taskId, view, splitSig, reason ? [reason.run.id, reason.kind, reason.title, reason.why] : null]);
     if (signature === card.signature) { tickClock(); return; }
     card.signature = signature; clock = null;
     const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
@@ -477,7 +522,9 @@
       if (view.lead.progress && !view.split) sub.append(node('span', 'flow-now-count', `${view.lead.progress.done} of ${view.lead.progress.total} done`));
       if (view.lead.action) { const act = button('flow-now-action', view.lead.action.label, () => view.lead.action.run()); if (view.lead.action.hint) act.title = view.lead.action.hint; sub.append(act); }
       lead.append(line, sub);
-      if (view.lead.progress) {
+      if (view.split && splitModel && window.relaySplitProgress?.bar) {
+        lead.append(window.relaySplitProgress.bar(splitModel, 'flow-split-bar flow-now-split-bar'));
+      } else if (view.lead.progress) {
         const bar = node('div', 'flow-progress'), { done, total } = view.lead.progress;
         bar.style.setProperty('--done', `${Math.round(done / total * 100)}%`);
         bar.setAttribute('role', 'progressbar'); bar.setAttribute('aria-valuemin', '0'); bar.setAttribute('aria-valuemax', String(total)); bar.setAttribute('aria-valuenow', String(done)); bar.setAttribute('aria-label', `${done} of ${plural(total, view.lead.progress.word || 'step')} done`);
@@ -490,10 +537,14 @@
       if (notice.label) item.append(button('flow-now-action', notice.label, () => notice.run()));
       body.append(item);
     }
-    if (view.steps.length) body.append(stepList(view.steps, view.held));
+    if (view.split && splitModel?.rows?.length) body.append(splitStepList(splitModel));
+    else if (view.steps.length) body.append(stepList(view.steps, view.held));
     if (view.queue) body.append(node('p', 'flow-queued', `${plural(view.queue, 'message')} queued after this${view.paused ? ' · paused' : view.waitsForSlot ? ' · starts when a task finishes' : ''}`));
+    if (view.split && window.relaySplitProgress?.stop) {
+      card.foot.append(actionButton(splitStopping ? 'Stopping…' : 'Stop', () => window.relaySplitProgress.stop(), { hint: 'Stop every part and move them to the Plan', disabled: splitStopping }));
+    }
     // Why this agent: the run that's working or the last one, as recorded when it was chosen. A split's parts each have
-    // their own agent, shown in Tasks, so an earlier run's reason isn't repeated under it.
+    // their own agent, shown above, so an earlier run's reason isn't repeated under it.
     if (reason && view.lead && !view.split) {
       const why = node('div', 'flow-why'), title = node('span', 'flow-why-title');
       why.dataset.kind = reason.kind; title.append(mark('flow-why-icon'), node('span', undefined, shortDecision(reason))); why.append(title);
@@ -521,73 +572,14 @@
   }
   const TASKS_SHOWN = 6;
   let tasksProjectId = null, tasksAll = false;
-  // Split groups you folded, by split ID. A group opens again by itself when a part needs you.
-  const splitFolded = new Set();
   const SPLIT_ROW_STATE = { running: 'working', waiting: 'waiting', done: 'finished' };
   const describeTask = task => window.relayTaskThreads?.describe?.(task) || {
     state: task.approvals > 0 ? 'approval' : taskMergeable(task) ? 'review' : task.status === 'running' ? 'working' : task.status === 'waiting' ? (task.held ? 'paused' : 'waiting') : ['complete', 'integrated', 'kept'].includes(task.status) ? 'finished' : ['failed', 'blocked', 'lost'].includes(task.status) ? 'failed' : 'stopped',
     word: task.approvals > 0 ? plural(task.approvals, 'approval') : taskMergeable(task) ? 'Ready to review' : cap(taskStatusText(task)), time: '', rank: 0, mergeable: taskMergeable(task),
     bucket: task.approvals > 0 || taskMergeable(task) || (task.status === 'waiting' && task.held) ? 0 : ['running', 'waiting'].includes(task.status) ? 1 : 2,
   };
-  // A split Flow is finishing by itself: one group row saying how the parts run (side by side, one after another, or in
-  // steps) and how far they are, with a bar of its parts, and each part (its repairs and the final review too) under it
-  // with where it stands, its agent and model, and its size, which is why it got that model. A part opens its
-  // conversation to watch it. Steps that hold parts side by side get a heading; a line of single steps is numbered.
-  function splitGroup(split, state) {
-    const id = split.run.id, folded = splitFolded.has(id) && !split.asking, item = node('li', 'flow-task flow-split');
-    const head = button('task-row flow-task-row task-row-detailed flow-split-head', undefined, () => { if (splitFolded.has(id)) splitFolded.delete(id); else splitFolded.add(id); const tasksCard = cards.get('tasks'); if (tasksCard) tasksCard.signature = null; render(); });
-    head.dataset.state = split.asking ? 'approval' : split.running || !split.allDone ? 'working' : 'finished';
-    head.setAttribute('aria-expanded', String(!folded));
-    head.title = folded ? 'Show the parts' : 'Hide the parts';
-    const progress = [split.where, split.summary].filter(Boolean).join(' · ');
-    head.setAttribute('aria-label', `Flow split this into ${split.shape}. ${progress}. ${folded ? 'Show' : 'Hide'} the parts`);
-    const chevron = node('span', 'flow-split-chevron'), icon = node('span', 'task-row-icon'), text = node('span', 'task-row-body'), top = node('span', 'task-row-head'), meta = node('span', 'task-row-meta');
-    chevron.setAttribute('aria-hidden', 'true'); icon.setAttribute('aria-hidden', 'true');
-    const title = node('span', 'task-row-title', split.layout === 'unknown' ? split.title : cap(split.shape)); title.title = `Flow split this message into ${split.shape}`;
-    top.append(title);
-    if (split.asking) top.append(node('span', 'task-row-badge flow-task-badge', String(split.asking)));
-    meta.append(node('span', 'task-row-state', progress));
-    text.append(top, meta, window.relaySplitProgress.bar(split, 'flow-split-bar'));
-    head.append(icon, text, chevron);
-    item.append(head);
-    if (folded) return item;
-    const stepped = split.layout === 'mixed', numbered = split.layout === 'chain';
-    const parts = node('ul', `flow-split-parts${stepped ? ' flow-split-stepped' : ''}`);
-    parts.setAttribute('aria-label', `The parts of “${split.run.group || 'this message'}”`);
-    const heading = (label, note) => { const li = node('li', 'flow-split-step'); li.setAttribute('role', 'presentation'); li.append(node('span', '', label)); if (note) li.append(node('span', 'flow-split-step-note', note)); return li; };
-    const partRow = row => {
-      const li = node('li', 'flow-split-part'), here = Boolean(row.task && state.taskId === row.task.id);
-      const face = row.task?.conversationId && !here ? button('task-row flow-task-row task-row-detailed', undefined, () => selectTask(row.task.id)) : node('div', 'task-row flow-task-row task-row-detailed');
-      face.dataset.state = row.state === 'attention' ? (row.task?.approvals ? 'approval' : 'failed') : SPLIT_ROW_STATE[row.state] || 'waiting';
-      if (row.kind !== 'part') face.dataset.kind = row.kind;
-      const words = row.kind === 'review' && row.state === 'waiting' ? 'After every part' : row.words;
-      const spoken = [row.step !== undefined && split.layout !== 'parallel' ? `Step ${row.step + 1}` : '', words, row.agent, row.size ? `${row.size.toLowerCase()} part` : ''].filter(Boolean).join(', ');
-      if (here) { li.classList.add('flow-task-selected'); li.setAttribute('aria-current', 'true'); face.classList.add('active'); }
-      else if (row.task?.conversationId) { face.title = `Watch “${row.label}”`; face.setAttribute('aria-label', `Watch “${row.label}”: ${spoken}`); }
-      const mark = node('span', 'task-row-icon'), body = node('span', 'task-row-body'), line = node('span', 'task-row-head'), name = node('span', 'task-row-title', row.label), meta = node('span', 'task-row-meta');
-      mark.setAttribute('aria-hidden', 'true'); name.title = row.label;
-      if (numbered && row.step !== undefined) { const num = node('span', 'flow-split-num', `${row.step + 1}`); num.setAttribute('aria-hidden', 'true'); line.append(num); }
-      line.append(name);
-      if (row.size) { const size = node('span', 'flow-split-size', row.size); size.dataset.size = row.size; size.title = row.sizeWhy; line.append(size); }
-      // Where it stands comes first, since that's what changes; the agent after it shortens when space runs out.
-      const state_ = node('span', 'task-row-state', words); state_.title = words; meta.append(state_);
-      if (row.agent) { const agentIcon = node('i', `agent-icon ${row.provider}`), agentName = node('span', 'flow-split-agent', row.agent); agentIcon.setAttribute('aria-hidden', 'true'); agentName.title = row.agent; meta.append(node('span', 'task-row-sub', '·'), agentIcon, agentName); }
-      body.append(line, meta); face.append(mark, body); li.append(face);
-      return li;
-    };
-    if (stepped) {
-      for (const step of split.steps) {
-        parts.append(heading(`Step ${step.step + 1}`, step.rows.length > 1 ? `${step.rows.length} side by side` : ''));
-        for (const row of step.rows) parts.append(partRow(row));
-      }
-    } else for (const row of split.rows.filter(row => row.kind === 'part')) parts.append(partRow(row));
-    const extra = split.rows.filter(row => row.kind !== 'part');
-    if (extra.length && stepped) parts.append(heading('Then', 'checked together'));
-    for (const row of extra) parts.append(partRow(row));
-    item.append(parts);
-    return item;
-  }
   // In Flow the agent creates tasks automatically, so this panel lists them without a manual New task button.
+  // For a running split, Activity carries the steps and progress; Tasks lists only the openable part chats so you can switch into each one.
   function renderTasks(card) {
     const state = api.getState(), c = state.conversation, folders = workspaceFolders();
     if (state.projectId !== tasksProjectId) { tasksAll = false; tasksProjectId = state.projectId; }
@@ -603,15 +595,20 @@
     const mainPending = elsewhere ? (Array.isArray(state.status?.pendingApprovals) ? state.status.pendingApprovals : []) : (c?.pendingApprovals || []);
     const planWorking = planOpen.filter(task => task.status === 'running').length + (planChatTask?.status === 'running' ? 1 : 0), planWaiting = planOpen.filter(task => task.status === 'waiting').length;
     const planNeeds = planOpen.reduce((sum, task) => sum + (task.approvals || 0), 0) + (planChatTask?.approvals || 0), planReview = planOpen.filter(task => task.cardColumn === 'review').length;
-    const split = window.relaySplitProgress?.describe?.(c) || null, splitRunning = split ? split.rows.filter(row => row.state === 'running').length : 0;
-    const needs = own.filter(item => item.about.bucket === 0).length + (planNeeds ? 1 : 0) + (split?.asking ? 1 : 0), working = own.filter(item => item.task.status === 'running').length + planWorking + splitRunning;
-    const total = own.length + planOpen.length + (split?.parts || 0), listed = Boolean(own.length || planOpen.length || planChatTask || state.taskId || split);
+    const split = window.relaySplitProgress?.describe?.(c) || null;
+    const splitChats = split
+      ? split.rows.filter(item => item.task && (item.task.conversationId || item.task.approvals || item.task.id === state.taskId)).map(item => ({ task: item.task, label: item.label, state: item.state === 'attention' ? (item.task.approvals ? 'approval' : 'failed') : SPLIT_ROW_STATE[item.state] || 'waiting', word: item.words, agent: item.agent }))
+      : (c?.parallelTasks || []).filter(task => task.managed && (task.conversationId || task.approvals || task.id === state.taskId)).map(task => { const about = describeTask(task); return { task, label: task.title, state: about.state, word: about.word, agent: '' }; });
+    const splitRunning = splitChats.filter(item => item.task.status === 'running').length;
+    const splitAsking = splitChats.filter(item => item.task.approvals > 0).length;
+    const needs = own.filter(item => item.about.bucket === 0).length + (planNeeds ? 1 : 0) + (splitAsking ? 1 : 0), working = own.filter(item => item.task.status === 'running').length + planWorking + splitRunning;
+    const total = own.length + planOpen.length + splitChats.length, listed = Boolean(own.length || planOpen.length || planChatTask || state.taskId || splitChats.length);
     headline(card, { count: total, word: listed ? '' : 'None', live: working > 0, attention: needs > 0, quiet: !listed, label: `Tasks${needs ? ` · ${needs} need${needs === 1 ? 's' : ''} you` : working ? ` · ${working} working` : total ? ` · ${total}` : ''}` });
     const signature = JSON.stringify([
       state.projectId, state.taskId, mainRunning, mainPending.map(item => item.kind), tasksAll, total ? Math.floor(Date.now() / 60000) : 0,
       folders.map(folder => [folder.id, folder.displayName || folder.name]),
       tasks.map(task => [task.id, task.title, task.status, task.folderName, task.mode, task.provider, task.runningProvider, task.runningModel, task.model, task.managed, task.runningPhase, task.runningStep, task.approvals, task.questions, task.testing, task.hasWorktree, task.held, task.reason, task.conversationId, task.integration?.files, task.integration?.branch, task.cardColumn]),
-      split ? [split.run.id, split.summary, split.where, split.shape, splitFolded.has(split.run.id), split.rows.map(row => [row.key, row.label, row.state, row.words, row.agent, row.size, row.step, row.task?.conversationId || null])] : null,
+      splitChats.map(item => [item.task.id, item.label, item.state, item.word, item.agent, item.task.status, item.task.runningProvider, item.task.runningModel, item.task.runningStep, item.task.approvals, item.task.conversationId]),
     ]);
     if (signature === card.signature) return;
     card.signature = signature;
@@ -644,7 +641,14 @@
     };
     const asking = mainPending.length > 0 && mainPending.every(item => item.kind === 'question');
     list.append(row({ title: 'Workspace chat', main: true, visual: mainPending.length ? (asking ? 'question' : 'approval') : mainRunning ? 'working' : 'idle', word: mainPending.length ? (asking ? (mainPending.length === 1 ? 'Needs your answer' : `${mainPending.length} questions`) : mainPending.length === 1 ? 'Needs approval' : `${mainPending.length} approvals`) : mainRunning ? 'Working' : '', badge: mainPending.length, here: !elsewhere, onOpen: () => selectTask(null), openLabel: 'Switch to the workspace chat' }));
-    if (split) list.append(splitGroup(split, state));
+    const several = folders.length > 1;
+    for (const { task, label, state: visual, word, agent } of splitChats) {
+      const provider = (task.status === 'running' && task.runningProvider) || task.provider;
+      const modelId = task.runningModel || task.model, model = modelId ? window.relayModelPicker?.modelName?.(provider, modelId) || modelId : '';
+      const who = agent || [agentNames[provider] || '', model].filter(Boolean).join(' · ');
+      const doing = task.status === 'running' && task.runningStep ? `on “${clip(task.runningStep, 32)}”` : '';
+      list.append(row({ key: task.id, title: label, visual, word, sub: [doing || who, several ? task.folderName : ''].filter(Boolean).join(' · '), badge: task.approvals || 0, here: !state.taskDraft && state.taskId === task.id, onOpen: () => selectTask(task.id), openLabel: `Open “${label}”` }));
+    }
     if (planOpen.length || planChatTask) {
       const targetId = (planChatTask && (planChatTask.approvals > 0 || state.taskId === planChatTask.id)) ? planChatTask.id
         : (state.taskId && planOpen.some(task => task.id === state.taskId)) ? state.taskId
@@ -653,7 +657,6 @@
       const sub = [planWorking && planNeeds ? `${planWorking} working` : '', planWaiting && (planWorking || planNeeds) ? `${planWaiting} waiting` : '', planReview && (planWorking || planNeeds) ? `${planReview} to review` : ''].filter(Boolean).join(' · ');
       list.append(row({ key: 'plan', title: 'Plan', visual: planNeeds ? 'approval' : planWorking ? 'working' : planReview ? 'review' : 'waiting', word, sub, badge: planNeeds, here: false, onOpen: () => { if (peeking) closePeek(); return window.relayBoard?.openTask?.(targetId ?? null) ?? window.relayBoard?.open?.(); }, openLabel: 'Open the Plan to follow its cards and read their results' }));
     }
-    const several = folders.length > 1;
     for (const { task, about } of tasksAll ? own : own.slice(0, TASKS_SHOWN)) {
       const provider = (task.status === 'running' && task.runningProvider) || task.provider, running = task.status === 'running', actions = []; let end = null;
       const doing = running && task.runningStep ? `on “${clip(task.runningStep, 32)}”` : '';
@@ -842,7 +845,10 @@
     }
     if (c.resume || c.limitSwitching) return { text: 'Waiting for a usage limit to reset', live: true };
     const activeSplit = (c.splitRuns || []).findLast(run => run.status === 'working');
-    if (activeSplit) return { text: `Working in ${plural(activeSplit.cards?.length || 2, 'part')} side by side`, live: true };
+    if (activeSplit) {
+      const model = window.relaySplitProgress?.describe?.(c);
+      return { text: model ? (model.layout === 'unknown' ? model.title : cap(model.shape)) : `Working in ${plural(activeSplit.cards?.length || 2, 'part')} side by side`, live: true };
+    }
     const last = c.lastRun;
     if (last && (last.status === 'interrupted' || last.errorCategory === 'quota' || last.status === 'incomplete' || last.status === 'failed')) {
       return { text: last.status === 'interrupted' ? 'Stopped' : last.errorCategory === 'quota' ? 'Stopped at a usage limit' : 'The last run didn’t finish', live: false, attention: last.status !== 'interrupted' };
@@ -945,7 +951,7 @@
     };
   }
   // The status line's and Activity's elapsed time move while a run works, and Git is read again now and then.
-  function tick() { clearTimeout(ticker); if (!on) return; if (api.isRunning()) { renderStatus(); renderCards(); renderStrip(); } watchGit(); ticker = setTimeout(tick, 1000); }
+  function tick() { clearTimeout(ticker); if (!on) return; const c = api.getState().conversation, splitActive = Boolean((c?.splitRuns || []).findLast?.(run => run.status === 'working')); if (api.isRunning() || splitActive) { renderStatus(); renderCards(); renderStrip(); } watchGit(); ticker = setTimeout(tick, 1000); }
   // Changing view. Normal keeps every panel; Flow and the Plan lift the header across the window and set the panels
   // aside, to come back as they were in Normal. Only a change of routing waits for the workspace to be idle.
   const routedIn = target => target === 'flow' ? true : target === 'normal' ? false : routed;

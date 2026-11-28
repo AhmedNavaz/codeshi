@@ -77,6 +77,7 @@ Larger ideas that need design work first, so join the issue before building. The
 
 ## Recently shipped
 
+- **0.65.1:** Flow showing split steps, live per-part actions and **Stop** in Activity while Tasks lists only openable part chats ([#108](https://github.com/AhmedNavaz/codeshi/issues/108)), and Homebrew install steps in GitHub release notes ([#3](https://github.com/AhmedNavaz/codeshi/issues/3)).
 - **0.65.0:** signed and notarized macOS builds ([#1](https://github.com/AhmedNavaz/codeshi/issues/1)) and a Homebrew cask in the `AhmedNavaz/codeshi` tap ([#3](https://github.com/AhmedNavaz/codeshi/issues/3)): `brew tap AhmedNavaz/codeshi`, `brew trust AhmedNavaz/codeshi`, `brew install --cask codeshi`, and `brew upgrade --cask codeshi` to update. Submitting the cask to the main Homebrew cask repository is still open.
 - **0.64.0:** Flow splitting bigger work with each part rated on its own, a message saying the last result missed never rated light, **Pin** and **Open in New Window** in Flow's workspace menu, Commit and Flow's **Changes** counting the same files, and Flow's reason for its choice shown in full.
 - **0.63.0:** workspaces in their own windows and companion lanes beside your chat, editing and saving files in the file view, **Undo** on each of your messages with a simpler Timeline, fewer and shorter cards in Flow, a quieter recap, **Needs you** and one-tap browser moves on the phone, a phone that keeps up when you switch tabs, and terminals as tabs.

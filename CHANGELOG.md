@@ -2,6 +2,12 @@
 
 Notable changes to Codeshi, called Throughline until 0.23; earlier entries use the name each version shipped under. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.65.1] - 2026-11-28
+
+### Changed
+- **Flow shows split steps in Activity and openable chats in Tasks** ([#108](https://github.com/AhmedNavaz/codeshi/issues/108)). Activity carries a split's step breakdown, each part's live action and **Stop**, Tasks lists only openable part chats so you can switch directly between them, and the bottom split bar stays out of the way on desktop while the side rail is visible.
+- **Release notes include Homebrew, and releases stay green before a tap token is set** ([#3](https://github.com/AhmedNavaz/codeshi/issues/3)). Regular release notes lead with `brew tap`, `brew trust` and `brew install --cask codeshi` on macOS, and the Homebrew tap job skips with a warning instead of failing when `HOMEBREW_TAP_TOKEN` is not configured.
+
 ## [0.65.0] - 2026-11-28
 
 ### Added
