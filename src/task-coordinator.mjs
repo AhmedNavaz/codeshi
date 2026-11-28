@@ -29,10 +29,11 @@ export function taskFilePath(task, raw) {
   if (!named) return '';
   if (path.isAbsolute(named)) {
     const absolute = path.resolve(named);
-    for (const root of [task.worktree, task.scopePath, task.folderPath, task.repoRoot].filter(Boolean).map(item => path.resolve(item))) {
-      const relative = path.relative(root, absolute);
-      if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) { named = relative; break; }
-    }
+    const inside = [task.worktree, task.scopePath, task.folderPath, task.repoRoot].filter(Boolean).map(item => path.relative(path.resolve(item), absolute))
+      .find(relative => relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+    // Outside every folder it keeps its own separators, so a Windows path stays one.
+    if (inside === undefined) return named;
+    named = inside;
   }
   const clean = named.replace(/\\/g, '/').replace(/^\.\//, ''), prefix = task.prefix ? `${task.prefix.replace(/\/+$/, '')}/` : '';
   return prefix && clean.startsWith(prefix) ? clean.slice(prefix.length) : clean;
