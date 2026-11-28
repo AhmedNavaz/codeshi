@@ -2,15 +2,15 @@
 # Install: brew tap AhmedNavaz/codeshi && brew trust AhmedNavaz/codeshi && brew install --cask codeshi
 # Checksums come from the release's SHA256SUMS.txt. Update version and both sha256 values per release.
 cask "codeshi" do
-  version "0.65.0"
+  version "0.65.1"
 
   on_arm do
-    sha256 "0ae92facedea568b265e45ce50ed3f7164e4c8c16edccef593cac467f0b519bf"
+    sha256 "73261882cd3f5400c60101cc7080c37e524486eb823d5d93bacff11aa226ddcc"
 
     url "https://github.com/AhmedNavaz/codeshi/releases/download/v#{version}/Codeshi-#{version}-mac-apple-silicon.zip"
   end
   on_intel do
-    sha256 "1b86d07f02fbecb789d58170085fe73b3a3a6bd085017b75f9b2a426eddaac5a"
+    sha256 "b867b58ce283b741d49277514c62494defed5ea92c4b26b579fc4e99e240dc8b"
 
     url "https://github.com/AhmedNavaz/codeshi/releases/download/v#{version}/Codeshi-#{version}-mac-intel.zip"
   end
