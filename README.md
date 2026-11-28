@@ -31,12 +31,21 @@ Switch agents mid-task, hand off at usage limits, run tasks side by side in Git 
 
 ### Install Pre-built App
 
-**macOS** (Apple Silicon or Intel), in Terminal:
+**macOS** (Apple Silicon or Intel), with [Homebrew](https://brew.sh):
+```sh
+brew tap AhmedNavaz/codeshi
+brew trust AhmedNavaz/codeshi
+brew install --cask codeshi
+```
+
+Current Homebrew refuses to load a cask from a third-party tap until you trust it, which is what `brew trust` does. Update later with `brew upgrade --cask codeshi`.
+
+Without Homebrew, run this in Terminal instead:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/AhmedNavaz/codeshi/main/install.sh | sh
 ```
 
-macOS builds are signed with a Developer ID certificate and notarized by Apple ([#1](https://github.com/AhmedNavaz/codeshi/issues/1)).
+Both install the same build. macOS builds are signed with a Developer ID certificate and notarized by Apple ([#1](https://github.com/AhmedNavaz/codeshi/issues/1)), so a download opens without a security prompt.
 
 **Windows** (64-bit), in PowerShell:
 ```powershell
@@ -166,7 +175,7 @@ Yes. Codeshi runs against your existing personal or subscription logins and supp
 Codeshi is free and open source under the MIT license. You pay only for the agent plans you already use. See [What is Codeshi?](#what-is-codeshi) and [License](#license).
 
 ### How do I install it on macOS or Windows, and is there a Linux version?
-On macOS or Windows, run the one-line install command in [Install Pre-built App](#install-pre-built-app). There is no pre-built Linux package yet; native Linux packaging is help wanted ([#5](https://github.com/AhmedNavaz/codeshi/issues/5)), and the test suite already runs on Linux in CI. See [Contributing](#contributing).
+On macOS, install with Homebrew (`brew install --cask codeshi`, after the tap steps); on macOS or Windows you can also run the one-line install command in [Install Pre-built App](#install-pre-built-app). There is no pre-built Linux package yet; native Linux packaging is help wanted ([#5](https://github.com/AhmedNavaz/codeshi/issues/5)), and the test suite already runs on Linux in CI. See [Contributing](#contributing).
 
 ### Why does Windows warn me when I open it, and is it safe?
 macOS builds are signed and notarized by Apple. Windows builds aren't signed yet, so SmartScreen asks you to confirm a browser download once (the PowerShell install command doesn't trigger the warning). See the first-open steps in [Install Pre-built App](#install-pre-built-app) and [Limitations](docs/guide.md#limitations) in the guide.
@@ -208,11 +217,10 @@ Current **Now** priorities from [ROADMAP.md](ROADMAP.md):
 
 | # | Feature | What's left | Issue |
 | :---: | :--- | :--- | :--- |
-| 1 | **Notarized macOS builds** | Downloads that open without a security prompt, with notification banners. Waiting on an Apple Developer account | [#1](https://github.com/AhmedNavaz/codeshi/issues/1) |
-| 2 | **One Plan** | Live checks of drafting cards and running a plan with several agents | [#162](https://github.com/AhmedNavaz/codeshi/issues/162) |
-| 3 | **Flow manages a whole outcome** | Live checks of a handoff between real accounts and of a split finished with real agents | [#107](https://github.com/AhmedNavaz/codeshi/issues/107) |
-| 4 | **One routing policy for the whole task** | Live check of Flow handoffs between real accounts, measured model ratings, context-size checks against a model, and automatic fallback to a local model | [#12](https://github.com/AhmedNavaz/codeshi/issues/12) |
-| 5 | **Specialist roles** | Showing on the Plan which cards need another check after a contract or schema changes, and a measured comparison with one agent | [#89](https://github.com/AhmedNavaz/codeshi/issues/89) |
+| 1 | **One Plan** | Live checks of drafting cards and running a plan with several agents | [#162](https://github.com/AhmedNavaz/codeshi/issues/162) |
+| 2 | **Flow manages a whole outcome** | Live checks of a handoff between real accounts and of a split finished with real agents | [#107](https://github.com/AhmedNavaz/codeshi/issues/107) |
+| 3 | **One routing policy for the whole task** | Live check of Flow handoffs between real accounts, measured model ratings, context-size checks against a model, and automatic fallback to a local model | [#12](https://github.com/AhmedNavaz/codeshi/issues/12) |
+| 4 | **Specialist roles** | Showing on the Plan which cards need another check after a contract or schema changes, and a measured comparison with one agent | [#89](https://github.com/AhmedNavaz/codeshi/issues/89) |
 
 See [ROADMAP.md](ROADMAP.md) for **Next**, **Later**, **Final checks**, **Ongoing checks**, **Exploring**, and **Recently shipped**, and [CHANGELOG.md](CHANGELOG.md) for release-by-release notes.
 
@@ -249,7 +257,7 @@ Codeshi is free and open source, under the MIT license. If it saves you time, yo
 
 Funding goals:
 
-- Code signing for the macOS and Windows builds, which removes the first-open warnings described under [Install Pre-built App](#install-pre-built-app).
+- Code signing for the Windows builds, which removes the first-open warning described under [Install Pre-built App](#install-pre-built-app).
 - Usage costs for testing against the real Claude Code, Codex and Gemini CLIs.
 - Maintainer time for issues, reviews and the [roadmap](ROADMAP.md).
 
