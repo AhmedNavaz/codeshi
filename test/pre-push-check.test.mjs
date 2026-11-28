@@ -11,6 +11,7 @@ import {
   runChecks,
   selectChecks,
   verifyReleaseMetadata,
+  withoutRepositoryGitEnv,
 } from '../scripts/pre-push-check.mjs';
 import { gitExecutable } from '../src/resolve-binary.mjs';
 
@@ -104,4 +105,22 @@ test('runChecks runs syntax, selected tests and smoke test when releasing', () =
     [path.basename(process.execPath), '--check', 'activity.mjs'],
     [path.basename(process.execPath), '--import', './test/isolate.mjs', '--test', 'test/activity.test.mjs'],
   ]);
+});
+
+// A hook in a linked worktree gets an absolute GIT_DIR. Inherited by the tests, it pointed their throwaway repositories at
+// this one, and their fixtures rewrote its config (core.bare, user.name, diff drivers), branches and HEAD.
+test('checks run from a Git hook never inherit the repository Git sets for the hook', () => {
+  const hook = { PATH: '/usr/bin', HOME: '/home/me', GIT_TERMINAL_PROMPT: '0', GIT_DIR: '/repo/.git/worktrees/task', GIT_WORK_TREE: '/task', GIT_INDEX_FILE: '/repo/.git/worktrees/task/index', GIT_COMMON_DIR: '/repo/.git', GIT_PREFIX: 'src/', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.bare', GIT_CONFIG_VALUE_0: 'true', GIT_CONFIG_PARAMETERS: "'a.b'='c'" };
+  assert.deepEqual(withoutRepositoryGitEnv(hook), { PATH: '/usr/bin', HOME: '/home/me', GIT_TERMINAL_PROMPT: '0' });
+  const calls = [];
+  const saved = { ...process.env };
+  Object.assign(process.env, { GIT_DIR: '/repo/.git/worktrees/task', GIT_INDEX_FILE: '/repo/.git/worktrees/task/index' });
+  try { runChecks({ changedFiles: ['test/activity.test.mjs'], execImpl: (file, args, options) => calls.push(options.env), log: () => {} }); }
+  finally { for (const name of ['GIT_DIR', 'GIT_INDEX_FILE']) if (saved[name] === undefined) delete process.env[name]; else process.env[name] = saved[name]; }
+  assert.ok(calls.length);
+  for (const env of calls) { assert.equal(env.GIT_DIR, undefined); assert.equal(env.GIT_INDEX_FILE, undefined); }
+  // `npm test` run straight from a hook is covered too: isolate.mjs drops them before any test starts.
+  const shown = spawnSync(process.execPath, ['--import', './test/isolate.mjs', '-e', 'console.log(JSON.stringify([process.env.GIT_DIR ?? null, process.env.GIT_WORK_TREE ?? null, process.env.GIT_CONFIG_KEY_0 ?? null]))'], { encoding: 'utf8', env: { ...process.env, GIT_DIR: '/repo/.git', GIT_WORK_TREE: '/repo', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.bare', GIT_CONFIG_VALUE_0: 'true' } });
+  assert.equal(shown.status, 0, shown.stderr);
+  assert.deepEqual(JSON.parse(shown.stdout.trim()), [null, null, null]);
 });

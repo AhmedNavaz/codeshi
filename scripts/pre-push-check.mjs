@@ -13,6 +13,12 @@ const ZERO_SHA = /^0+$/;
 const CODE_DIRS = ['src', 'public', 'desktop', 'sharing', 'scripts', 'remote', 'evals', 'test'];
 const FULL_SUITE_FILES = new Set(['package-lock.json', 'test/isolate.mjs', 'test/platform.mjs', 'test/mock-cli.mjs']);
 
+// The variables `git rev-parse --local-env-vars` lists, which tie a command to one repository.
+const REPOSITORY_GIT_ENV = ['GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CONFIG', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_OBJECT_DIRECTORY', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_IMPLICIT_WORK_TREE', 'GIT_GRAFT_FILE', 'GIT_INDEX_FILE', 'GIT_NO_REPLACE_OBJECTS', 'GIT_REPLACE_REF_BASE', 'GIT_PREFIX', 'GIT_SHALLOW_FILE', 'GIT_COMMON_DIR'];
+export function withoutRepositoryGitEnv(env) {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !REPOSITORY_GIT_ENV.includes(name) && !/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name)));
+}
+
 const normalize = file => file.replace(/\\/g, '/').replace(/^\.\//, '');
 
 function git(root, args) {
@@ -223,7 +229,9 @@ export function runChecks({
   execImpl = execFileSync,
   log = message => console.log(message),
 } = {}) {
-  const env = commandEnvironment(process.env);
+  // Git gives the hook this repository's GIT_DIR (an absolute path in a linked worktree) and similar settings. The checks
+  // below run tests and the app, which make throwaway repositories of their own, so they mustn't inherit them.
+  const env = commandEnvironment(withoutRepositoryGitEnv(process.env));
   if (release || tags.length > 0) {
     for (const tag of (tags.length ? tags : [null])) {
       const { version } = verifyReleaseMetadata({ root, tag, requireClean });
